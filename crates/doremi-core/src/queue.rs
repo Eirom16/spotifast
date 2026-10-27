@@ -185,6 +185,8 @@ pub enum Event {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
+    /// Prepare this occurrence; publish audio only after matching Ready is
+    /// accepted and SetPlaying supplies the latest (possibly paused) intent.
     Load {
         request: RequestId,
         entry: Entry,
@@ -607,6 +609,7 @@ impl Queue {
                 } else {
                     Playback::Paused
                 };
+                return Ok(vec![Effect::SetPlaying(self.playing)]);
             }
             Event::Position {
                 request,

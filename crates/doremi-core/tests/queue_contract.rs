@@ -150,7 +150,10 @@ fn pause_during_load_is_preserved_and_seek_supersedes_ready() {
     let mut q = initial();
     let old = load(q.command(Command::Play).unwrap());
     q.command(Command::Pause).unwrap();
-    q.event(Event::Ready(old)).unwrap();
+    assert_eq!(
+        q.event(Event::Ready(old)).unwrap(),
+        [Effect::SetPlaying(false)]
+    );
     assert_eq!(q.playback(), Playback::Paused);
     let seek = load(q.command(Command::Seek(200_000)).unwrap());
     q.event(Event::Ready(old)).unwrap();

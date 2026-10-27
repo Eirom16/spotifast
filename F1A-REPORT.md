@@ -100,12 +100,18 @@ con Repeat Track repite. El core sigue código/tests actuales, no la guía vieja
   edits por EntryId. El bridge no promete reconstruir identidad perdida.
 - La previsualización `resume_only` legacy puede envolver extremos incluso
   sin repeat y elegir aleatoriamente cuando shuffle está activo. El core
-  usa orden explícito y wrap según Repeat Context; no sustituye esa navegación.
+  usa orden explícito y Next envuelve según Repeat Context. Previous sin
+  historia/cursor anterior reinicia, no promete wrap en esa frontera.
+  No sustituye esa navegación legacy.
 - Historial core acotado a 256 y replay de lo oído no garantizan la historia
   completa de Spotify, que no se ha extraído ni modelado por equivalencia.
 - Doble clic/debounce, selección de filas no disponibles y rechazo remoto
   parcial siguen en App/adaptador. Append core representa intenciones ya
   admitidas; no deduplica títulos ni usa reloj.
+- Load es preparación: el host solo publica audio tras Ready aceptado y
+  SetPlaying con intención actual. Esto evita que una pausa durante carga
+  vuelva a autoplay por el flag antiguo. El host futuro debe respetar ese
+  protocolo y el orden de efectos; F1A no sustituye el decoder legado.
 - Snapshot no es schema de perfil: sin codec/migración de archivos en F1A.
   RequestId se enruta al Queue de esa sesión. Reemplazar instancias con
   callbacks vivos exige epoch del host; no intercambiar tokens entre Queues.
