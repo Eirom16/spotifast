@@ -3,6 +3,8 @@ name: Doremi CI
 on:
   push:
     branches: [main, "chore/doremi-f0"]
+    # Recording evidence must not launch another complete build of unchanged code.
+    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md"]
   pull_request:
   workflow_dispatch:
 
@@ -23,6 +25,7 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_BUILD_JOBS: "2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  PYTHONUTF8: "1"
 
 jobs:
   quick:
@@ -94,7 +97,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
-          prefix-key: doremi-v2
+          prefix-key: doremi-v3
           shared-key: linux-dev-codegen
           workspaces: ". -> target/ci"
           cache-bin: false
@@ -116,12 +119,13 @@ jobs:
           python3 scripts/ci-report.py run doctests -- cargo test --locked --workspace --all-features --doc
       - uses: actions/upload-artifact@v6
         with:
-          name: payload-linux-${{ github.sha }}-${{ github.run_attempt }}
+          name: payload-linux-${{ github.sha }}
           path: target/payload/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
       - name: Bound generated dependency cache, after tests and payload copy
-        run: python3 scripts/ci-cache-budget.py --mib 2048
+        run: python3 scripts/ci-cache-budget.py --mib 4096
       - name: Tests report
         if: always()
         run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope linux-dev-codegen
@@ -147,7 +151,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
-          prefix-key: doremi-v2
+          prefix-key: doremi-v3
           shared-key: linux-dev-metadata
           workspaces: ". -> target/ci"
           cache-bin: false
@@ -158,7 +162,7 @@ jobs:
           python3 scripts/ci-report.py run clippy-all-features -- cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           RUSTDOCFLAGS='-D warnings' python3 scripts/ci-report.py run rustdoc -- cargo doc --locked --workspace --all-features --no-deps
       - name: Bound generated metadata cache
-        run: python3 scripts/ci-cache-budget.py --mib 768
+        run: python3 scripts/ci-cache-budget.py --mib 2048
       - name: Lint report
         if: always()
         run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope linux-dev-metadata
@@ -203,13 +207,14 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
-          prefix-key: doremi-v2
+          prefix-key: doremi-v3
           shared-key: ${{ matrix.label }}-native-dev-downloads
           workspaces: ". -> target/ci"
           cache-targets: false
           cache-bin: false
           save-if: ${{ needs.quick.outputs.save-cache == 'true' && github.event_name != 'pull_request' }}
-      - name: Native default-feature executable
+      - name: Native default-feature executable (macOS)
+        if: runner.os != 'Windows'
         run: |
           python3 scripts/ci-report.py run native-build -- cargo build --locked -p spotifast --bin spotifast
           mkdir -p target/payload
@@ -219,12 +224,28 @@ jobs:
           host=$(rustc -vV | sed -n 's/^host: //p')
           python3 scripts/build-manifest.py --target "$host" --kind "legacy-desktop-${{ matrix.label }}" \
             --payload "target/payload/${{ matrix.binary }}" --output target/payload/manifest.json
+      - name: Native default-feature executable (Windows MSVC)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Git Bash prepends /usr/bin/link.exe, which is not the MSVC linker.
+          python scripts/ci-report.py run native-build -- cargo build --locked -p spotifast --bin spotifast
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force target/payload | Out-Null
+          Copy-Item target/ci/debug/spotifast.exe, LICENSE target/payload/
+          & target/payload/spotifast.exe --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hostTarget = ((rustc -vV | Select-String '^host: ').ToString()).Substring(6)
+          python scripts/build-manifest.py --target $hostTarget --kind legacy-desktop-windows `
+            --payload target/payload/spotifast.exe --output target/payload/manifest.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v6
         with:
-          name: payload-${{ matrix.label }}-${{ github.sha }}-${{ github.run_attempt }}
+          name: payload-${{ matrix.label }}-${{ github.sha }}
           path: target/payload/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
       - name: Native build report
         if: always()
         run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope '${{ matrix.label }}-native-dev-downloads'
@@ -256,10 +277,11 @@ jobs:
             --payload target/payload/libdoremi_core.rlib --output target/payload/manifest.json
       - uses: actions/upload-artifact@v6
         with:
-          name: payload-android-core-${{ github.sha }}-${{ github.run_attempt }}
+          name: payload-android-core-${{ github.sha }}
           path: target/payload/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
       - name: Android core report
         if: always()
         run: python3 scripts/ci-report.py finalize
@@ -279,20 +301,20 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          pattern: report-*-${{ github.sha }}-${{ github.run_attempt }}
+          pattern: report-*-${{ github.sha }}-*
           path: target/reports
       - name: Actual job timings, cache usage and failure conclusions
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p target/reports
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > target/reports/github-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs?filter=latest&per_page=100" > target/reports/github-jobs.json
           gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" > target/reports/cache-usage-after.json
           python3 scripts/summarize-ci.py target/reports
       - uses: actions/download-artifact@v7
         if: needs.full-tests.result == 'success' && needs.clippy.result == 'success' && needs.desktop-build.result == 'success' && needs.android-core.result == 'success'
         with:
-          pattern: payload-*-${{ github.sha }}-${{ github.run_attempt }}
+          pattern: payload-*-${{ github.sha }}
           path: target/payloads
       - name: Verify the complete same-commit, same-version payload set
         if: needs.full-tests.result == 'success' && needs.clippy.result == 'success' && needs.desktop-build.result == 'success' && needs.android-core.result == 'success'

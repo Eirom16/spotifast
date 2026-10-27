@@ -2,9 +2,10 @@
 
 ## Estado
 
-La infraestructura está implementada; **pendiente de ejecución real de los
-workflows**. No se declara validada por pasar análisis YAML, tests locales o
-por existir un archivo de workflow. No hay releases públicas automáticas.
+La infraestructura está implementada y se ejecutó en GitHub. **El primer run
+falló en Windows; la corrección y su verificación están pendientes.**
+No se declara validada por pasar análisis YAML o solo los jobs Linux.
+No hay releases públicas automáticas.
 
 Equipo local: Pentium Silver N5000, 8 GB RAM. La compilación fría de F0
 consumió varios límites de 20 min; Clippy default tardó 14 min 31 s y el
@@ -39,8 +40,8 @@ Los binarios son de validación dev, no de rendimiento/release.
 espacios separados:
 
 - `linux-dev-codegen`: objetos necesarios para tests, target con presupuesto
-  de 2.048 MiB antes del guardado.
-- `linux-dev-metadata`: Clippy/rustdoc, target con presupuesto de 768 MiB.
+  de 4.096 MiB antes del guardado.
+- `linux-dev-metadata`: Clippy/rustdoc, target con presupuesto de 2.048 MiB.
 - `macos-native-dev-downloads` y `windows-native-dev-downloads`: solo Cargo
   registry/git, `cache-targets: false`. Nunca restaurar objetos Linux allí.
 - Android/core y quick no duplican caches de un árbol desktop que no consumen.
@@ -48,7 +49,8 @@ espacios separados:
 La clave automática incorpora host/compilador, lock/manifests, config y variables
 Rust/Cargo. Un perfil release o nuevo target necesitará otro namespace.
 No se usa SHA de commit como clave: invalidaría la caché en cada edición.
-No se cachean binarios de herramientas ni crates workspace; no se guarda en
+El namespace `doremi-v3` corrige los presupuestos iniciales tras medir el primer
+run, no cambia por commit. No se cachean binarios de herramientas ni crates workspace; no se guarda en
 fallo ni desde PR. Durante F0 solo main/rama de trabajo admiten escrituras.
 
 El job rápido consulta el consumo real del repositorio por API y permite
@@ -80,8 +82,11 @@ ampliar presupuestos sin medir, pues eso crea churn y evicciones.
   exit code, categoría orientativa de fallo, espacio libre y resultado exacto
   de caché. `cache-hit=false` puede significar restauración parcial de otra
   versión del lock, no necesariamente caché vacía.
-- `payload-<platform>-<sha>-<attempt>`: ejecutable o `.rlib`, MIT y manifest
+- `payload-<platform>-<sha>`: ejecutable o `.rlib`, MIT y manifest
   con commit, versión, target, tipo, hash y estado dirty.
+  Se reemplaza solo dentro del mismo run al reejecutar ese job. Así se pueden
+  repetir jobs fallidos sin recompilar plataformas que ya pasaron: el gate
+  comprueba todos los hashes/SHA/versiones, no mezcla commits.
 - `ci-report-<sha>-<attempt>`: reportes agrupados, JSON real de GitHub Jobs
   (incluye restore/post-save), consumo de caches y tabla de conclusiones.
   El agregador puede seguir en progreso al tomar su propio snapshot.
@@ -132,7 +137,9 @@ gh run download RUN_ID --repo Eirom16/spotifast --dir target/downloaded-ci
 gh api repos/Eirom16/spotifast/actions/cache/usage
 ```
 
-Comparar un run frío y otro del mismo SHA antes de atribuir mejoras a caché.
+Comparar un run frío y una reejecución del mismo SHA antes de atribuir mejoras
+a caché. `gh run rerun RUN_ID --job JOB_ID` permite medir tests o Clippy sin
+recompilar los otros sistemas; sus payloads del mismo SHA siguen verificándose.
 No sumar dos veces tests subprocess ni atribuir conclusiones de un SHA a otro.
 
 ## Registro de validación
@@ -141,5 +148,30 @@ No sumar dos veces tests subprocess ni atribuir conclusiones de un SHA a otro.
   core), sin compilar de nuevo el cliente.
 - Local: PyYAML parseó el workflow; actionlint 1.7.12 pasó con ShellCheck
   desactivado. Esto no prueba runners, cache ni artefactos remotos.
-- Remoto: pendiente. Debe añadirse aquí ID/URL, SHA, conclusiones, tiempos,
-  cachés y causas de cualquier fallo observado antes de declarar validación.
+- Primer run real: [40552655182](https://github.com/Eirom16/spotifast/actions/runs/40552655182),
+  commit `2171a402f7995901529d7a09eabe48b3058498de`, conclusión **failure**.
+  Ruby/launchers pasaron en el runner. No se trata el fallo Windows como éxito.
+
+| Trabajo/comando | Segundos medidos por wrapper | Resultado |
+|---|---:|---|
+| Checks locales ligeros en runner | 43,416 | Pasó |
+| Launchers con Ruby | 1,871 | Pasó |
+| Tests default (compilación fría incluida) | 981,014 | Pasó |
+| Tests all-features | 80,073 | Pasó |
+| Clippy default | 272,055 | Pasó |
+| Clippy all-features | 11,051 | Pasó |
+| Rustdoc | 13,917 | Pasó |
+| Build nativo macOS arm64 | 939,099 | Pasó y subió ejecutable |
+| Core Android | 61,871 | Pasó y subió `.rlib` |
+| Build Windows | 53,656 | Falló: tomó `Git/usr/bin/link.exe`, no MSVC |
+
+Todos los caches eran fríos (`exact_hit=false`). Targets antes del guardado:
+tests 3.147.304.333 bytes, Clippy 1.237.332.440 bytes. Los presupuestos
+iniciales de 2.048/768 MiB los descartaron enteros: se guardaron descargas,
+no codegen. Esto motivó `doremi-v3` y presupuestos 4.096/2.048 MiB, no una
+afirmación falsa de aceleración. Tres caches v2 ocuparon 1.352.077.849 bytes.
+
+Corrección Windows: ejecutar Cargo desde PowerShell tras configurar MSVC,
+evitando la prioridad de PATH de Git Bash. `PYTHONUTF8=1` uniforma los logs.
+El gate final rechazó correctamente el conjunto incompleto y subió el
+reporte. Verificación de estas correcciones y aciertos de caché aún pendiente.
