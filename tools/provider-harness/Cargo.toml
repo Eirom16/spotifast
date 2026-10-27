@@ -1,0 +1,13 @@
+[package]
+name = "doremi-provider-harness"
+version = "0.14.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+description = "Loopback-only synthetic consumer of Doremi provider contracts"
+
+[dependencies]
+doremi-core = { path = "../../crates/doremi-core" }
+# Already locked by the application. Host tooling only, never a core dependency.
+serde_json = "1"

@@ -2,9 +2,9 @@ name: Doremi CI
 
 on:
   push:
-    branches: [main, "chore/doremi-f0", "chore/doremi-f1a"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1"]
     # Recording evidence must not launch another complete build of unchanged code.
-    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md"]
+    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md"]
   pull_request:
   workflow_dispatch:
 
@@ -47,6 +47,10 @@ jobs:
           python3 scripts/ci-report.py run launchers -- python3 packaging/test-launchers.py
           python3 scripts/ci-report.py run release-names -- python3 packaging/test-release-names.py
           python3 scripts/ci-report.py run metainfo -- python3 packaging/flatpak/test-metainfo.py
+      - name: Provider protocol and synthetic HTTP fixtures, no external services
+        env:
+          PROVIDER_BENCH_OUTPUT_DIR: target/ci-reports/provider-fixtures
+        run: python3 scripts/ci-report.py run provider-harness -- python3 scripts/test-provider-harness.py
       - name: New settings still require explicit approval
         if: github.event_name == 'pull_request'
         env:

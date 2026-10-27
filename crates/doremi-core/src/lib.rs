@@ -10,8 +10,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod catalog;
+pub mod manual;
 pub mod media;
 pub mod queue;
+pub mod requests;
 
 /// The new product name, deliberately separate from the legacy executable.
 pub const PRODUCT_NAME: &str = "Doremi";

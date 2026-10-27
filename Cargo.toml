@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/doremi-core"]
+members = [".", "crates/doremi-core", "tools/provider-harness"]
 default-members = [".", "crates/doremi-core"]
 resolver = "3"
 
@@ -19,7 +19,7 @@ categories = ["multimedia::audio"]
 
 [package.metadata.doremi]
 repository = "https://github.com/Eirom16/spotifast"
-phase = "F1A"
+phase = "F1B1"
 
 [lib]
 name = "spotifast"

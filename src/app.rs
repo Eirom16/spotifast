@@ -479,7 +479,8 @@ pub struct App {
     queue_shuffle_pending: Option<QueueShufflePending>,
     /// When a local reorder or positional insert last landed, used to
     /// reject a fetch whose queued rows still show the pre-move order.
-    queue_reorder_pending: Option<Instant>,
+    queue_reorder_pending: Option<crate::queue_bridge::PendingEdit>,
+    queue_edit_router: doremi_core::requests::Router,
     /// Songs taken out of Playing next one by one, and when, used to
     /// reject a fetch that still has one right after the queued rows.
     queue_removed: Option<(std::collections::HashSet<String>, Instant)>,
@@ -1144,6 +1145,9 @@ impl App {
             queue_cleared: None,
             queue_shuffle_pending: None,
             queue_reorder_pending: None,
+            queue_edit_router: doremi_core::requests::Router::new(
+                doremi_core::requests::SessionId(0),
+            ),
             queue_removed: None,
             window_title: String::new(),
             library: Library::default(),
@@ -3092,6 +3096,9 @@ impl App {
         self.queue = Loadable::NotLoaded;
         self.queue_shuffle_pending = None;
         self.queue_reorder_pending = None;
+        crate::queue_bridge::replace_session(&mut self.queue_edit_router);
+        // The legacy wire keeps u64 sequences; never reuse one across sessions.
+        self.queue_seq += 1;
         self.queue_removed = None;
         self.devices.clear();
         self.control_devices_stale = true;
@@ -6143,45 +6150,28 @@ impl App {
         let Loadable::Loaded(queue) = &self.queue else {
             return;
         };
-        let mut indexes: Vec<usize> = rows
-            .into_iter()
-            .filter(|(index, uri)| {
-                *index < queued_len
-                    && queue
-                        .queue
-                        .get(*index)
-                        .is_some_and(|item| item.uri() == uri)
-            })
-            .map(|(index, _)| index)
-            .collect();
-        indexes.sort_unstable();
-        indexes.dedup();
+        let removal =
+            crate::queue_bridge::remove(&mut self.manual_queue, &queue.queue, queued_len, &rows);
+        if removal.is_empty() {
+            return;
+        }
+        self.pending_queue_adds
+            .retain_mut(|addition| match removal.remap(addition.manual_index) {
+                Some(index) => {
+                    addition.manual_index = index;
+                    true
+                }
+                None => false,
+            });
+        self.session_dirty = true;
         let mut removed = std::collections::HashSet::new();
         // From the bottom up, so the rows still to go keep their indexes.
-        for index in indexes.into_iter().rev() {
+        for &index in removal.visible_indices().iter().rev() {
             let Loadable::Loaded(queue) = &mut self.queue else {
                 return;
             };
             let uri = queue.queue[index].uri().to_string();
-            // Copies of one song are interchangeable: the shown row's
-            // occurrence among the queued rows is the same occurrence in
-            // `manual_queue`, whatever order Spotify last reported.
-            let occurrence = queue.queue[..index]
-                .iter()
-                .filter(|item| item.uri() == uri)
-                .count();
-            let Some(manual) = self
-                .manual_queue
-                .iter()
-                .enumerate()
-                .filter(|(_, queued)| **queued == uri)
-                .nth(occurrence)
-                .map(|(manual, _)| manual)
-            else {
-                continue;
-            };
             queue.queue.remove(index);
-            self.remove_manual_queue_row(manual);
             removed.insert(uri);
         }
         if removed.is_empty() {
@@ -6401,14 +6391,13 @@ impl App {
         }
         // A local reorder or positional insert is optimistic; reject a
         // fetch whose queued rows have not caught up to it yet.
-        if let Some(at) = self.queue_reorder_pending
-            && at.elapsed() < PLAYBACK_HOLD
-            && !fetched
-                .queue
-                .iter()
-                .take(self.manual_queue.len())
-                .map(|item| item.uri())
-                .eq(self.manual_queue.iter().map(String::as_str))
+        if let Some(pending) = &self.queue_reorder_pending
+            && pending.is_stale(
+                &self.queue_edit_router,
+                self.queue_stale_retries,
+                &fetched.queue,
+                &self.manual_queue,
+            )
         {
             return true;
         }
@@ -7018,7 +7007,12 @@ impl App {
                 if result.is_ok() {
                     self.queue_cleared = None;
                     self.queue_shuffle_pending = None;
-                    self.queue_reorder_pending = None;
+                    if self.queue_reorder_pending.take().is_some() {
+                        // A confirmed/fallback edit consumes this wire reply once.
+                        self.queue_seq += 1;
+                    }
+                    self.queue_edit_router
+                        .cancel(doremi_core::requests::Lane::ManualEdit);
                     self.queue_removed = None;
                 }
                 self.queue = Loadable::from_result(result);
@@ -10163,7 +10157,11 @@ impl App {
         // an earlier move would let one of those half-done answers through.
         self.queue_seq += 1;
         self.queue_stale_retries = 0;
-        self.queue_reorder_pending = Some(Instant::now());
+        self.queue_reorder_pending = Some(crate::queue_bridge::PendingEdit::new(
+            &mut self.queue_edit_router,
+            PLAYBACK_HOLD.as_millis() as u64,
+            QUEUE_STALE_RETRIES,
+        ));
         self.queue_recheck_at = Some(Instant::now() + QUEUE_RECHECK);
     }
 
@@ -13670,6 +13668,9 @@ mod tests {
 
     mod f1a_characterization {
         include!("app/queue_characterization.rs");
+    }
+    mod f1b1_characterization {
+        include!("app/manual_characterization.rs");
     }
 
     use super::*;

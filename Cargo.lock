@@ -1530,6 +1530,14 @@ name = "doremi-core"
 version = "0.14.2"
 
 [[package]]
+name = "doremi-provider-harness"
+version = "0.14.2"
+dependencies = [
+ "doremi-core",
+ "serde_json",
+]
+
+[[package]]
 name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

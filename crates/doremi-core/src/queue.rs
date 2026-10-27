@@ -8,6 +8,7 @@
 use std::collections::BTreeMap;
 
 use crate::media::Media;
+use crate::requests::SessionId;
 
 /// Bounded heard history; not a promise of unlimited engine history.
 pub const HISTORY_LIMIT: usize = 256;
@@ -77,7 +78,10 @@ pub fn manual_prefix_len<K: Ord>(
 pub struct EntryId(u64);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct RequestId(u64);
+pub struct RequestId {
+    session: SessionId,
+    generation: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -205,6 +209,7 @@ pub enum QueueError {
     InvalidPermutation,
     UnknownEntry,
     Exhausted,
+    SessionNotNewer,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -216,9 +221,28 @@ pub struct Queue {
     request: Option<RequestId>,
     append: Option<RequestId>,
     serial: u64,
+    session: SessionId,
 }
 
 impl Queue {
+    /// Hosts allocate a fresh session when replacing a Queue with live callbacks.
+    /// Default (session zero) remains useful for isolated deterministic fixtures.
+    pub fn new(session: SessionId) -> Self {
+        Self {
+            session,
+            ..Self::default()
+        }
+    }
+
+    pub fn replace_session(&mut self, session: SessionId) -> Result<Vec<Effect>, QueueError> {
+        if session <= self.session {
+            return Err(QueueError::SessionNotNewer);
+        }
+        let effects = self.command(Command::Cancel)?;
+        self.session = session;
+        Ok(effects)
+    }
+
     pub fn snapshot(&self) -> Snapshot {
         let mut snapshot = self.snapshot.clone();
         snapshot.request_watermark = self.serial;
@@ -326,7 +350,10 @@ impl Queue {
         }
         self.cancel_load(effects);
         if let Some(entry) = self.current().cloned() {
-            let request = RequestId(self.serial);
+            let request = RequestId {
+                session: self.session,
+                generation: self.serial,
+            };
             self.request = Some(request);
             self.playback = Playback::Loading;
             effects.push(Effect::Load {
@@ -553,7 +580,10 @@ impl Queue {
             }
             Command::BeginAppend => {
                 self.cancel_append(&mut effects);
-                let request = RequestId(self.serial);
+                let request = RequestId {
+                    session: self.session,
+                    generation: self.serial,
+                };
                 self.append = Some(request);
                 effects.push(Effect::ReadAppend(request));
             }

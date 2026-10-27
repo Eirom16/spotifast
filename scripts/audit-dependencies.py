@@ -15,11 +15,11 @@ def render(root):
     manifest = tomllib.loads((root / "Cargo.toml").read_text())
     lock = tomllib.loads((root / "Cargo.lock").read_text())
     lines = [
-        "# Dependencias del baseline F0",
+        "# Dependencias del workspace Doremi",
         "",
         "Generado con `python3 scripts/audit-dependencies.py`. No editar a mano.",
         "Clasificación y decisiones Android: `../../F0-REPORT.md`.",
-        "No se añadieron ni cambiaron fuentes externas en F0.",
+        "F0/F1 no cambian fuentes externas; el harness reutiliza serde_json ya bloqueado.",
         "",
         "## Dependencias directas del paquete legado",
         "",
@@ -32,6 +32,13 @@ def render(root):
     for target, tables in sorted(manifest.get("target", {}).items()):
         for kind, deps in sorted(tables.items()):
             scopes.append((f"{target}: {kind}", deps))
+    for member in manifest.get("workspace", {}).get("members", []):
+        if member == ".":
+            continue
+        data = tomllib.loads((root / member / "Cargo.toml").read_text())
+        for kind in ("dependencies", "build-dependencies", "dev-dependencies"):
+            if kind in data:
+                scopes.append((f"{member}: {kind}", data[kind]))
     for scope, deps in scopes:
         for name, spec in sorted(deps.items()):
             if isinstance(spec, str):
