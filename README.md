@@ -4,7 +4,7 @@ Reproductor musical nativo en Rust, en migración desde
 [Eirom16/spotifast](https://github.com/Eirom16/spotifast), fork de
 [crmne/spotifast](https://github.com/crmne/spotifast).
 
-**Estado: F0, preparación y auditoría. Todavía no es un reproductor
+**Estado: F1A, dominio y cola neutral con bridge limitado. Todavía no es un reproductor
 independiente de Spotify. No hay APK ni release Doremi.**
 
 El objetivo es usar egui/eframe y yt-dlp para búsqueda y resolución de medios,
@@ -17,8 +17,10 @@ acceso.
 Se conserva el ejecutable `spotifast` 0.14.2 y su biblioteca Rust. Su
 reproducción sigue usando Spotify/librespot y requiere las autorizaciones y
 Premium del baseline. La estructura nueva no elimina ese acoplamiento.
-`doremi-core` es únicamente el punto inicial neutral del workspace, todavía
-sin catálogo, motor ni biblioteca propios.
+`doremi-core` contiene tipos neutrales y una máquina de cola determinista.
+El bridge comparte reglas de edición/prefijo con el legado; el core todavía
+no dirige su transporte ni dispone de catálogo, motor o biblioteca propios.
+Estado de pruebas: [F1A-REPORT.md](F1A-REPORT.md).
 
 No renombramos aún IDs persistidos, keyrings, rutas, protocolos, iconos ni
 actualizador. **El ejecutable legado conserva su actualizador dirigido al
@@ -47,6 +49,8 @@ del sitio heredado. Estado real de ejecuciones y cachés: [CI-REPORT.md](CI-REPO
 
 - [Roadmap y arquitectura objetivo](DOREMI-ROADMAP.md)
 - [Auditoría, resultados reales, pendientes y reproducción](F0-REPORT.md)
+- [Dominio/cola y caracterización F1A](F1A-REPORT.md)
+- [Evaluación de Tubefast y otros proveedores](TUBEFAST-ASSESSMENT.md)
 - [Inventario de dependencias](docs/doremi/dependencies.md)
 - [Reglas para agentes](AGENTS.md)
 

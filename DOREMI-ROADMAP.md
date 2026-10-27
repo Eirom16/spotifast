@@ -2,8 +2,11 @@
 
 ## Estado y objetivo
 
-F0 prepara el fork Eirom16/spotifast. La aplicación preservada todavía es
-Spotifast 0.14.2, con Spotify/librespot. No hay reproducción yt-dlp ni APK.
+F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.
+F1A introduce dominio/cola neutral y un bridge limitado, no un nuevo motor.
+La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
+No hay reproducción yt-dlp ni APK. Estado y evidencia F1A: `F1A-REPORT.md`;
+evaluación de proveedores: `TUBEFAST-ASSESSMENT.md`.
 El resultado verificable, los checks fallidos/no ejecutados y los riesgos
 están en `F0-REPORT.md`. Una fase no se acepta solo porque exista su código.
 
@@ -36,10 +39,12 @@ haber conservado comportamiento.
 | `doremi-android` | `cdylib` + proyecto Gradle mínimo, composición eframe/Activity, sin duplicar reglas del núcleo. | Misma UI y servicios, adaptador Android |
 | `spotifast` (legado temporal) | Paquete raíz actual, congelado funcionalmente; no es dependencia de los nuevos paquetes. | Árbol existente |
 
-**F0 solo crea `doremi-core`, con constantes de identidad y un doctest.**
+**F0 creó `doremi-core`, con constantes de identidad y un doctest.**
+F1A añade medios/IDs, reducer, snapshots en memoria, contratos y reglas
+compartidas de edición/prefijo. No dirige todavía la cola Spotify completa.
 La tabla es diseño, no lista de módulos implementados. Los puertos y crates
 restantes nacen con su primer caso de uso/test, no como APIs especulativas.
-En F1 se centralizará versión/MSRV una vez adaptados los lectores de manifiesto
+En F1B se evaluará centralizar versión/MSRV una vez adaptados los lectores de manifiesto
 de Nix, packaging y tests. F0 conserva la versión literal raíz para no romperlos
 y un test rechaza divergencias con el núcleo.
 
@@ -97,8 +102,8 @@ Sin dependencias previas.
 - [x] Normas Doremi, MIT/atribuciones preservadas y separación documental.
 - [x] Workspace mínimo, sin borrar ni modificar funciones del legado.
 - [x] CI de validación Linux y core Android sin permisos de publicación.
-- [ ] Todas las comprobaciones requeridas verdes y ejecución remota de CI.
-  Consultar resultados reales en el informe, no asumir este gate cumplido.
+- [x] Baseline Rust/gates de CI verdes: run `40563292782`, SHA `12d2137`.
+  Builds desktop y core Android no equivalen a tests nativos/GUI/audio/APK.
 
 Aprobación F0: comandos de `CONTRIBUTING.md` verdes o bloqueo claramente
 identificado y resuelto, aplicación baseline compilada, fuente externa sin
@@ -122,9 +127,60 @@ Aceptación: mismos vectores deterministas ejecutados en host y núcleo;
 no alteran la intención actual; builds legados siguen verdes. Cero bloqueos
 de I/O en la UI nueva, canales con capacidad probada.
 
+#### F1A: dominio mínimo y caracterización
+
+Entrega: namespaces/medios, IDs por ocurrencia y solicitud, reducer de cola,
+shuffle como permutación explícita, repeat/previous/next, cancelación,
+respuestas tardías, snapshots pausados y tests. Bridge sin estado duplicado
+para prefijo manual y plan de reorder, preservando el resto del legado.
+No copiar Tubefast ni incorporar RustyPipe. CI y estado final en `F1A-REPORT.md`.
+
+Decisiones:
+
+- El contrato de código/tests actual tiene prioridad sobre texto histórico:
+  cambiar canción a mano termina Repeat Track y deja Context; reiniciar/
+  seek/fin natural conservan Track cuando corresponda.
+- Nada de RNG, reloj, transporte o entidades Spotify dentro del reducer.
+  Un resultado de proveedor se enruta por dueño/RequestId; no es autoridad
+  para reemplazar la cola con una respuesta antigua.
+- Biblioteca/perfiles continúan sin cambios; Snapshot no define todavía
+  encoding de persistencia. No centralizar manifests/versiones como refactor
+  incidental de esta misión.
+- El historial oído de core se acota a 256. No afirmar equivalencia de
+  historia remota, autoplay/radio, resume-only wrap o cursores privados.
+- Tubefast aporta ideas, no una integración aprobada. RustyPipe estudiado es
+  GPL-3.0-only, no MIT. No elegir proveedor por cifras de otro equipo.
+
+#### F1B: ampliar autoridad con un corte verificable
+
+Depende de gates F1A verdes. Criterios medibles:
+
+1. Extender fixtures compartidas a selección por ocurrencia, respuestas
+   parciales, navegación resume-only y reemplazo de sesiones. Cada diferencia
+   de F1A debe tener decisión de preservación o límite explícito, no desaparecer
+   del informe.
+2. Extraer un caso de uso completo (por ejemplo edición manual y su
+   confirmación), con un único dueño de estado. Cero segunda cola autoritativa
+   permanente; sin reescritura de App. Gates originales y matriz CI verdes.
+3. Adaptador de tokens/epoch y capacidades distingue local/remote,
+   confirmación optimista y fallback de seis reintentos del legado. Probar
+   restore de la misma instancia y reemplazo con callbacks todavía vivos.
+4. Definir v1 del puerto search/resolve con el primer consumidor real:
+   ProviderId/MediaId, request owner, cancelación/deadline, páginas/capabilities
+   y errores tipados. URLs/headers efímeros fuera del snapshot/biblioteca;
+   sin correspondencias automáticas por título.
+5. Harness/dataset autorizados de benchmark, SHAs y schema JSONL reproducibles,
+   fixtures de fallos/rangos y resultados separados de compilación. No
+   anunciar rendimiento de reproducción antes de medirlo.
+6. Preparar APK mínimo con proveedor falso y mismo core: entrada/IME,
+   rotación, lifecycle y trazas host equivalentes. Registrar NDK/API/ABI y
+   ejecución en emulador/dispositivo. Cross-check de Rust no cierra este gate.
+7. Revisar caches por ID/ref/tamaño; rotación solo con autorización. Cero
+   fuentes git externas nuevas ni publicaciones automáticas.
+
 ### F2: yt-dlp y prueba temprana de viabilidad Android
 
-Depende de F1 para contratos. Desktop y spike Android pueden avanzar en
+Depende del puerto y gates de F1B. Desktop y spike Android pueden avanzar en
 paralelo, pero ambos deben cerrar antes de comprometer un lanzamiento móvil.
 
 - Implementar supervisor desktop sin shell: executable validado, argv fijo,
@@ -145,6 +201,10 @@ paralelo, pero ambos deben cerrar antes de comprometer un lanzamiento móvil.
   bridge Python embebido frente a ejecutable Android-compatible empaquetado.
   Elegir por prueba, licencias, ABI y restricciones de ejecución, no por
   suponer que un binario Linux aarch64 funciona en Bionic.
+- Evaluar Tubefast/RustyPipe solo tras licencia y política de acceso. No
+  copiar su perfil VISIONOS, refresh remoto mutable, mecanismos Botguard/DRM
+  ni fallbacks para eludir negativas. Criterios y benchmark fijados en
+  `TUBEFAST-ASSESSMENT.md`; no hay resultados de audio comparativos en F1A.
 
 Aceptación propuesta para supervisor: ≤2 procesos activos, 20 resultados por
 búsqueda, 30 s de deadline, stdout ≤4 MiB y stderr retenido ≤64 KiB,
