@@ -241,7 +241,7 @@ eliminó ni debilitó el test que detectó el cambio inseguro de repository.
 | `python3 .github/scripts/test-policy-checks.py` | Pasó: 27 tests. |
 | `python3 packaging/test-release-names.py` | Pasó: 8 tests. |
 | `python3 packaging/flatpak/test-metainfo.py` | Pasó: 4 tests. |
-| `python3 packaging/test-launchers.py` | Falló: 4 tests, 2 errores por ausencia de `ruby`. No se sustituye ni se omite el test. |
+| `python3 packaging/test-launchers.py` | Falló localmente: 4 tests, 2 errores por ausencia de Ruby. Posteriormente pasó sin modificar el test en el job `quick` de GitHub, con Ruby disponible. |
 | `cargo fmt --all --check`, `git diff --check` | Pasaron. |
 | YAML CI, issue templates y CodeRabbit, parser PyYAML 6.0.3 | Se parsearon. CI optimizada también pasó actionlint 1.7.12 sin ShellCheck; no equivale a ejecución GitHub Actions. |
 | `cargo test --locked --all-targets` (baseline previo) | Incompleto por límites de tiempo de 200 s y 1.200 s en compilación fría. No llegó a tests. |
@@ -262,7 +262,10 @@ Los tres ignorados son portal desktop, store nativo y ventana X11, requieren
 servicios reales. Que un test de assets macOS pase en Linux no prueba macOS.
 
 No ejecutados: GUI real, prueba de audio, native-store ignorado,
-macOS/Windows, Nix, Jekyll y Flatpak runtime, APK/NDK/dispositivo y CI remota.
+tests nativos completos macOS/Windows, Nix, Jekyll y Flatpak runtime,
+APK/NDK/dispositivo. Sí se ejecutaron builds nativos macOS/Windows con smoke
+`--version`, Linux completo y core Android en CI. Los resultados remotos
+finales, tiempos, fallos y caché están en `CI-REPORT.md`.
 No se ejecutó ShellCheck. No hay releases públicas. El seguimiento de las
 ejecuciones y artifacts de la infraestructura optimizada está en `CI-REPORT.md`.
 
@@ -307,7 +310,7 @@ cachés para ocultar resultados.
 
 | Prioridad | Riesgo | Gate |
 |---|---|---|
-| P0 | Suites/build Rust pasan, pero launcher tests fallan por Ruby ausente y CI remota pendiente. | Resolver tooling y cerrar checks F0 antes de extraer lógica. |
+| Cerrado en CI | Ruby falta localmente, pero launchers y suites/build requeridos pasaron en runners. | Usar circuito ligero local y CI principal; evidencia en `CI-REPORT.md`. |
 | P0 | Updater, IDs y perfiles todavía son upstream. | No distribuir como Doremi; separar antes del primer binario propio. |
 | P0 | Python/JS/yt-dlp Android no demostrado ni licencias/distribución resueltas. | Spike Android de F2 temprano, no al final del producto. |
 | P1 | Cola/modelos/app/session_reads demasiado entrelazados. | Caracterización y bridge neutral en F1, no refactor masivo. |
@@ -329,3 +332,11 @@ incompatibles sin compartir objetos, retención corta y gates de espacio.
 `scripts/check-local.py` mantiene un circuito cotidiano sin compilar el cliente.
 La evidencia de resultados remotos, tiempos y cachés, incluida cualquier
 causa de fallo, se registra en `CI-REPORT.md`, no se infiere de tests locales.
+
+Validación final de infraestructura: run GitHub `40563292782`, código
+`12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0`, intento 3 **success**,
+cuatro artefactos del mismo SHA/versión verificados y caché exacta comprobada.
+Tests default: 724,357 s en frío → 64,266 s con caché. El fallo inicial MSVC,
+el miss por toolchains preinstaladas y la cancelación por capacidad macOS
+están documentados sin ocultarlos. No cambia el alcance de F0: no se ha
+implementado reproducción yt-dlp ni una aplicación Android.

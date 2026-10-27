@@ -2,11 +2,13 @@
 
 ## Estado
 
-La infraestructura se ejecutó en GitHub. El primer run falló en Windows;
-la corrección pasó todos los jobs y el gate de cuatro payloads en el run
-40556400475, intento 1. La prueba de caché detectó además variación de los
-compiladores preinstalados del runner; se está verificando el aislamiento
-de la toolchain. No hay releases públicas automáticas.
+**Infraestructura validada en GitHub Actions**, no solo mediante checks locales:
+[run 40563292782](https://github.com/Eirom16/spotifast/actions/runs/40563292782),
+SHA de código `12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0`, intento 3,
+conclusión **success**. Se verificaron los cuatro payloads y un acierto real
+de caché sobre el mismo SHA. Los fallos previos y sus causas se conservan abajo.
+Este informe se registra después, sin atribuir sus cambios documentales al
+SHA compilado. No hay releases públicas automáticas.
 
 Equipo local: Pentium Silver N5000, 8 GB RAM. La compilación fría de F0
 consumió varios límites de 20 min; Clippy default tardó 14 min 31 s y el
@@ -142,6 +144,9 @@ gh run download RUN_ID --repo Eirom16/spotifast --dir target/downloaded-ci
 gh api repos/Eirom16/spotifast/actions/cache/usage
 ```
 
+Los pushes que solo actualizan `CI-REPORT.md`/`F0-REPORT.md` no relanzan builds
+de código sin cambios. Un dispatch manual sigue disponible para cualquier SHA.
+
 Comparar un run frío y una reejecución del mismo SHA antes de atribuir mejoras
 a caché. `gh run rerun RUN_ID --job JOB_ID` permite medir tests o Clippy sin
 recompilar los otros sistemas; sus payloads del mismo SHA siguen verificándose.
@@ -214,4 +219,68 @@ El intento 2 del mismo run reejecutó solo `full-tests` y el gate: ambos
 pasaron, sin recompilar macOS/Windows. Pero `cache_exact_hit=false` y tests
 default tardaron 757,895 s (job 14 min 28 s): **no hubo aceleración de caché**.
 Esto confirma por qué se debe medir, no anunciar éxito por configurar una
-action. El aislamiento de RUSTUP_HOME se valida en una ejecución posterior.
+action. El aislamiento de RUSTUP_HOME se validó en la ejecución siguiente.
+
+### Validación final: toolchain aislada y caché efectiva
+
+Run [40563292782](https://github.com/Eirom16/spotifast/actions/runs/40563292782),
+SHA `12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0`.
+
+1. **Intento 1:** quick, tests, Clippy, Windows y Android pasaron. macOS fue
+   cancelado sin adquirir runner, no falló un compilador. Anotación real:
+   `The job was not acquired by Runner of type hosted even after multiple attempts`.
+   GitHub añadió avisos de capacidad macOS arm64. El gate rechazó el conjunto
+   incompleto. No se cambió arquitectura ni se omitió la plataforma.
+2. **Intento 2:** solo se repitieron macOS y el gate. Build macOS y verificación
+   de los cuatro artefactos pasaron; no se recompilaron las otras plataformas.
+3. **Intento 3:** solo se repitieron tests Linux y el gate. Resultado **success**,
+   `cache_exact_hit=true`, sin repetir builds macOS/Windows/Android ni Clippy.
+   Se comprobó también que el gate soporta reintentos parciales del mismo SHA.
+
+| Comando de tests, mismo SHA | Frío, intento 1 | Caché, intento 3 |
+|---|---:|---:|
+| Default, compilación + ejecución | 724,357 s | 64,266 s |
+| All-features | 47,618 s | 64,441 s |
+| Doctests | 1,205 s | 1,502 s |
+
+Reducción observada del comando default: ~91 %, no una garantía de rendimiento
+ni prueba de que cada comando mejora. El job con caché tardó 4 min 21 s, incluido
+setup/restauración; no se compara su tiempo total con una cola fría como si toda
+la diferencia fuera CPU. Los tiempos reales de comandos son la referencia.
+Clippy frío aislado: 330,074 s default, 13,155 s all-features, 17,013 s rustdoc.
+No se reejecutó Clippy para afirmar un acierto de caché que no se midió.
+
+El target de tests se mantuvo íntegro en 3.147.304.363 bytes; Clippy en
+1.237.332.508. Cero archivos eliminados por los guards. El runner de tests con
+caché conservó ~80,9 GiB libres. Snapshots de disco son del runner utilizado,
+no una promesa de capacidad de todas las imágenes futuras.
+
+Snapshot final por API: **12 caches, 7.841.152.854 bytes (~7,30 GiB)**, incluyendo
+generaciones previas de la investigación. Por debajo del límite estándar de
+10 GiB. No se borraron caches remotas; la admisión impide nuevos guardados al
+superar 6 GiB, pero mantiene lecturas. Revisar expiración/rotación antes de
+necesitar otro compilador o namespace; no acumular generaciones indefinidamente.
+
+Artifacts reales del run, no releases (tamaño comprimido observado):
+
+| Artifact | Bytes |
+|---|---:|
+| `payload-linux-12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0` | 36.271.449 |
+| `payload-macos-12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0` | 29.036.980 |
+| `payload-windows-12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0` | 25.347.624 |
+| `payload-android-core-12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0` | 3.630 |
+| `ci-report-12d21370dcd6e2e8b3ecac2e91c5025ae95b46f0-3` | 180.769 |
+
+Cada payload contiene MIT y manifest; el gate real confirmó SHA, versión 0.14.2,
+target, tipo, estado limpio y SHA-256. Reportes por job/attempt permanecen como
+artifacts siete días. No se generó APK, instalador, release ni firma Doremi.
+Los ejecutables siguen siendo el baseline Spotify preservado.
+
+### Cobertura aún pendiente
+
+La infraestructura sí quedó comprobada. No se realizaron GUI/audio reales,
+tests nativos completos macOS/Windows, Nix, Jekyll, runtime Flatpak,
+native-store ignorado, SDK/NDK/APK/dispositivo Android ni pruebas de yt-dlp.
+No se ejecutó ShellCheck ni una auditoría completa de vulnerabilidades y
+licencias transitivas. Esas ausencias no se presentan como checks verdes.
+No se fusionó la rama en `main` ni se publicaron releases.
