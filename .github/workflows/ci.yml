@@ -26,6 +26,9 @@ env:
   CARGO_BUILD_JOBS: "2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
   PYTHONUTF8: "1"
+  # rust-cache hashes EVERY installed toolchain, including the runner's changing
+  # unused stable compiler. Isolate the pinned compiler instead of deleting tools.
+  RUSTUP_HOME: ${{ github.workspace }}/target/rustup
 
 jobs:
   quick:
@@ -67,7 +70,9 @@ jobs:
           from pathlib import Path
           usage = json.loads(Path("target/ci-reports/cache-usage-before.json").read_text())
           # Conservative admission gate; caches already present can always be read.
-          allowed = usage["active_caches_size_in_bytes"] < 2 * 2**30
+          # Measured v3 caches total <3 GiB for four concurrent writers.
+          # Reserve 4 GiB under the standard 10 GiB repository limit.
+          allowed = usage["active_caches_size_in_bytes"] < 6 * 2**30
           with open(os.environ["GITHUB_OUTPUT"], "a") as f:
               f.write(f"save-cache={str(allowed).lower()}\n")
           print(f"Cache usage: {usage['active_caches_size_in_bytes']} bytes. New writes admitted: {allowed}")

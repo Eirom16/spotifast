@@ -95,6 +95,7 @@ class CITests(unittest.TestCase):
         self.assertIn("linux-dev-codegen", text)
         self.assertIn("linux-dev-metadata", text)
         self.assertIn("cache-targets: false", text)
+        self.assertIn("RUSTUP_HOME: ${{ github.workspace }}/target/rustup", text)
         self.assertNotIn("cargo build --release", text)
         self.assertNotIn("self-hosted", text)
 

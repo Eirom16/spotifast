@@ -2,10 +2,11 @@
 
 ## Estado
 
-La infraestructura está implementada y se ejecutó en GitHub. **El primer run
-falló en Windows; la corrección y su verificación están pendientes.**
-No se declara validada por pasar análisis YAML o solo los jobs Linux.
-No hay releases públicas automáticas.
+La infraestructura se ejecutó en GitHub. El primer run falló en Windows;
+la corrección pasó todos los jobs y el gate de cuatro payloads en el run
+40556400475, intento 1. La prueba de caché detectó además variación de los
+compiladores preinstalados del runner; se está verificando el aislamiento
+de la toolchain. No hay releases públicas automáticas.
 
 Equipo local: Pentium Silver N5000, 8 GB RAM. La compilación fría de F0
 consumió varios límites de 20 min; Clippy default tardó 14 min 31 s y el
@@ -47,14 +48,18 @@ espacios separados:
 - Android/core y quick no duplican caches de un árbol desktop que no consumen.
 
 La clave automática incorpora host/compilador, lock/manifests, config y variables
-Rust/Cargo. Un perfil release o nuevo target necesitará otro namespace.
+Rust/Cargo. `RUSTUP_HOME` se aísla en `target/rustup`: solo se instala la
+toolchain fijada, no se depende del `stable` cambiante de la imagen ni se
+desinstala software del runner. La action incluye todas las toolchains
+instaladas al calcular claves, no solo la activa. Un perfil release o nuevo
+target necesitará otro namespace.
 No se usa SHA de commit como clave: invalidaría la caché en cada edición.
 El namespace `doremi-v3` corrige los presupuestos iniciales tras medir el primer
 run, no cambia por commit. No se cachean binarios de herramientas ni crates workspace; no se guarda en
 fallo ni desde PR. Durante F0 solo main/rama de trabajo admiten escrituras.
 
 El job rápido consulta el consumo real del repositorio por API y permite
-nuevos guardados solo si está por debajo de 2 GiB, reservando margen para
+nuevos guardados solo si está por debajo de 6 GiB, reservando 4 GiB para
 guardados paralelos y el límite estándar de 10 GiB. Es una política
 conservadora de admisión, no una garantía de tamaño comprimido: GitHub reporta
 el tamaño definitivo después del guardado. El reporte final vuelve a medirlo.
@@ -175,3 +180,38 @@ Corrección Windows: ejecutar Cargo desde PowerShell tras configurar MSVC,
 evitando la prioridad de PATH de Git Bash. `PYTHONUTF8=1` uniforma los logs.
 El gate final rechazó correctamente el conjunto incompleto y subió el
 reporte. Verificación de estas correcciones y aciertos de caché aún pendiente.
+
+### Primera ejecución corregida
+
+[40556400475, intento 1](https://github.com/Eirom16/spotifast/actions/runs/40556400475/attempts/1),
+SHA `786c0d2c812e370c2fda191c9777db43e10c8138`: **success**, incluidos el
+build Windows con MSVC, los cuatro payloads y su verificación de identidad/hash.
+
+| Job | Tiempo real total |
+|---|---:|
+| quick | 1 min 58 s |
+| full-tests | 13 min 6 s |
+| clippy | 11 min 35 s |
+| macOS arm64 | 14 min 11 s |
+| Windows x64 | 24 min 23 s |
+| Android core | 46 s |
+| gate/artefactos | 18 s |
+
+Tiempos por comando (sin setup/cola): default tests 689,560 s; all-features
+49,350 s; Clippy default 546,109 s; Clippy all-features 21,356 s; rustdoc
+26,728 s; build macOS 790,146 s; Windows 1.329,375 s.
+Los targets de tests (2,931 GiB) y Clippy (1,152 GiB) se conservaron sin poda.
+Caches v3 comprimidos: codegen 986.335.684 bytes; metadata 753.909.283;
+macOS downloads 450.599.913; Windows downloads 560.436.954. Total ~2,56 GiB.
+La admisión se ajustó con esta medición, reservando 4 GiB para guardados.
+
+La imagen de `full-tests` tenía además Rust 1.99.1 y la de Clippy 1.99.0,
+aunque ambos compilaban con 1.98.0. Sus claves incluían esos compiladores
+no usados. La toolchain aislada elimina esa fuente de misses sin desactivar
+la protección por compilador, flags, perfiles o target.
+
+El intento 2 del mismo run reejecutó solo `full-tests` y el gate: ambos
+pasaron, sin recompilar macOS/Windows. Pero `cache_exact_hit=false` y tests
+default tardaron 757,895 s (job 14 min 28 s): **no hubo aceleración de caché**.
+Esto confirma por qué se debe medir, no anunciar éxito por configurar una
+action. El aislamiento de RUSTUP_HOME se valida en una ejecución posterior.
