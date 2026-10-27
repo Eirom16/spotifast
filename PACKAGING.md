@@ -1,5 +1,10 @@
 # Packaging
 
+> Documento histórico del baseline Spotifast. No ejecutar sus instrucciones
+> de publicación para Doremi. F0 desactiva los workflows originales y conserva
+> las recetas sin cambiar destinos, claves ni IDs. El empaquetado de Doremi
+> necesita los gates de `DOREMI-ROADMAP.md`; no existe una release Doremi.
+
 [`native-packages.yaml`](native-packages.yaml) is the packaging configuration:
 it pins the shared CLI and nFPM versions and declares Linux amd64/arm64 inputs,
 DEB/RPM/AppImage contents, dependencies, the macOS disk image and Windows

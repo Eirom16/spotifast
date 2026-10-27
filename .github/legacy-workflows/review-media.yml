@@ -1,3 +1,4 @@
+# Historical Spotifast automation. Disabled outside .github/workflows.
 name: Review media
 
 # Runs on the base branch's copy of the script and reads the pull request

@@ -1,3 +1,8 @@
+[workspace]
+members = [".", "crates/doremi-core"]
+default-members = [".", "crates/doremi-core"]
+resolver = "3"
+
 [package]
 name = "spotifast"
 default-run = "spotifast"
@@ -5,10 +10,16 @@ version = "0.14.2"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"
-description = "A native Spotify client"
+description = "Doremi F0 migration baseline: the preserved native Spotify client"
+# Runtime legacy release-note links read this through CARGO_PKG_REPOSITORY.
+# Keep them intact until the Doremi executable has its own release identity.
 repository = "https://github.com/crmne/spotifast"
 keywords = ["spotify", "music", "egui", "librespot", "player"]
 categories = ["multimedia::audio"]
+
+[package.metadata.doremi]
+repository = "https://github.com/Eirom16/spotifast"
+phase = "F0"
 
 [lib]
 name = "spotifast"

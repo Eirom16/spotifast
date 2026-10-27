@@ -1,3 +1,4 @@
+# Historical Spotifast automation. Disabled outside .github/workflows.
 name: Triage open backlog
 
 on:

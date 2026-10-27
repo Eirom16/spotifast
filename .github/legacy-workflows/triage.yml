@@ -1,3 +1,4 @@
+# Historical Spotifast policy. Not active in Doremi.
 extends: crmne/github-automation:triage/account.yml
 followups: selective
 

@@ -1,0 +1,9 @@
+[package]
+name = "doremi-core"
+version = "0.14.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+description = "Platform-neutral foundation for the Doremi migration"
+repository = "https://github.com/Eirom16/spotifast"
+publish = false
