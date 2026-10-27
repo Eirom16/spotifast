@@ -6,8 +6,10 @@ Spotifast no definen Doremi. Conserva su autoría, MIT y licencias de assets.
 
 ## Producto y seguridad
 
-- Doremi será un reproductor nativo Rust, con egui/eframe, búsqueda y
-  resolución mediante yt-dlp, sin Spotify obligatorio ni backend hospedado.
+- Doremi será un reproductor nativo Rust, con egui/eframe y puertos neutrales
+  de búsqueda/resolución, sin Spotify obligatorio ni backend hospedado.
+  El proveedor definitivo se decide por experimentos: Rust nativo y yt-dlp
+  son candidatos; RustyPipe es referencia hasta resolver su licencia.
 - Nada de Electron, motores de navegador embebidos, telemetría obligatoria,
   evasión de DRM, paywalls, restricciones geográficas o controles de acceso.
   Una negativa del proveedor es un error visible, no permiso para sortearla.

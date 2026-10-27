@@ -4,10 +4,10 @@ Reproductor musical nativo en Rust, en migración desde
 [Eirom16/spotifast](https://github.com/Eirom16/spotifast), fork de
 [crmne/spotifast](https://github.com/crmne/spotifast).
 
-**Estado: F1A, dominio y cola neutral con bridge limitado. Todavía no es un reproductor
+**Estado: F1B-1, integración manual y contratos de proveedores. Todavía no es un reproductor
 independiente de Spotify. No hay APK ni release Doremi.**
 
-El objetivo es usar egui/eframe y yt-dlp para búsqueda y resolución de medios,
+El objetivo es usar egui/eframe y contratos neutrales de búsqueda/resolución,
 con escritorio y Android construidos sobre el mismo núcleo. No usaremos
 Electron, un backend hospedado obligatorio ni evasión de DRM o controles de
 acceso.
@@ -18,9 +18,10 @@ Se conserva el ejecutable `spotifast` 0.14.2 y su biblioteca Rust. Su
 reproducción sigue usando Spotify/librespot y requiere las autorizaciones y
 Premium del baseline. La estructura nueva no elimina ese acoplamiento.
 `doremi-core` contiene tipos neutrales y una máquina de cola determinista.
-El bridge comparte reglas de edición/prefijo con el legado; el core todavía
+El bridge comparte edición manual y confirmación con el legado; el core todavía
 no dirige su transporte ni dispone de catálogo, motor o biblioteca propios.
-Estado de pruebas: [F1A-REPORT.md](F1A-REPORT.md).
+Estado de pruebas: [F1B1-REPORT.md](F1B1-REPORT.md).
+Rust nativo y yt-dlp se evaluarán experimentalmente; no hay proveedor elegido.
 
 No renombramos aún IDs persistidos, keyrings, rutas, protocolos, iconos ni
 actualizador. **El ejecutable legado conserva su actualizador dirigido al
@@ -50,6 +51,9 @@ del sitio heredado. Estado real de ejecuciones y cachés: [CI-REPORT.md](CI-REPO
 - [Roadmap y arquitectura objetivo](DOREMI-ROADMAP.md)
 - [Auditoría, resultados reales, pendientes y reproducción](F0-REPORT.md)
 - [Dominio/cola y caracterización F1A](F1A-REPORT.md)
+- [Integración y resultados F1B-1](F1B1-REPORT.md)
+- [Contratos y harness sintético](PROVIDER-CONTRACTS.md)
+- [Rotación de cachés propuesta, sin borrar](CACHE-ROTATION.md)
 - [Evaluación de Tubefast y otros proveedores](TUBEFAST-ASSESSMENT.md)
 - [Inventario de dependencias](docs/doremi/dependencies.md)
 - [Reglas para agentes](AGENTS.md)

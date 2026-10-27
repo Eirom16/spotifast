@@ -3,15 +3,17 @@
 ## Estado y objetivo
 
 F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.
-F1A introduce dominio/cola neutral y un bridge limitado, no un nuevo motor.
+F1A introdujo dominio/cola neutral. F1B-1 integra edición manual/confirmación
+y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
-No hay reproducción yt-dlp ni APK. Estado y evidencia F1A: `F1A-REPORT.md`;
+No hay proveedor productivo nuevo ni APK. Estado actual: `F1B1-REPORT.md`;
 evaluación de proveedores: `TUBEFAST-ASSESSMENT.md`.
 El resultado verificable, los checks fallidos/no ejecutados y los riesgos
 están en `F0-REPORT.md`. Una fase no se acepta solo porque exista su código.
 
 Objetivo: reproductor nativo Rust, egui/eframe, sin Spotify obligatorio,
-búsqueda/resolución yt-dlp, escritorio y Android con el mismo núcleo.
+búsqueda/resolución por puertos neutrales, escritorio y Android con el mismo núcleo.
+La elección Rust nativo frente a yt-dlp es experimental, no anticipada.
 Sin Electron, motores de navegador, backend hospedado obligatorio ni evasión
 de DRM o controles de acceso. No hay sustitución de audio Spotify: los nuevos
 medios tienen identidad y procedencia propias, elegidas por el usuario.
@@ -32,7 +34,7 @@ haber conservado comportamiento.
 | `doremi-player` | Transporte, buffering acotado, decodificación, reloj, seek, DSP, eventos y puertos de salida. Sin catálogo ni UI. | core |
 | `doremi-library` | Biblioteca, playlists propias, historial, repositorio versionado y migraciones. No conserva URLs firmadas como IDs. | core |
 | `doremi-ui` | Vistas egui, estado de presentación y emisión de intenciones. Sin procesos, descargas, disco ni decodificación. | core |
-| `doremi-adapter-ytdlp` | Protocolo JSON, supervisor, límites, traducción de errores y selección de formatos soportados. | core, catalog |
+| Adaptadores candidatos | Rust nativo o yt-dlp, sujetos a benchmark y licencia. No incorporar todavía dependencias productivas; RustyPipe solo referencia. | core, catalog |
 | `doremi-platform-desktop` | Procesos, rutas, selección de archivos, keyring, audio, notificaciones, media keys, tray. Expone capacidades, no finge soporte móvil. | core, puertos player/library |
 | `doremi-platform-android` | JNI/Activity, contexto Android, SAF/MediaStore, audio focus, MediaSession/servicio, lifecycle, almacenamiento y runtime empaquetado. | core, puertos player/library |
 | `doremi-desktop` | Composición eframe y workers. Único entrypoint nuevo de escritorio. | UI y servicios/adaptadores |
@@ -81,7 +83,7 @@ tipos Spotify o JNI al dominio. Tests con adaptadores falsos en ambos hosts.
 |---|---|---|
 | Cola, next/previous, shuffle/repeat, duplicados, orden y resume | app/model, tipos API, Spirc y session.json | Extraer máquina pura con IDs de ocurrencia, tests de contratos existentes y replay del mismo escenario en desktop/Android. |
 | EQ, limiter, resample, espectro y osciloscopio | sink, rodio Source, librespot Sink, AudioTap | Conservar DSP, separar PCM de Spotify. Fixtures de impulsos/silencio/seek y señal post-EQ/pre-volumen. |
-| Búsqueda, catálogo y artwork | API/gateway/session_reads, auth, images y modelos Spotify | Proveedor yt-dlp explícito; thumbnails y resultados parciales, cancelación y errores sin login Spotify. |
+| Búsqueda, catálogo y artwork | API/gateway/session_reads, auth, images y modelos Spotify | Puerto neutral; proveedor experimental explícito, resultados acotados, cancelación y errores sin login Spotify. |
 | Playlists, favoritos e historial | API, liked/history/account_cache/settings | Biblioteca propia versionada. Importación explícita de metadatos si se aprueba, nunca equivalencias automáticas por título. |
 | Archivos locales, tags, carátulas y letras | lookup `spotify:local:` en librespot, symphonia/local_tags y lyrics | Fuente de archivo neutral. Desktop paths y Android content URIs/FD, sin exigir Spotify. |
 | UI, navegación, teclas, i18n, bidi, skins y accesibilidad | app/model, fastframe, assets | Reutilizar vistas gradualmente con view models neutrales, headless/demo y evidencia visual. Gestos/touch aparte, no cambiar escritorio silenciosamente. |
@@ -178,12 +180,51 @@ Depende de gates F1A verdes. Criterios medibles:
 7. Revisar caches por ID/ref/tamaño; rotación solo con autorización. Cero
    fuentes git externas nuevas ni publicaciones automáticas.
 
-### F2: yt-dlp y prueba temprana de viabilidad Android
+#### F1B-1: un corte real y puerto con consumidor
+
+Implementación/evidencia: `F1B1-REPORT.md`. El vector manual existente es
+única autoridad, prestado al núcleo para eliminación por ocurrencia.
+Confirmación core usa session/generation y compara ese vector, sin sombra.
+Se preservan Spirc, seis reintentos, ventana temporal y restricciones legacy.
+Caracterizar selecciones stale, writes parciales, restauración y resume-only.
+
+`Catalog` produce requests/events y es consumido por el harness de host.
+Capacidades, límites, deadlines, errores, leases y redacción están en
+`PROVIDER-CONTRACTS.md`. No hay proveedor productivo ni persistencia de
+URLs/headers. Los experimentos actuales son sintéticos y loopback.
+La propuesta de caches es `CACHE-ROTATION.md`; no ejecutar DELETE sin permiso.
+
+#### F1B-2: APK offline y lifecycle mínimo
+
+Depende de gates F1B-1 verdes. Alcance:
+
+1. GameActivity/eframe con el mismo core y fake en memoria, sin importar el
+   paquete desktop ni sus integraciones fastframe. Sin Internet/login/Spotify.
+2. Un único dueño de core fuera de Activity; rotación/recreación no duplica
+   cola o runtime. SessionId nuevo al reemplazar dueño, no en cada frame.
+3. Teclado/IME Unicode, búsqueda falsa, selección explícita y trazas iguales
+   al host. Invalidar callbacks antiguos al destroy/recreate/process death.
+4. Gradle/AGP/JDK/SDK/NDK/cargo-ndk fijados. Candidato comprobado por docs:
+   JDK 17, Gradle 8.13, AGP 8.13.x y API 36; minSdk 26 coherente con CPAL
+   fijado. NDK r28+ fijado y comprobación de librerías con página 16 KiB.
+5. APK construido, instalado y ejecutado en API mínima y actual; capturas
+   y logs redactados como artifacts/PR, no en el repositorio.
+6. Audio local es un gate posterior: puerto handle/asset, PCM preasignado,
+   focus, auriculares y MediaSession/servicio según API. No afirmar que
+   eframe o un backend CPAL ya resuelven lifecycle/audio Android.
+
+No tratar una `.rlib` o `cargo check --tests` como este gate cumplido.
+SDK/NDK/Gradle no se instalan en el N5000 como requisito diario.
+
+### F2: evaluación experimental de proveedores y viabilidad Android
 
 Depende del puerto y gates de F1B. Desktop y spike Android pueden avanzar en
 paralelo, pero ambos deben cerrar antes de comprometer un lanzamiento móvil.
 
-- Implementar supervisor desktop sin shell: executable validado, argv fijo,
+- Comparar un adaptador Rust nativo con yt-dlp para un corpus autorizado;
+  RustyPipe solo referencia hasta resolver licencia. Decidir con evidencia
+  de búsqueda/resolución, errores, recursos y empaquetado, no cifras ajenas.
+- Si se experimenta con yt-dlp, supervisor sin shell: executable validado, argv fijo,
   `--ignore-config`, `--no-plugin-dirs`, `--no-remote-components`,
   `--skip-download`, JSON y límite de resultados. Separar búsqueda plana y
   resolución; metadatos de búsqueda pueden estar incompletos.
@@ -197,7 +238,8 @@ paralelo, pero ambos deben cerrar antes de comprometer un lanzamiento móvil.
   búsqueda → resolución JSON → formato usable. Registrar versión yt-dlp,
   runtime JS, sistema y resultado, sin secretos.
 - Spike Android: eframe de la revisión usada, GameActivity/IME, Gradle,
-  cargo-ndk, un ABI arm64, Python/yt-dlp y runtime JS empaquetados. Comparar
+  cargo-ndk y un ABI arm64. Solo si se evalúa yt-dlp, probar Python/JS
+  empaquetados. Comparar
   bridge Python embebido frente a ejecutable Android-compatible empaquetado.
   Elegir por prueba, licencias, ABI y restricciones de ejecución, no por
   suponer que un binario Linux aarch64 funciona en Bionic.
@@ -205,6 +247,11 @@ paralelo, pero ambos deben cerrar antes de comprometer un lanzamiento móvil.
   copiar su perfil VISIONOS, refresh remoto mutable, mecanismos Botguard/DRM
   ni fallbacks para eludir negativas. Criterios y benchmark fijados en
   `TUBEFAST-ASSESSMENT.md`; no hay resultados de audio comparativos en F1A.
+- Ampliar el harness real de F1B-1, no sustituir muestras sintéticas por
+  resultados musicales. JSONL con SHA/versiones, cold/warm explícito,
+  denominadores y fallos; p50/p95 búsqueda, resolución, primer PCM y audio
+  audible solo con instrumentación, CPU/RSS del árbol, cancelación física.
+  Todo campo no medido sigue null. Sin cookies/URLs firmadas en registros.
 
 Aceptación propuesta para supervisor: ≤2 procesos activos, 20 resultados por
 búsqueda, 30 s de deadline, stdout ≤4 MiB y stderr retenido ≤64 KiB,

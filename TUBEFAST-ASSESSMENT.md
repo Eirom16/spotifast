@@ -5,9 +5,10 @@
 **No integrar Tubefast en F1A ni cambiar de proveedor por una supuesta ventaja
 de rendimiento.** Su diseño nativo pequeño y separación de decodificación
 son referencias útiles, pero no constituyen evidencia de menor latencia o
-soporte Android. Mantener yt-dlp como primer adaptador previsto, tras los
-gates de acceso legítimo, empaquetado y benchmark de F2. Evaluar un adaptador
-Rust nativo independiente después, sin acoplarlo a la cola ni copiar la UI.
+soporte Android. La preferencia inicial de F1A por yt-dlp queda sustituida
+en F1B-1 por evaluación experimental: Rust nativo y yt-dlp son candidatos,
+sin elegir todavía proveedor definitivo. Contratos y harness implementados
+en `PROVIDER-CONTRACTS.md`; no acoplar candidatos a la cola ni copiar la UI.
 
 RustyPipe no es una alternativa MIT intercambiable: la revisión estudiada es
 **GPL-3.0-only**. No añadirla como dependencia ni copiar su implementación a

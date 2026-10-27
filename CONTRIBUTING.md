@@ -8,8 +8,9 @@ fuentes, iconos y dependencias también se conservan.
 ## Alcance
 
 El objetivo es reproducción nativa en Rust, egui/eframe y un núcleo común
-para escritorio y Android. yt-dlp será un adaptador de búsqueda y resolución,
-no el reproductor ni un servicio remoto de Doremi. No se requiere Spotify en
+para escritorio y Android. Catálogo/resolución usan contratos neutrales:
+Rust nativo y yt-dlp son candidatos a comparar, no una decisión productiva.
+No se requiere Spotify en
 el producto final. F0 todavía conserva su cliente Spotify y sus requisitos.
 
 No se aceptan Electron, motores de navegador embebidos, un backend hospedado

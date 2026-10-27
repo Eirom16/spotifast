@@ -5,9 +5,11 @@ Sigue `AGENTS.md`, `CONTRIBUTING.md`, `DOREMI-ROADMAP.md` y `F0-REPORT.md`.
 La política Spotify-only y la automatización account-wide de crmne no
 gobiernan este fork.
 
-- Rust nativo, egui/eframe, yt-dlp para catálogo/resolución y un núcleo
+- Rust nativo, egui/eframe, contratos neutrales de catálogo/resolución y un núcleo
   compartido entre escritorio y Android. Nada de Electron ni backend
   hospedado obligatorio.
+- No elegir proveedor antes de medir: Rust nativo y yt-dlp son candidatos;
+  RustyPipe sigue como referencia por su licencia.
 - No evadir DRM ni controles de acceso. No reemplazar audio Spotify
   silenciosamente por resultados de otro catálogo.
 - No bloquear UI o callback de audio con red, búsqueda, descargas,
