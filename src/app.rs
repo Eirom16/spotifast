@@ -10296,21 +10296,7 @@ impl App {
 
     /// Index after manual queue rows and before context rows.
     fn end_of_queued_rows(rows: &[PlayableItem], manual: &[String]) -> usize {
-        let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-        for uri in manual {
-            *counts.entry(uri.as_str()).or_insert(0) += 1;
-        }
-        let mut at = 0;
-        for item in rows {
-            match counts.get_mut(item.uri()) {
-                Some(left) if *left > 0 => {
-                    *left -= 1;
-                    at += 1;
-                }
-                _ => break,
-            }
-        }
-        at
+        crate::queue_bridge::manual_prefix(rows, manual)
     }
 
     /// Queue row built from cached details or a temporary label.
@@ -11168,24 +11154,18 @@ impl App {
                     return;
                 }
                 let queued_len = self.queued_rows_len();
-                if from >= queued_len || to > queued_len || from == to || to == from + 1 {
+                let Some(mut plan) = crate::queue_bridge::MovePlan::new(queued_len, from, to)
+                else {
                     return;
-                }
+                };
                 if from < self.manual_queue.len() {
-                    let uri = self.manual_queue.remove(from);
-                    let at = (if to > from { to - 1 } else { to }).min(self.manual_queue.len());
-                    self.manual_queue.insert(at, uri);
+                    plan.destination = plan.destination.min(self.manual_queue.len() - 1);
+                    plan.apply(&mut self.manual_queue);
                     // Pending additions are tracked by manual_queue index;
                     // shift them the same way the move just shifted the row
                     // they point at, or they end up naming a different song.
                     for addition in &mut self.pending_queue_adds {
-                        if addition.manual_index == from {
-                            addition.manual_index = at;
-                        } else if from < addition.manual_index && addition.manual_index <= at {
-                            addition.manual_index -= 1;
-                        } else if at <= addition.manual_index && addition.manual_index < from {
-                            addition.manual_index += 1;
-                        }
+                        addition.manual_index = plan.remap(addition.manual_index);
                     }
                     self.show_manual_queue_order(queued_len);
                 }
@@ -13687,6 +13667,10 @@ mod radio;
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
+
+    mod f1a_characterization {
+        include!("app/queue_characterization.rs");
+    }
 
     use super::*;
     use crate::api::models::{

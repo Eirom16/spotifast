@@ -1,7 +1,7 @@
 //! Platform-neutral starting point for Doremi.
 //!
-//! F0 defines identity only. Queue, catalog and playback contracts will be
-//! extracted with regression tests, not copied from the Spotify application.
+//! The domain and queue reducer perform no I/O. Hosts interpret returned
+//! effects; provider and platform types never enter the reducer.
 //!
 //! ```
 //! assert_eq!(doremi_core::PRODUCT_NAME, "Doremi");
@@ -9,6 +9,9 @@
 //! ```
 
 #![forbid(unsafe_code)]
+
+pub mod media;
+pub mod queue;
 
 /// The new product name, deliberately separate from the legacy executable.
 pub const PRODUCT_NAME: &str = "Doremi";

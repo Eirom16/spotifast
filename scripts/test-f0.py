@@ -98,7 +98,7 @@ class F0Tests(unittest.TestCase):
                 payload = directory / filename
                 payload.write_bytes(kind.encode())
                 data = {
-                    "schema": 1, "product": "Doremi", "phase": "F0", "release": False,
+                    "schema": 1, "product": "Doremi", "phase": BUILD["phase"](ROOT), "release": False,
                     "source_dirty": False, "source_commit": "abc", "version": "0.14.2",
                     "target": target, "kind": kind, "payload": BUILD["payload_identity"](payload),
                 }

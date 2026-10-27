@@ -19,6 +19,10 @@ def version(root):
     return baseline
 
 
+def phase(root):
+    return tomllib.loads((root / "Cargo.toml").read_text())["package"]["metadata"]["doremi"]["phase"]
+
+
 def payload_identity(path):
     if path.is_symlink() or not path.is_file():
         raise ValueError("Payload must be a regular file, not a symlink")
@@ -45,7 +49,7 @@ def main():
     manifest = {
         "schema": 1,
         "product": "Doremi",
-        "phase": "F0",
+        "phase": phase(ROOT),
         "version": version(ROOT),
         "source_commit": sha,
         "source_dirty": dirty,

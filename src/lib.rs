@@ -45,6 +45,7 @@ pub mod player;
 pub mod playlist_cover;
 pub mod power;
 pub mod prerelease;
+mod queue_bridge;
 pub mod resample;
 pub mod session_reads;
 pub mod settings;

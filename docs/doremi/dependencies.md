@@ -13,6 +13,7 @@ No se añadieron ni cambiaron fuentes externas en F0.
 | `dependencies` | `base64` | `0.22` |
 | `dependencies` | `clap` | `features=['derive']; version=4.5` |
 | `dependencies` | `ctr` | `0.9` |
+| `dependencies` | `doremi-core` | `path=crates/doremi-core` |
 | `dependencies` | `eframe` | `default-features=False; features=['accesskit', 'glow', 'default_fonts', 'links', 'wayland', 'x11', 'persistence']; version=0.36.2` |
 | `dependencies` | `egui` | `0.36.2` |
 | `dependencies` | `egui_extras` | `features=['image', 'svg']; version=0.36.2` |

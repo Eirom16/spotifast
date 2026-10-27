@@ -6157,6 +6157,7 @@ dependencies = [
  "clap",
  "ctr",
  "directories",
+ "doremi-core",
  "eframe",
  "egui",
  "egui_extras",

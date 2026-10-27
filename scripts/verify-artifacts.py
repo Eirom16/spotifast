@@ -37,7 +37,7 @@ def verify(directory, commit, version, expected=EXPECTED):
             raise ValueError("Unexpected platform target")
         if (data["schema"], data["product"], data["phase"], data["release"],
                 data["source_dirty"], data["source_commit"], data["version"], data["target"]) != (
-                1, "Doremi", "F0", False, False, commit, version, data["target"]):
+                1, "Doremi", BUILD["phase"](ROOT), False, False, commit, version, data["target"]):
             raise ValueError("Artifact identity does not match the verified source")
         if data["payload"] != BUILD["payload_identity"](path.parent / filename):
             raise ValueError("Artifact hash or filename differs")

@@ -71,7 +71,7 @@ class CITests(unittest.TestCase):
                 payload = directory / filename
                 payload.write_bytes(kind.encode())
                 data = {
-                    "schema": 1, "product": "Doremi", "phase": "F0", "release": False,
+                    "schema": 1, "product": "Doremi", "phase": VERIFY["BUILD"]["phase"](ROOT), "release": False,
                     "source_dirty": False, "source_commit": "abc", "version": "0.14.2",
                     "target": target, "kind": kind, "payload": VERIFY["BUILD"]["payload_identity"](payload),
                 }

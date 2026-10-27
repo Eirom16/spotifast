@@ -2,9 +2,9 @@ name: Doremi CI
 
 on:
   push:
-    branches: [main, "chore/doremi-f0"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a"]
     # Recording evidence must not launch another complete build of unchanged code.
-    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md"]
+    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md"]
   pull_request:
   workflow_dispatch:
 
@@ -275,6 +275,7 @@ jobs:
       - name: Cross-compile the neutral core
         run: |
           python3 scripts/ci-report.py run android-core -- cargo build --locked -p doremi-core --target aarch64-linux-android
+          python3 scripts/ci-report.py run android-contract-check -- cargo check --locked -p doremi-core --tests --target aarch64-linux-android
           mkdir -p target/payload
           cp target/ci/aarch64-linux-android/debug/libdoremi_core.rlib target/payload/
           cp LICENSE target/payload/
