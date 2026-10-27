@@ -232,15 +232,18 @@ en el commit de versión. Publicar requiere autorización específica aparte.
 ## CI: hoy y evolución
 
 F0 activa solo `.github/workflows/ci.yml`. Linux ejecuta políticas, tests de
-packaging, fmt/clippy/tests default/all-features y rustdoc, luego construye el
-ejecutable legado de debug. Android prueba core en host y genera una `.rlib`
-para `aarch64-linux-android`, sin requerir NDK porque no enlaza un binario.
+packaging, fmt/core en un job rápido; tests default/all-features en otro;
+Clippy/rustdoc en un tercero. El ejecutable Linux se reutiliza de los tests
+de integración, antes de activar demo; no se repite un build standalone.
+Jobs nativos macOS/Windows generan ejecutables de debug; Android genera una
+`.rlib` para `aarch64-linux-android`, sin NDK porque no enlaza un binario.
 Cada payload lleva JSON con SHA, versión, target, tipo, estado dirty y SHA-256.
-Un job dependiente de ambos rechaza discrepancias o fuentes sucias antes de
-agruparlos. Son artefactos de validación, no instaladores Doremi.
+El gate dependiente de todos rechaza discrepancias o fuentes sucias.
+Son artefactos de validación, no instaladores Doremi. Cachés y reportes reales:
+`CI-REPORT.md`. El circuito local cotidiano no compila la app completa.
 
 F1/F2 añade compilación real del shell Android y Gradle/NDK fijados; F3/F4,
-tests instrumentados y dispositivo. Recuperar macOS/Windows/Nix de la CI
-histórica sin sus destinos de publicación. No declarar soporte retirado por
-haber reducido la matriz activa durante F0: queda como brecha de cobertura.
+tests instrumentados y dispositivo. Los builds macOS/Windows no sustituyen
+sus suites de tests nativos; recuperarlas, junto con Nix, sin destinos de
+publicación. No declarar soporte probado solo por un build.
 Reactivar Pages, triage, releases, AUR/Homebrew o firma exige revisión separada.

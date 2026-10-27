@@ -64,7 +64,7 @@ class F0Tests(unittest.TestCase):
                           "pages: write", "publish = true"):
             self.assertNotIn(forbidden, workflow)
         self.assertIn("aarch64-linux-android", workflow)
-        self.assertIn("needs: [linux, android-core]", workflow)
+        self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core]", workflow)
 
     def test_payload_hash_and_missing_file(self):
         with tempfile.TemporaryDirectory() as name:

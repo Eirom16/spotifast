@@ -1,4 +1,4 @@
-name: Doremi F0 validation
+name: Doremi CI
 
 on:
   push:
@@ -8,106 +8,310 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
-  group: doremi-f0-${{ github.event.pull_request.number || github.ref }}
+  group: doremi-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# One consistent CI configuration, not changes to local development profiles.
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
+  CARGO_TARGET_DIR: target/ci
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_BUILD_JOBS: "2"
+  CMAKE_BUILD_PARALLEL_LEVEL: "2"
 
 jobs:
-  linux:
+  quick:
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      save-cache: ${{ steps.budget.outputs.save-cache }}
     steps:
       - uses: actions/checkout@v7
-      - name: Pinned Rust toolchain
+      - name: Pinned compiler, no full application build
         run: rustup show active-toolchain
-      - name: Native build and packaging test dependencies
+      - name: Fast policy, license, packaging and core checks
+        run: |
+          python3 scripts/ci-report.py run local-checks -- python3 scripts/check-local.py
+          python3 scripts/ci-report.py run policy -- python3 .github/scripts/test-policy-checks.py
+          python3 scripts/ci-report.py run launchers -- python3 packaging/test-launchers.py
+          python3 scripts/ci-report.py run release-names -- python3 packaging/test-release-names.py
+          python3 scripts/ci-report.py run metainfo -- python3 packaging/flatpak/test-metainfo.py
+      - name: New settings still require explicit approval
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE"
+          labels=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name')
+          approved=()
+          if grep -qx setting-approved <<< "$labels"; then approved=(--approved); fi
+          python3 scripts/ci-report.py run new-settings -- python3 .github/scripts/check-new-settings.py --base "$BASE" "${approved[@]}"
+      - name: Reserve repository cache headroom without deleting caches
+        id: budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" > target/ci-reports/cache-usage-before.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          usage = json.loads(Path("target/ci-reports/cache-usage-before.json").read_text())
+          # Conservative admission gate; caches already present can always be read.
+          allowed = usage["active_caches_size_in_bytes"] < 2 * 2**30
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"save-cache={str(allowed).lower()}\n")
+          print(f"Cache usage: {usage['active_caches_size_in_bytes']} bytes. New writes admitted: {allowed}")
+          PY
+      - name: Fast-check report
+        if: always()
+        run: python3 scripts/ci-report.py finalize
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-quick-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
+          retention-days: 7
+
+  full-tests:
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - name: Linux native libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libpipewire-0.3-dev \
-            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev \
-            cmake ninja-build libclang-dev ruby dbus
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev cmake ninja-build libclang-dev dbus
       - uses: Swatinem/rust-cache@v2
-      - name: Policy and packaging regressions
+        id: cache
+        with:
+          prefix-key: doremi-v2
+          shared-key: linux-dev-codegen
+          workspaces: ". -> target/ci"
+          cache-bin: false
+          save-if: ${{ needs.quick.outputs.save-cache == 'true' && github.event_name != 'pull_request' }}
+      - name: Default tests and the exact binary they exercise
         run: |
-          python3 scripts/test-f0.py
-          python3 scripts/audit-dependencies.py --check
-          python3 .github/scripts/check-dependency-sources.py
-          python3 .github/scripts/check-review-evidence.py
-          python3 .github/scripts/test-policy-checks.py
-          python3 packaging/test-launchers.py
-          python3 packaging/test-release-names.py
-          python3 packaging/flatpak/test-metainfo.py
-      - name: Format, lint and test the preserved application and core
-        run: |
-          cargo fmt --all --check
-          cargo clippy --locked --workspace --all-targets -- -D warnings
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-          cargo test --locked --workspace --all-targets
-          cargo test --locked --workspace --all-targets --all-features
-          cargo test --locked --workspace --all-features --doc
-          RUSTDOCFLAGS='-D warnings' cargo doc --locked --workspace --all-features --no-deps
-      - name: Build a validation payload, not a release
-        run: |
-          cargo build --locked -p spotifast --bin spotifast
-          mkdir -p target/validation
-          cp target/debug/spotifast target/validation/
-          cp LICENSE target/validation/
+          python3 scripts/ci-report.py run tests-default -- cargo test --locked --workspace --all-targets
+          mkdir -p target/payload
+          # Integration tests build this default-feature executable already.
+          # Save it before all-features would overwrite it with the demo binary.
+          cp target/ci/debug/spotifast target/payload/
+          cp LICENSE target/payload/
+          target/payload/spotifast --version
           python3 scripts/build-manifest.py --target x86_64-unknown-linux-gnu \
-            --kind legacy-desktop --payload target/validation/spotifast --output target/validation/manifest.json
+            --kind legacy-desktop --payload target/payload/spotifast --output target/payload/manifest.json
+      - name: All-feature tests and doctests, reuse the same dependency build
+        run: |
+          python3 scripts/ci-report.py run tests-all-features -- cargo test --locked --workspace --all-targets --all-features
+          python3 scripts/ci-report.py run doctests -- cargo test --locked --workspace --all-features --doc
       - uses: actions/upload-artifact@v6
         with:
-          name: linux-${{ github.sha }}
-          path: target/validation/
+          name: payload-linux-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/payload/
           if-no-files-found: error
+          retention-days: 7
+      - name: Bound generated dependency cache, after tests and payload copy
+        run: python3 scripts/ci-cache-budget.py --mib 2048
+      - name: Tests report
+        if: always()
+        run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope linux-dev-codegen
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-tests-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
+          retention-days: 7
+
+  clippy:
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - name: Linux native libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libasound2-dev libpipewire-0.3-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev cmake ninja-build libclang-dev dbus
+      - uses: Swatinem/rust-cache@v2
+        id: cache
+        with:
+          prefix-key: doremi-v2
+          shared-key: linux-dev-metadata
+          workspaces: ". -> target/ci"
+          cache-bin: false
+          save-if: ${{ needs.quick.outputs.save-cache == 'true' && github.event_name != 'pull_request' }}
+      - name: Clippy and Rustdoc, no test executable linking
+        run: |
+          python3 scripts/ci-report.py run clippy-default -- cargo clippy --locked --workspace --all-targets -- -D warnings
+          python3 scripts/ci-report.py run clippy-all-features -- cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          RUSTDOCFLAGS='-D warnings' python3 scripts/ci-report.py run rustdoc -- cargo doc --locked --workspace --all-features --no-deps
+      - name: Bound generated metadata cache
+        run: python3 scripts/ci-cache-budget.py --mib 768
+      - name: Lint report
+        if: always()
+        run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope linux-dev-metadata
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-clippy-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
+          retention-days: 7
+
+  desktop-build:
+    needs: quick
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - os: macos-15
+            label: macos
+            binary: spotifast
+          - os: windows-latest
+            label: windows
+            binary: spotifast.exe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    env:
+      CMAKE_GENERATOR: Ninja
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - name: GLEW for the preserved Windows MilkDrop feature
+        if: runner.os == 'Windows'
+        run: python3 scripts/ci-report.py run glew -- vcpkg install glew:x64-windows-static
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      # Target objects are deliberately NOT duplicated into large per-OS caches.
+      - uses: Swatinem/rust-cache@v2
+        id: cache
+        with:
+          prefix-key: doremi-v2
+          shared-key: ${{ matrix.label }}-native-dev-downloads
+          workspaces: ". -> target/ci"
+          cache-targets: false
+          cache-bin: false
+          save-if: ${{ needs.quick.outputs.save-cache == 'true' && github.event_name != 'pull_request' }}
+      - name: Native default-feature executable
+        run: |
+          python3 scripts/ci-report.py run native-build -- cargo build --locked -p spotifast --bin spotifast
+          mkdir -p target/payload
+          cp "target/ci/debug/${{ matrix.binary }}" target/payload/
+          cp LICENSE target/payload/
+          "target/payload/${{ matrix.binary }}" --version
+          host=$(rustc -vV | sed -n 's/^host: //p')
+          python3 scripts/build-manifest.py --target "$host" --kind "legacy-desktop-${{ matrix.label }}" \
+            --payload "target/payload/${{ matrix.binary }}" --output target/payload/manifest.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: payload-${{ matrix.label }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/payload/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Native build report
+        if: always()
+        run: python3 scripts/ci-report.py finalize --cache-hit '${{ steps.cache.outputs.cache-hit }}' --cache-scope '${{ matrix.label }}-native-dev-downloads'
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-${{ matrix.label }}-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
           retention-days: 7
 
   android-core:
+    needs: quick
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - name: Pinned toolchain and portable target
+      - name: Pinned portable target, no desktop dependency cache
         run: |
           rustup show active-toolchain
           rustup target add aarch64-linux-android
-      - uses: Swatinem/rust-cache@v2
-      # No NDK/linker needed for this Rust-only rlib. This is NOT an APK build.
-      - name: Test on host, then cross-compile the neutral core
+      # Pure Rust rlib, no NDK, APK, or duplicated Android business logic.
+      - name: Cross-compile the neutral core
         run: |
-          cargo test --locked -p doremi-core
-          cargo build --locked -p doremi-core --target aarch64-linux-android
-          mkdir -p target/validation
-          cp target/aarch64-linux-android/debug/libdoremi_core.rlib target/validation/
-          cp LICENSE target/validation/
-          python3 scripts/build-manifest.py --target aarch64-linux-android \
-            --kind core-rlib-not-apk --payload target/validation/libdoremi_core.rlib \
-            --output target/validation/manifest.json
+          python3 scripts/ci-report.py run android-core -- cargo build --locked -p doremi-core --target aarch64-linux-android
+          mkdir -p target/payload
+          cp target/ci/aarch64-linux-android/debug/libdoremi_core.rlib target/payload/
+          cp LICENSE target/payload/
+          python3 scripts/build-manifest.py --target aarch64-linux-android --kind core-rlib-not-apk \
+            --payload target/payload/libdoremi_core.rlib --output target/payload/manifest.json
       - uses: actions/upload-artifact@v6
         with:
-          name: android-core-not-apk-${{ github.sha }}
-          path: target/validation/
+          name: payload-android-core-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/payload/
           if-no-files-found: error
           retention-days: 7
+      - name: Android core report
+        if: always()
+        run: python3 scripts/ci-report.py finalize
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-android-core-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
+          retention-days: 7
 
-  verified-pair:
-    needs: [linux, android-core]
+  verified-artifacts:
+    needs: [quick, full-tests, clippy, desktop-build, android-core]
+    if: always()
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v7
         with:
-          pattern: "*-${{ github.sha }}"
-          path: target/validation-artifacts
-      - name: Verify source, version, kind and hashes before grouping artifacts
-        run: python3 scripts/verify-artifacts.py target/validation-artifacts
-      - uses: actions/upload-artifact@v6
+          pattern: report-*-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/reports
+      - name: Actual job timings, cache usage and failure conclusions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p target/reports
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" > target/reports/github-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/cache/usage" > target/reports/cache-usage-after.json
+          python3 scripts/summarize-ci.py target/reports
+      - uses: actions/download-artifact@v7
+        if: needs.full-tests.result == 'success' && needs.clippy.result == 'success' && needs.desktop-build.result == 'success' && needs.android-core.result == 'success'
         with:
-          name: verified-f0-${{ github.sha }}
-          path: target/validation-artifacts/
+          pattern: payload-*-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/payloads
+      - name: Verify the complete same-commit, same-version payload set
+        if: needs.full-tests.result == 'success' && needs.clippy.result == 'success' && needs.desktop-build.result == 'success' && needs.android-core.result == 'success'
+        run: python3 scripts/verify-artifacts.py target/payloads --multiplatform
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: ci-report-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/reports/
           if-no-files-found: error
           retention-days: 7
+      - name: Required validation gate
+        env:
+          RESULTS: ${{ join(needs.*.result, ',') }}
+        run: |
+          python3 - <<'PY'
+          import os
+          results = os.environ["RESULTS"].split(",")
+          if not results or any(result != "success" for result in results):
+              raise SystemExit(f"Validation incomplete or failed: {results}")
+          print("All required jobs passed. Artifacts are CI validation only, not public releases.")
+          PY

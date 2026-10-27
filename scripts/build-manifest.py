@@ -32,7 +32,9 @@ def payload_identity(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--target", required=True)
-    parser.add_argument("--kind", required=True, choices=("legacy-desktop", "core-rlib-not-apk"))
+    parser.add_argument("--kind", required=True, choices=(
+        "legacy-desktop", "legacy-desktop-macos", "legacy-desktop-windows", "core-rlib-not-apk",
+    ))
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()

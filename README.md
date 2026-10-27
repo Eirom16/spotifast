@@ -31,16 +31,17 @@ estas identidades antes del primer ejecutable Doremi.
 Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para dependencias y checks.
 
 ```sh
+python3 scripts/check-local.py
 cargo test --locked -p doremi-core
-cargo test --locked --workspace --all-targets
 # Baseline visual con datos de prueba, no reproducción yt-dlp:
 cargo run --locked -p spotifast --features demo -- --demo
 ```
 
-La CI está diseñada para preparar artefactos de validación Linux y una
-`.rlib` neutral para Android del mismo commit y versión. Una `.rlib` no es
-una aplicación Android. No hay publicación automática de releases ni del
-sitio heredado.
+GitHub Actions es el entorno principal para compilar el cliente completo.
+La CI separa checks rápidos, tests, Clippy y builds Linux/macOS/Windows, más
+una `.rlib` neutral para Android, del mismo commit y versión. Una `.rlib` no
+es una aplicación Android. No hay publicación automática de releases ni
+del sitio heredado. Estado real de ejecuciones y cachés: [CI-REPORT.md](CI-REPORT.md).
 
 ## Documentación
 

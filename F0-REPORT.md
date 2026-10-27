@@ -243,7 +243,7 @@ eliminó ni debilitó el test que detectó el cambio inseguro de repository.
 | `python3 packaging/flatpak/test-metainfo.py` | Pasó: 4 tests. |
 | `python3 packaging/test-launchers.py` | Falló: 4 tests, 2 errores por ausencia de `ruby`. No se sustituye ni se omite el test. |
 | `cargo fmt --all --check`, `git diff --check` | Pasaron. |
-| YAML CI, issue templates y CodeRabbit, parser PyYAML 6.0.3 | Se parsearon; no equivale a actionlint ni ejecución GitHub Actions. Referencias upload-artifact v6/download-artifact v7 consultadas en upstream. |
+| YAML CI, issue templates y CodeRabbit, parser PyYAML 6.0.3 | Se parsearon. CI optimizada también pasó actionlint 1.7.12 sin ShellCheck; no equivale a ejecución GitHub Actions. |
 | `cargo test --locked --all-targets` (baseline previo) | Incompleto por límites de tiempo de 200 s y 1.200 s en compilación fría. No llegó a tests. |
 | `cargo test --locked --workspace --all-targets` | Pasó tras corregir repository: biblioteca 1.395 pasados, 0 fallidos, 3 ignorados; CLI 14 y suites de integración verdes. Incluye MilkDrop default. |
 | `cargo test --locked --workspace --all-targets --all-features` | Pasó: biblioteca 1.435 pasados, 0 fallidos, 3 ignorados; CLI 16 e integración verdes, incluido startup/demo. |
@@ -263,7 +263,8 @@ servicios reales. Que un test de assets macOS pase en Linux no prueba macOS.
 
 No ejecutados: GUI real, prueba de audio, native-store ignorado,
 macOS/Windows, Nix, Jekyll y Flatpak runtime, APK/NDK/dispositivo y CI remota.
-No se ejecutó actionlint. No hay releases ni artefactos publicados.
+No se ejecutó ShellCheck. No hay releases públicas. El seguimiento de las
+ejecuciones y artifacts de la infraestructura optimizada está en `CI-REPORT.md`.
 
 Entorno: Linux x86_64 CachyOS, 4 CPUs, 7,6 GiB RAM; librerías ALSA/PipeWire/
 Pulse/X11/Wayland detectadas por pkg-config. CMake/clang/Python/D-Bus
@@ -318,3 +319,13 @@ cachés para ocultar resultados.
 Siguiente fase propuesta: **cerrar validación F0 y después F1, tipos/cola
 neutral con pruebas de caracterización**. Ninguna release autorizada por
 este informe. La existencia de CI o un doctest verde no cierra los riesgos.
+
+## Infraestructura principal de validación
+
+Tras la petición de optimizar para N5000/8 GB, la compilación pesada pasa a
+runners estándar de GitHub. Se separan jobs rápidos, tests, Clippy, builds
+nativos y core Android. Cachés codegen/metadata separadas, targets desktop
+incompatibles sin compartir objetos, retención corta y gates de espacio.
+`scripts/check-local.py` mantiene un circuito cotidiano sin compilar el cliente.
+La evidencia de resultados remotos, tiempos y cachés, incluida cualquier
+causa de fallo, se registra en `CI-REPORT.md`, no se infiere de tests locales.

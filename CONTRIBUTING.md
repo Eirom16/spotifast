@@ -56,11 +56,24 @@ este baseline; no describe propiedad de Doremi ni autoriza nuevos forks.
 
 ## Checks
 
+GitHub Actions es el entorno principal de compilación y validación completa.
+En el Pentium Silver N5000/8 GB usar a diario este circuito ligero:
+
+```sh
+python3 scripts/check-local.py
+```
+
+No compila el cliente completo: políticas, estructura/procedencia, formato y
+el core sin dependencias. No equivale a tests completos, Clippy, audio ni APK.
+La CI y sus reportes/cachés se describen en `CI-REPORT.md`.
+
 Rust está fijado en `rust-toolchain.toml`. No usar otro compilador para declarar
-que pasó el baseline. Ejecutar desde la raíz:
+que pasó el baseline. Los comandos completos para reproducción bajo demanda
+(no necesarios en cada iteración local) se ejecutan desde la raíz:
 
 ```sh
 python3 scripts/test-f0.py
+python3 scripts/test-ci.py
 python3 scripts/audit-dependencies.py --check
 python3 .github/scripts/check-dependency-sources.py
 python3 .github/scripts/check-review-evidence.py
