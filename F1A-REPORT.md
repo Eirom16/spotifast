@@ -2,7 +2,10 @@
 
 ## Estado y alcance
 
-**Implementación en verificación; no declarar F1A cerrada hasta CI verde.**
+**Entrega F1A validada en el alcance limitado descrito**, con CI verde:
+[run 40580787610](https://github.com/Eirom16/spotifast/actions/runs/40580787610),
+SHA de código `bb81fc33e2ce56a30ac04723979bc3c579b435c2`, intento 1.
+No equivale a migrar toda la cola viva ni a tener proveedor/APK funcional.
 Base: `8661cbd`, F0 validado. Sin cambios visibles de UI. No se integró
 Tubefast/RustyPipe/yt-dlp, ni se cambiaron IDs de aplicación, updater, claves,
 versión del ejecutable o perfiles Spotify.
@@ -163,13 +166,33 @@ Propuesta de rotación segura, **requiere autorización**:
    F1A cuando su rama vaya a mantenerse. Alternativa: esperar expiración
    automática sin prometer fecha o aceleración.
 
+Listado revisado por API, todos del ref `refs/heads/chore/doremi-f0`.
+**Solo propuesta, no ejecutada**:
+
+| ID candidato obsoleto | Namespace/entorno | Bytes |
+|---|---|---:|
+| 9600597326 | v3 codegen sin aislamiento, 5396bed8 | 986.454.883 |
+| 9599836994 | v3 Windows sin aislamiento, 229e8b8e | 560.436.954 |
+| 9599349209 | v3 macOS sin aislamiento, d903b2aa | 450.599.913 |
+| 9599303131 | v3 codegen sin aislamiento, 06add2ef | 986.335.684 |
+| 9599231576 | v3 metadata sin aislamiento, 5396bed8 | 753.909.283 |
+| 9598426317 | v2 codegen | 450.676.392 |
+| 9598317257 | v2 macOS downloads | 450.649.450 |
+| 9597878812 | v2 metadata | 450.752.007 |
+
+Liberación estimada por suma de tamaños API: 5.089.814.566 bytes (~4,74 GiB).
+Conservar IDs 9601986172, 9602812663, 9601828365 y 9601047406: las cuatro
+caches F0 con toolchain aislada (2.751.338.288 bytes, ~2,56 GiB).
+Antes de aprobar/ejecutar, volver a comprobar key/ref y último acceso por ID:
+el listado es un snapshot, no una autorización ni una garantía de vigencia.
+
 No ampliar cuotas, no subir budgets por intuición, no duplicar objetos por
 SO ni guardar targets locales completos. Ninguna release, updater o
 automatización upstream se activa.
 
 ## Validación y fallos
 
-Estado inicial local:
+Comprobaciones locales:
 
 - `cargo test --locked -p doremi-core`: 2 unitarios de invariantes/historial,
   15 contratos y 1 doctest pasaron. Tiempo observado de la compilación
@@ -179,8 +202,78 @@ Estado inicial local:
   `Box<Snapshot>`, después pasó, sin `allow`.
 - `python3 scripts/check-local.py`, inventario, formato y actionlint sin
   ShellCheck: pasaron en comprobación local anterior a cierre.
-- Tests root/bridge, suites completas, matriz nativa y check Android:
-  **pendientes de evidencia CI**, no se cuentan como pasados.
+- Se compiló/testeó solo core localmente; la aplicación pesada y las
+  caracterizaciones de App se validaron en GitHub, no en el N5000.
+
+### Evidencia CI final
+
+Run `40580787610`, SHA `bb81fc33e2ce56a30ac04723979bc3c579b435c2`:
+**todos los jobs y el gate de cuatro artefactos pasaron**. El run anterior
+`40580329190` del SHA `bfdb5ca` quedó cancelado al supersederlo el cambio de
+protocolo Ready/SetPlaying; no se cuenta como un pase ni fallo de regresión.
+No hubo fallos de tests ni compilación en la ejecución final.
+
+| Gate/job | Resultado real |
+|---|---|
+| quick | Pasó: 9 checks F0, 6 de CI, core, fuentes, evidencia, políticas y packaging con Ruby |
+| core (default y all-features) | 2 unitarios + 15 contratos, 0 fallidos; doctest pasó |
+| App default | 1.401 pasados, 0 fallidos, 3 ignorados |
+| App all-features | 1.441 pasados, 0 fallidos, 3 ignorados |
+| Caracterización nueva App | Los 6 tests `app::tests::f1a_characterization::*` pasaron en ambas suites |
+| CLI/integración | CLI 14/16 según features, todas las suites de integración aplicables verdes |
+| Clippy default/all-features y Rustdoc | Pasaron con `-D warnings` |
+| Linux/macOS arm64/Windows x64 | Builds default + smoke `--version` y payloads subidos |
+| Android core | `.rlib` compilada y contratos cross-checked para aarch64; no tests ejecutados en Android |
+| verified-artifacts | Pasó: cuatro payloads limpios, SHA/versión/fase/target/hash coincidentes |
+
+Los tres ignorados siguen siendo portal desktop, keyring nativo y ventana
+X11 con servicios reales. Los summaries adicionales de subprocess tests de
+IPC/tray no se suman otra vez como cobertura nueva.
+
+Métricas del wrapper de CI, no benchmarks de reproducción:
+
+| Comando | Segundos | Exit |
+|---|---:|---:|
+| Local-checks ligero en runner | 22,292 | 0 |
+| Tests default, compilación fría incluida | 946,523 | 0 |
+| Tests all-features | 72,221 | 0 |
+| Doctests | 1,501 | 0 |
+| Clippy default | 432,767 | 0 |
+| Clippy all-features | 17,618 | 0 |
+| Rustdoc | 23,236 | 0 |
+| Build macOS | 898,856 | 0 |
+| Build Windows | 1.236,516 | 0 |
+| Android core build | 47,662 | 0 |
+| Android contract check | 0,350 | 0 |
+
+Tiempos totales de jobs: quick 42 s, full-tests 17 min 55 s, Clippy 8 min 33 s,
+macOS 15 min 44 s, Windows 22 min 26 s, Android 1 min 14 s y gate 15 s.
+GitHub anotó posible cola por capacidad macOS, pero el job pasó; no se
+atribuye tiempo de cola/setup a la máquina de estados.
+
+Los cuatro jobs con rust-cache informaron `exact_hit=false`. Esta rama no
+tenía cachés propias y el presupuesto bloqueó nuevas escrituras; no se
+atribuye a F1A el hit medido en F0. Snapshot final **sin crecimiento**:
+12 entradas, 7.841.152.854 bytes. No se eliminaron caches remotas.
+Target tests ~2,933 GiB y ~80,18 GiB libres en ese runner; metadata
+~1,153 GiB y ~81,74 GiB libres. Los guards no borraron outputs de los targets.
+
+Artifacts reales del run, de versión 0.14.2/fase F1A y SHA `bb81fc3`:
+
+| Payload | Tamaño comprimido, bytes |
+|---|---:|
+| Linux | 36.262.831 |
+| macOS | 28.566.388 |
+| Windows | 25.351.320 |
+| Android core `.rlib` | 137.734 |
+
+El artifact `ci-report-bb81fc33e2ce56a30ac04723979bc3c579b435c2-1` conserva
+logs/JSON por comando y resultados de GitHub Jobs. Retención siete días.
+La evidencia corresponde al SHA de código, no al commit documental posterior.
+
+Se comprobó además por diff contra `8661cbd` que tests de integración previos,
+componentes visuales, player/sink/DSP, ajustes/credenciales/rutas/updater,
+assets y MIT no cambian. Los paquetes externos del lock son idénticos.
 
 Comandos ligeros:
 
