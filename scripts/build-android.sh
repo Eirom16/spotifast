@@ -5,7 +5,7 @@ export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
 rustup target add aarch64-linux-android armv7-linux-androideabi
 cargo install cargo-ndk --version 4.1.2 --locked
-cargo ndk -t arm64-v8a -t armeabi-v7a -p 26 -o target/android-jni build --locked -p doremi-app --lib
+cargo ndk -t arm64-v8a -t armeabi-v7a -P 26 -o target/android-jni build --locked -p doremi-app --lib
 mkdir -p target/android-assets/licenses target/android-dist
 cp LICENSE target/android-assets/licenses/MIT.txt
 cp assets/doremi/LICENSE target/android-assets/licenses/Doremi-assets-GPL-3.txt
