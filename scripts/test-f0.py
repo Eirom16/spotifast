@@ -61,7 +61,7 @@ class F0Tests(unittest.TestCase):
 
     def test_only_validation_workflow_is_active(self):
         active = sorted(p.name for p in (ROOT / ".github/workflows").glob("*.y*ml"))
-        self.assertEqual(active, ["ci.yml"])
+        self.assertEqual(active, ["android.yml", "ci.yml"])
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         for forbidden in ("contents: write", "pull_request_target:", "secrets.", "gh release",
                           "pages: write", "publish = true"):

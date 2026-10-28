@@ -1,0 +1,49 @@
+name: Doremi Android development
+
+on:
+  push:
+    branches: ["feature/doremi-android-real"]
+    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", ".github/workflows/android.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doremi-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  RUSTUP_HOME: ${{ github.workspace }}/target/rustup
+
+jobs:
+  android-apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_DIR: target/android-cargo
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-disabled: true
+      - run: rustup show active-toolchain
+      - name: Build both Android ABIs, test APK and verify packaging
+        run: bash scripts/build-android.sh
+      - uses: actions/upload-artifact@v6
+        with:
+          name: doremi-android-dev-${{ github.sha }}
+          path: target/android-dist/
+          if-no-files-found: error
+          retention-days: 7

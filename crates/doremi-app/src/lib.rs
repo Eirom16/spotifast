@@ -149,7 +149,7 @@ pub struct DoremiApp {
     worker: Option<std::thread::JoinHandle<()>>,
     controls: Vec<Control>,
     logo: egui::TextureHandle,
-    saved: u64,
+    saved_state: Vec<u8>,
     pending: bool,
 }
 
@@ -215,7 +215,7 @@ impl DoremiApp {
             worker: Some(worker),
             controls: vec![],
             logo,
-            saved: 0,
+            saved_state: vec![],
             pending: true,
         }
     }
@@ -272,9 +272,6 @@ impl DoremiApp {
     }
     fn persist(&mut self, ctx: &egui::Context) {
         let model = self.model.as_ref().unwrap();
-        if !self.pending && model.revision == self.saved {
-            return;
-        }
         let state = serde_json::json!({
             "schema": 1, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
@@ -286,13 +283,17 @@ impl DoremiApp {
             "library": model.prefs.library, "controls": self.controls,
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
         });
+        let state = serde_json::to_vec(&state).unwrap();
+        if !self.pending && self.saved_state == state {
+            return;
+        }
         let write = DiskWrite {
             prefs: serde_json::to_vec(&model.prefs).unwrap(),
-            state: serde_json::to_vec(&state).unwrap(),
+            state: state.clone(),
         };
         self.pending = self.writer.as_ref().unwrap().try_send(write).is_err();
         if !self.pending {
-            self.saved = model.revision;
+            self.saved_state = state;
         } else {
             ctx.request_repaint_after(Duration::from_millis(50));
         }

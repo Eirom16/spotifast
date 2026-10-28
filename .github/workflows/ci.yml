@@ -2,7 +2,7 @@ name: Doremi CI
 
 on:
   push:
-    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1", "feature/doremi-android-real"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1"]
     # Recording evidence must not launch another complete build of unchanged code.
     paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md", "DOREMI-PREVIEW-REPORT.md", "DOREMI-GOAL-REPORT.md"]
   pull_request:
@@ -381,6 +381,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
