@@ -22,6 +22,15 @@ fn independent_lanes_cancel_supersede_and_reject_cross_session_replies() {
     );
     assert_eq!(router.replace_session(SessionId(8)).unwrap(), [old]);
     assert!(!router.accepts(old));
+    // A different owner can have the SAME generation number. Epoch, not just
+    // a serial comparison, must keep callbacks out of the fresh instance.
+    let mut first_owner = Router::new(SessionId(20));
+    let (old, _) = first_owner.begin(Lane::Search).unwrap();
+    let mut second_owner = Router::new(SessionId(21));
+    let (fresh, _) = second_owner.begin(Lane::Search).unwrap();
+    assert_eq!(old.generation(), fresh.generation());
+    assert!(!second_owner.accepts(old));
+    assert!(second_owner.accepts(fresh));
 }
 
 #[test]
@@ -47,6 +56,7 @@ fn fresh_queue_restoration_rejects_even_old_callbacks_created_after_the_checkpoi
     })
     .unwrap();
     let saved = old.snapshot();
+    old.command(Command::Play).unwrap();
     let late = ticket(old.command(Command::Play).unwrap());
     let mut restored = Queue::new(SessionId(2));
     restored.command(Command::Restore(saved.into())).unwrap();

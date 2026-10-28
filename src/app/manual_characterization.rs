@@ -169,7 +169,8 @@ fn sign_out_replacement_and_restoration_cannot_accept_a_previous_sessions_poll()
     let mut app = local();
     app.refresh_queue(true);
     let old_seq = app.queue_seq;
-    let old = app.queue.get().unwrap().clone();
+    let mut old = app.queue.get().unwrap().clone();
+    old.queue = vec![queued_song(&uri("old-account"))];
     let session = app.queue_edit_router.session();
     app.reset_data();
     assert!(app.queue_edit_router.session() > session);
