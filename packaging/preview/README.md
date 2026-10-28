@@ -43,12 +43,14 @@ On CachyOS the desktop normally provides these libraries. Install any
 missing runtime packages, not Rust development packages:
 
 ```sh
-sudo pacman -S --needed alsa-lib pipewire libxkbcommon wayland libx11 mesa libglvnd
+sudo pacman -S --needed alsa-lib pipewire libxkbcommon libxkbcommon-x11 wayland libx11 mesa libglvnd
 ```
 
 `runtime-libraries.txt` records the actual CI `ldd` output. Any `not found`
-line on the user's machine is a missing runtime dependency. No audio device
-or Spotify service is opened by this demo.
+line on the user's machine is a missing runtime dependency. X11 also needs
+`libxkbcommon-x11`, which winit loads dynamically and does not appear in
+`ldd`. The graphical CI test validates that path. No audio device or Spotify
+service is opened by this demo.
 
 ## Try it
 

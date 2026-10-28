@@ -26,7 +26,7 @@ def main():
     profile = out / "profile"
     results = []
 
-    def capture(name, page, click=None, keys=False, width=1240):
+    def capture(name, page, click=None, keys=False, width=1240, shortcut=None):
         path = out / f"{name}.png"
         started = time.monotonic()
         command = [str(binary), "--data-dir", str(profile), "--page", page,
@@ -43,11 +43,17 @@ def main():
                 if click:
                     x, y = click
                     xdo("mousemove", "--window", window, round(x), round(y), "click", 1)
+                if shortcut:
+                    xdo("key", "--clearmodifiers", shortcut)
                 if keys:
-                    xdo("key", "--window", window, "ctrl+f")
-                    xdo("key", "--window", window, "ctrl+a")
-                    xdo("type", "--window", window, "--clearmodifiers", "Rosewood")
-                    xdo("key", "--window", window, "Return")
+                    # Send real input to the focused window (XTest), not
+                    # synthetic per-window XSendEvent modifier state. FocusSearch
+                    # is applied after drawing; allow its next frame to focus.
+                    xdo("key", "--clearmodifiers", "--delay", 100, "ctrl+f")
+                    xdo("sleep", "0.2")
+                    xdo("key", "--clearmodifiers", "--delay", 100, "ctrl+a")
+                    xdo("type", "--clearmodifiers", "Rosewood")
+                    xdo("key", "--clearmodifiers", "Return")
                 code = process.wait(timeout=40)
                 assert code == 0, f"{name}: exit {code}; inspect {name}.log"
             finally:
@@ -77,6 +83,11 @@ def main():
     capture("home-dark", "home")
     search = capture("search-keyboard", "home", keys=True)
     assert search["page"] == "search" and search["query"] == "Rosewood" and search["tracks"] > 0
+    # Exercise navigation, not only the initial --page fixture selector.
+    settings_nav = capture("settings-mouse", "home", click=(1152, 28))
+    assert settings_nav["page"] == "settings"
+    home_nav = capture("home-keyboard", "settings", shortcut="ctrl+h")
+    assert home_nav["page"] == "home"
     for page, name in [("search", "search-fixtures"), ("albums", "library"),
                        ("playlist:pl1", "playlist"), ("artist:art0", "artist"),
                        ("album:alb0", "album"), ("queue", "queue")]:

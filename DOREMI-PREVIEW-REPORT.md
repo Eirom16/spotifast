@@ -7,10 +7,32 @@ El SHA definitivo y el enlace descargable de Actions se deben registrar
 tras ejecutar la CI de estos cambios. **No hay todavía evidencia remota
 de Preview ni se declara verde su gate.**
 
-`AGENTS.md` exige autorización específica antes de hacer push. Se ha
-solicitado publicar únicamente esta rama en `Eirom16/spotifast` y ejecutar
-CI; no se ha hecho push, merge a main ni publicación de release.
+El usuario autorizó específicamente el push de esta rama y la ejecución
+de Actions. Se verificó árbol limpio y circuito local antes de publicar
+`21d277b76f7af7356518905b7efc0e354f37016d` exclusivamente en
+`Eirom16/spotifast`. No se hizo merge a main ni publicación de release.
 La evidencia verde de F1B-1 no se presenta como evidencia de Preview.
+
+### Primera CI real de Preview y correcciones
+
+Run [40619158651](https://github.com/Eirom16/spotifast/actions/runs/40619158651),
+SHA `21d277b`: tests default/all-features, Clippy/Rustdoc, macOS, Windows
+y Android core pasaron. Falló preview-linux; el gate rechazó correctamente
+la ejecución. El run automático del push fue cancelado por concurrencia al
+lanzar este dispatch del mismo SHA; no es un fallo de compilación adicional.
+
+Causa gráfica confirmada en log: faltaba `libxkbcommon-x11.so`, cargada
+dinámicamente y no detectada por `ldd`. Se añade el runtime Ubuntu
+`libxkbcommon-x11-0` y su equivalente CachyOS a las instrucciones.
+
+Se descargó el binario exacto de ese run, sin recompilar Rust en CachyOS.
+El QA encontró además un problema de su automatización de teclado:
+Ctrl+A se enviaba antes del frame que entrega foco tras Ctrl+F. El script
+ahora espera ese frame y envía input XTest a la ventana enfocada.
+Con esa corrección pasaron localmente 18 capturas/estados reales, cambio
+de color, restauración, claro/oscuro, búsqueda y navegación con clic real
+a Settings y atajo a Home. La CI del nuevo SHA debe quedar verde antes
+de entregar el paquete.
 
 ## Resultado visible y límites
 
@@ -191,7 +213,7 @@ target/debug/doremi-preview --data-dir target/preview-profile
 
 ## Pendientes antes de aceptar la entrega
 
-- Autorización de push, ejecutar Actions y registrar SHA/run/conclusiones
+- Ejecutar la CI corregida y registrar SHA/run/conclusiones
   reales de todos los jobs, tiempos/cache y artefacto descargable.
 - Revalidar capturas/input tras el arreglo del capturador, inspeccionar
   Home/Search/Library/Settings claro/oscuro/estrecho y adjuntar PNG/reportes.

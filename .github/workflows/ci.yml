@@ -338,7 +338,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb xauth xdotool libasound2t64 libpipewire-0.3-0 \
-            libxkbcommon0 libwayland-client0 libgl1 libegl1 libx11-6
+            libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libgl1 libegl1 libx11-6
           chmod +x target/preview-binary/doremi-preview
       - name: Package tested Preview with original assets, version, SHA and checksums
         run: python3 scripts/ci-report.py run preview-package -- python3 scripts/package-preview.py target/preview-binary target/preview-dist
