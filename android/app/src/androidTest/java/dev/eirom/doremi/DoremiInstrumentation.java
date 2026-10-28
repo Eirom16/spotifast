@@ -74,9 +74,12 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Hide only this app's keyboard before exercising recreation.
             runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
             long revision=state().getLong("revision");
+            long instance=state().getLong("instance");
             runOnMainSync(() -> activity.recreate());
-            SystemClock.sleep(2500);
+            long deadline=SystemClock.uptimeMillis()+8000;
+            while(SystemClock.uptimeMillis()<deadline && state().getLong("instance")==instance) SystemClock.sleep(200);
             JSONObject after=state();
+            if(after.getLong("instance")<=instance) throw new AssertionError("No new Rust UI instance after Activity recreation");
             if(!"Café".equals(after.getString("query")) || after.getLong("revision")<revision) throw new AssertionError("Activity recreation lost state");
             result.putString("stream","PASS: Unicode Android InputConnection and Activity recreation\n");
             finish(Activity.RESULT_OK,result);

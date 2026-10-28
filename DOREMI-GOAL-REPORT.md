@@ -22,3 +22,7 @@ Primeras iteraciones CI:
 - `40770336343` (`156fb14`): SDK/NDK y cargo-ndk instalados; falló por usar
   `-p 26` en lugar de `-P 26`. Corregido en `529494c`.
 - El test local de launchers no pudo ejecutarse por falta de Ruby. CI lo ejecuta.
+- `40771321286` (`2787d92`): las dos librerías nativas Rust compilaron.
+  Gradle falló por clases Kotlin duplicadas entre stdlib 1.8.22 y jdk7/jdk8
+  1.6.21. Se alinea con Kotlin BOM 1.8.22, sin modificar fuentes externas.
+  Aún no se generó ni instaló un APK verificable.

@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 
+static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
 const GAP: f32 = 8.0;
 static RETAINED: Mutex<Option<Model>> = Mutex::new(None);
@@ -144,6 +145,7 @@ struct DiskWrite {
 }
 
 pub struct DoremiApp {
+    instance: usize,
     model: Option<Model>,
     writer: Option<mpsc::SyncSender<DiskWrite>>,
     worker: Option<std::thread::JoinHandle<()>>,
@@ -155,6 +157,10 @@ pub struct DoremiApp {
 
 impl DoremiApp {
     pub fn new(cc: &eframe::CreationContext<'_>, directory: PathBuf) -> Self {
+        Self::new_context(&cc.egui_ctx, directory)
+    }
+
+    pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
         // Startup reads precede the UI event loop. Writes always run on a worker.
         let prefs = std::fs::read(directory.join("preferences-v1.json"))
             .ok()
@@ -199,17 +205,18 @@ impl DoremiApp {
             .unwrap()
             .to_rgba8();
         let size = [image.width() as usize, image.height() as usize];
-        let logo = cc.egui_ctx.load_texture(
+        let logo = ctx.load_texture(
             "Doremi",
             egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
             Default::default(),
         );
-        cc.egui_ctx.all_styles_mut(|style| {
+        ctx.all_styles_mut(|style| {
             style.spacing.item_spacing = egui::vec2(GAP, GAP);
             style.spacing.button_padding = egui::vec2(12.0, 10.0);
             style.spacing.interact_size.y = TOUCH;
         });
         Self {
+            instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             model: Some(model),
             writer: Some(tx),
             worker: Some(worker),
@@ -273,7 +280,7 @@ impl DoremiApp {
     fn persist(&mut self, ctx: &egui::Context) {
         let model = self.model.as_ref().unwrap();
         let state = serde_json::json!({
-            "schema": 1, "page": model.page, "query": model.query,
+            "schema": 1, "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
             "manual": model.queue.manual().iter().map(|e| e.media.id.local()).collect::<Vec<_>>(),
@@ -300,8 +307,8 @@ impl DoremiApp {
     }
 }
 
-impl eframe::App for DoremiApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+impl DoremiApp {
+    pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.controls.clear();
         let prefs = &self.model.as_ref().unwrap().prefs;
@@ -351,7 +358,7 @@ impl eframe::App for DoremiApp {
                     Page::Home => { ui.heading("Tu música, a tu ritmo"); ui.label("Catálogo de prueba local. Sin Spotify ni conexión."); self.rows(ui, songs()); }
                     Page::Search => {
                         ui.heading("Buscar");
-                        let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text("Busca en la demostración"));
+                        let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text("Busca en la demostración").char_limit(128));
                         self.controls.push(Control { name: "query".into(), rect: [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y] });
                         if response.changed() { self.model.as_mut().unwrap().search(); }
                         if self.button(ui,"cancel-search","Cancelar búsqueda",200.0) {
@@ -379,7 +386,7 @@ impl eframe::App for DoremiApp {
                                 if index > 0 && self.button(ui,&format!("up:{index}"),"Subir",90.0) { self.model.as_mut().unwrap().command(Command::Move { entry: entry.id, gap: index - 1 }); }
                             });
                         }
-                        ui.separator(); ui.label("Continuación");
+                        ui.separator(); ui.label("Orden completo de lo que sigue");
                         for entry in self.model.as_ref().unwrap().queue.upcoming() { ui.label(&entry.media.title); }
                     }
                     Page::Settings => {
@@ -423,6 +430,11 @@ impl eframe::App for DoremiApp {
             });
         });
         self.persist(&ctx);
+    }
+}
+impl eframe::App for DoremiApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.draw(ui);
     }
 }
 impl Drop for DoremiApp {
@@ -483,7 +495,7 @@ mod tests {
         assert!(model.catalog.results().is_empty());
     }
     #[test]
-    fn next_pause_restore_and_stale_events_follow_core() {
+    fn next_pause_and_restore_follow_core() {
         let mut model = Model::new(Preferences::default());
         model.command(Command::StartContext {
             media: songs(),
@@ -499,5 +511,58 @@ mod tests {
         model.command(Command::Restore(Box::new(snapshot)));
         assert_eq!(model.queue.current().unwrap().media.id.local(), "rain");
         assert_eq!(model.queue.playback(), Playback::Paused);
+    }
+    #[test]
+    fn touch_navigation_fits_phone_and_landscape_in_both_themes() {
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for size in [[384.0, 614.0], [682.0, 336.0], [440.0, 800.0]] {
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                size.into(),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.draw(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let navigation: Vec<_> = app
+                    .controls
+                    .iter()
+                    .filter(|c| {
+                        ["home", "search", "library", "queue", "settings"]
+                            .contains(&c.name.as_str())
+                    })
+                    .collect();
+                assert_eq!(navigation.len(), 5);
+                for control in &navigation {
+                    let [x1, y1, x2, y2] = control.rect;
+                    assert!(
+                        x1 >= 0.0 && x2 <= size[0] && y1 >= 0.0 && y2 <= size[1],
+                        "{} {:?} at {:?}",
+                        control.name,
+                        control.rect,
+                        size
+                    );
+                    assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
+                }
+                for pair in navigation.windows(2) {
+                    assert!(
+                        pair[0].rect[2] <= pair[1].rect[0] || pair[0].rect[3] <= pair[1].rect[1]
+                    );
+                }
+            }
+        }
+        drop(app);
+        RETAINED.lock().unwrap().take();
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

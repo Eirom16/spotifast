@@ -30,6 +30,9 @@ def check(directory, create=False):
     libraries = []
     with zipfile.ZipFile(apk) as archive:
         commit = archive.read('assets/SOURCE_COMMIT').decode().strip()
+        native = json.loads(archive.read('assets/native-source.json'))
+        assert re.fullmatch('[0-9a-f]{40}', native['source_commit'])
+        assert re.fullmatch('[0-9a-f]{64}', native['rust_inputs_sha256'])
         assert re.fullmatch('[0-9a-f]{40}', commit)
         for name in ['assets/licenses/MIT.txt', 'assets/licenses/Doremi-assets-GPL-3.txt', 'assets/licenses/PROVENANCE.md']:
             assert len(archive.read(name)) > 0
@@ -55,7 +58,7 @@ def check(directory, create=False):
     assert any('arm64-v8a/libdoremi_app.so' in item['file'] for item in libraries)
     assert any('armeabi-v7a/libdoremi_app.so' in item['file'] for item in libraries)
     sha = hashlib.sha256(apk.read_bytes()).hexdigest()
-    manifest = {'schema': 1, 'source_commit': commit, 'package': PACKAGE, 'activity': 'dev.eirom.doremi.MainActivity', 'min_sdk':26, 'target_sdk':36, 'sha256':sha, 'libraries':libraries, 'release':False}
+    manifest = {'schema': 1, 'source_commit': commit, 'package': PACKAGE, 'activity': 'dev.eirom.doremi.MainActivity', 'min_sdk':26, 'target_sdk':36, 'sha256':sha, 'native_source_commit':native['source_commit'], 'rust_inputs_sha256':native['rust_inputs_sha256'], 'libraries':libraries, 'release':False}
     path = directory / 'manifest.json'
     if create:
         assert commit == subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()

@@ -393,6 +393,13 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
+          name: doremi-android-native-${{ github.sha }}
+          path: target/android-jni/
+          if-no-files-found: warn
+          retention-days: 2
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
           name: doremi-android-dev-${{ github.sha }}
           path: target/android-dist/
           if-no-files-found: error

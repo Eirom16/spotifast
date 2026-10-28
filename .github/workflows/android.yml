@@ -5,15 +5,23 @@ on:
     branches: ["feature/doremi-android-real"]
     paths: ["crates/doremi-app/**", "crates/doremi-core/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", ".github/workflows/android.yml"]
   workflow_dispatch:
+    inputs:
+      native_run:
+        description: Prior CI run, only for identical Rust inputs
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: doremi-android-${{ github.ref }}
   cancel-in-progress: true
 
 env:
+  DOREMI_NATIVE_RUN: ${{ inputs.native_run }}
+  GH_TOKEN: ${{ github.token }}
   CARGO_BUILD_JOBS: "2"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_INCREMENTAL: "0"
@@ -41,6 +49,13 @@ jobs:
       - run: rustup show active-toolchain
       - name: Build both Android ABIs, test APK and verify packaging
         run: bash scripts/build-android.sh
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: doremi-android-native-${{ github.sha }}
+          path: target/android-jni/
+          if-no-files-found: warn
+          retention-days: 2
       - uses: actions/upload-artifact@v6
         if: always()
         with:

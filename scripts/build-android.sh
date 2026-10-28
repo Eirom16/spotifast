@@ -3,10 +3,17 @@ set -euo pipefail
 export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
 export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
-rustup target add aarch64-linux-android armv7-linux-androideabi
-cargo install cargo-ndk --version 4.1.2 --locked
-cargo ndk -t arm64-v8a -t armeabi-v7a -P 26 -o target/android-jni build --locked -p doremi-app --lib
+if [[ -n "${DOREMI_NATIVE_RUN:-}" ]]; then
+  gh run download "$DOREMI_NATIVE_RUN" --repo "$GITHUB_REPOSITORY" --pattern 'doremi-android-native-*' --dir target/android-jni
+  python3 scripts/android-native-identity.py --check
+else
+  rustup target add aarch64-linux-android armv7-linux-androideabi
+  cargo install cargo-ndk --version 4.1.2 --locked
+  cargo ndk -t arm64-v8a -t armeabi-v7a -P 26 -o target/android-jni build --locked -p doremi-app --lib
+  python3 scripts/android-native-identity.py
+fi
 mkdir -p target/android-assets/licenses target/android-dist
+cp target/android-jni/native-source.json target/android-assets/
 cp LICENSE target/android-assets/licenses/MIT.txt
 cp assets/doremi/LICENSE target/android-assets/licenses/Doremi-assets-GPL-3.txt
 cp assets/doremi/PROVENANCE.md target/android-assets/licenses/
