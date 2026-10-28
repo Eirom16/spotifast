@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import struct
 import subprocess
+import tomllib
 import zipfile
 
 PACKAGE = 'dev.eirom.doremi.dev'
@@ -18,6 +19,8 @@ def check(directory, create=False):
     apk = directory / 'app-debug.apk'
     badging = subprocess.check_output([str(tools / 'aapt'), 'dump', 'badging', str(apk)], text=True)
     assert f"package: name='{PACKAGE}'" in badging
+    version=tomllib.loads(Path('crates/doremi-app/Cargo.toml').read_text())['package']['version']+'-dev'
+    assert f"versionName='{version}'" in badging
     assert "sdkVersion:'26'" in badging and "targetSdkVersion:'36'" in badging
     assert "application-label:'Doremi'" in badging
     assert "launchable-activity: name='dev.eirom.doremi.MainActivity'" in badging
@@ -58,9 +61,10 @@ def check(directory, create=False):
     assert any('arm64-v8a/libdoremi_app.so' in item['file'] for item in libraries)
     assert any('armeabi-v7a/libdoremi_app.so' in item['file'] for item in libraries)
     sha = hashlib.sha256(apk.read_bytes()).hexdigest()
-    manifest = {'schema': 1, 'source_commit': commit, 'package': PACKAGE, 'activity': 'dev.eirom.doremi.MainActivity', 'min_sdk':26, 'target_sdk':36, 'sha256':sha, 'native_source_commit':native['source_commit'], 'rust_inputs_sha256':native['rust_inputs_sha256'], 'libraries':libraries, 'release':False}
+    manifest = {'schema': 1, 'version':version, 'source_commit': commit, 'package': PACKAGE, 'activity': 'dev.eirom.doremi.MainActivity', 'min_sdk':26, 'target_sdk':36, 'sha256':sha, 'native_source_commit':native['source_commit'], 'rust_inputs_sha256':native['rust_inputs_sha256'], 'libraries':libraries, 'release':False, 'source_dirty':False}
     path = directory / 'manifest.json'
     if create:
+        assert not subprocess.check_output(['git','status','--porcelain'],text=True).strip(), 'Build changed source inputs'
         assert commit == subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
         path.write_text(json.dumps(manifest, indent=2) + '\n')
         (directory / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.name}\n' for p in sorted(directory.glob('*.apk'))))

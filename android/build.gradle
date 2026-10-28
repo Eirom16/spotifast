@@ -1,1 +1,3 @@
 plugins { id 'com.android.application' version '8.13.0' apply false }
+// Keep Gradle's root reports inside the managed checkout target too.
+layout.buildDirectory = file('../target/android-gradle/root')

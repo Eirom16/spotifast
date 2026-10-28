@@ -1,5 +1,22 @@
 #[cfg(not(target_os = "android"))]
 fn main() -> eframe::Result {
+    let arguments: Vec<_> = std::env::args().skip(1).collect();
+    match arguments.as_slice() {
+        [] => {}
+        [argument] if argument == "--version" => {
+            println!("Doremi Native Dev {}-dev", env!("CARGO_PKG_VERSION"));
+            return Ok(());
+        }
+        [argument] if argument == "--help" => {
+            println!("Doremi Native Dev: --version, --help. Experimental offline host.");
+            return Ok(());
+        }
+        _ => {
+            eprintln!("Unknown Doremi argument. Use --help.");
+            std::process::exit(2);
+        }
+    }
+
     let directory = std::env::var_os("DOREMI_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {

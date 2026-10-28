@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -91,9 +91,13 @@ jobs:
           mkdir -p target/native-dist
           cp target/native-cargo/debug/doremi-app target/native-dist/
           cp LICENSE target/native-dist/
+          mkdir -p target/native-dist/licenses
+          cp assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
+          cp assets/doremi/PROVENANCE.md target/native-dist/licenses/
+          python3 scripts/native-manifest.py target/native-dist/doremi-app target/native-dist/manifest.json
           git rev-parse HEAD > target/native-dist/SOURCE_COMMIT
           cd target/native-dist
-          sha256sum doremi-app LICENSE SOURCE_COMMIT > SHA256SUMS
+          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
       - uses: actions/upload-artifact@v6
         if: always()
         with:
