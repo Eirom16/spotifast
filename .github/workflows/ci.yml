@@ -25,6 +25,10 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_BUILD_JOBS: "2"
   CMAKE_BUILD_PARALLEL_LEVEL: "2"
+  # projectM's optional Bison/Flex rules generate multiple files in the source
+  # tree. Ninja represents these as one edge, avoiding Make's parallel-output
+  # parser generation race. Keep MilkDrop enabled and dependency sources pinned.
+  CMAKE_GENERATOR: Ninja
   PYTHONUTF8: "1"
   # rust-cache hashes EVERY installed toolchain, including the runner's changing
   # unused stable compiler. Isolate the pinned compiler instead of deleting tools.

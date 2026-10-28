@@ -89,6 +89,21 @@ registros se adjuntan a los reportes del job quick.
 - Primer Clippy del harness falló por collapsible-if; corregido sin allow.
 - Tests App/legado, matrices nativas, Rustdoc y Android: pendientes de CI.
 
+Primera ejecución remota:
+`40604649619`, SHA `db1a59d7b681c2e5fc5ef1593931caca5f360e60`, falló.
+Quick/harness, Clippy, Android y builds Windows/macOS pasaron. Full-tests
+falló antes de ejecutar tests Rust: el parser C de libprojectM terminó
+truncado en un comentario (`Compiler.c:1425`, unterminated comment).
+
+Se inspeccionaron las reglas CMake de la dependencia fijada: Bison/Flex
+generan varios outputs en el árbol de fuente y existen custom targets ALL
+además del consumidor de esos outputs. El log usa Make paralelo. Se cambia
+solo el generador CI a Ninja, ya instalado y usado en la matriz desktop,
+para representar correctamente esa generación multi-output. No se cambia
+fuente git, no se edita la caché de Cargo y no se desactiva MilkDrop.
+La corrección requiere otra ejecución completa verde; no se cuenta el
+primer run como aprobado ni se atribuye el fallo a pruebas de dominio.
+
 No se mide ni se afirma latencia de reproducción real. Los tiempos de
 compilación no son resultados de un proveedor musical.
 
