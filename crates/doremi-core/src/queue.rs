@@ -5,6 +5,8 @@
 //! OS RNG. Each load has a distinct request ID, including replays of one entry.
 //! Snapshots are in-memory domain values, NOT a replacement for legacy profiles.
 
+pub mod checkpoint;
+
 use std::collections::BTreeMap;
 
 use crate::media::Media;
@@ -76,6 +78,13 @@ pub fn manual_prefix_len<K: Ord>(
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EntryId(u64);
+
+impl EntryId {
+    /// Host-visible occurrence label, not a media ID or a cross-session identity.
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct RequestId {
