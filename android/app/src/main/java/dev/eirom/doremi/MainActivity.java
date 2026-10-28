@@ -23,12 +23,13 @@ public final class MainActivity extends Activity {
     private static native boolean nativeInit(String directory);
     private static native String nativeDraw(int width,int height,float scale);
     private static native void nativeTouch(int action,float x,float y);
-    private static native void nativeText(String text);
+    private static native void nativeText(String text,long generation);
     private static native void nativeDestroy();
     private GLSurfaceView surface;
     private EditText input;
     private final HostRenderer renderer=new HostRenderer();
     private boolean updatingInput=false;
+    private volatile long inputGeneration=0;
     private boolean imeRequested=false;
     private volatile boolean resumed=false;
     private float scale;
@@ -68,7 +69,7 @@ public final class MainActivity extends Activity {
             public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
             public void onTextChanged(CharSequence s,int start,int before,int count) {}
             public void afterTextChanged(Editable text) {
-                if(!updatingInput) { String value=text.toString(); surface.queueEvent(() -> nativeText(value)); surface.requestRender(); }
+                if(!updatingInput) { String value=text.toString(); long generation=++inputGeneration; surface.queueEvent(() -> nativeText(value,generation)); surface.requestRender(); }
             }
         });
         root.addView(input,new FrameLayout.LayoutParams(1,1));
@@ -103,10 +104,11 @@ public final class MainActivity extends Activity {
                 boolean ime=data.optBoolean("ime");
                 String query=data.optString("query");
                 long delay=data.optLong("next_ms",10000);
+                long acknowledgedGeneration=data.optLong("input_generation",0);
                 runOnUiThread(() -> {
                     if(!resumed) return;
                     updatingInput=true;
-                    if(!input.getText().toString().equals(query)) { input.setText(query); input.setSelection(input.length()); }
+                    if(acknowledgedGeneration==inputGeneration && !input.getText().toString().equals(query)) { input.setText(query); input.setSelection(input.length()); }
                     updatingInput=false;
                     InputMethodManager manager=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
                     if(ime && !imeRequested) { imeRequested=true; input.requestFocus(); manager.showSoftInput(input,InputMethodManager.SHOW_IMPLICIT); }

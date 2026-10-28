@@ -70,7 +70,12 @@ def main():
     wait_for(lambda s:bool(s['controls']) and s.get('pid')==pid)
     time.sleep(1)
     def capture(name):
-        (output/f'{name}.png').write_bytes(adb('exec-out','screencap','-p',raw=True))
+        focus=adb('shell','dumpsys','window','windows')
+        assert any('mCurrentFocus=' in line and PACKAGE in line for line in focus.splitlines()), 'Doremi must own the foreground before capture'
+        png=adb('exec-out','screencap','-p',raw=True)
+        focus=adb('shell','dumpsys','window','windows')
+        assert any('mCurrentFocus=' in line and PACKAGE in line for line in focus.splitlines()), 'Doremi lost focus during capture'
+        (output/f'{name}.png').write_bytes(png)
         (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
     def tap(name):
         data=state()

@@ -5,7 +5,7 @@ use egui_glow::{Painter, ShaderVersion, glow};
 use jni::{
     JNIEnv,
     objects::{JClass, JString},
-    sys::{jboolean, jfloat, jint, jstring},
+    sys::{jboolean, jfloat, jint, jlong, jstring},
 };
 use std::{
     cell::RefCell,
@@ -25,6 +25,7 @@ struct Renderer {
     painter: Painter,
     events: Vec<egui::Event>,
     started: Instant,
+    text_generation: jlong,
 }
 thread_local! { static RENDERER: RefCell<Option<Renderer>> = const { RefCell::new(None) }; }
 
@@ -70,6 +71,7 @@ pub extern "system" fn native_init(
             painter,
             events: vec![],
             started: Instant::now(),
+            text_generation: 0,
         });
         1
     })
@@ -99,7 +101,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -148,13 +150,22 @@ pub extern "system" fn native_touch(
 }
 
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeText")]
-pub extern "system" fn native_text(mut env: JNIEnv<'_>, _: JClass<'_>, text: JString<'_>) {
+pub extern "system" fn native_text(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    text: JString<'_>,
+    generation: jlong,
+) {
     let Ok(text) = env.get_string(&text) else {
         return;
     };
     let text = String::from(text);
     RENDERER.with(|cell| {
         if let Some(renderer) = cell.borrow_mut().as_mut() {
+            if generation < renderer.text_generation {
+                return;
+            }
+            renderer.text_generation = generation;
             let model = renderer.app.model.as_mut().unwrap();
             if model.query != text {
                 model.query = text.chars().take(128).collect();

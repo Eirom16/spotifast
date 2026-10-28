@@ -3,9 +3,17 @@ package dev.eirom.doremi;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Intent;
+import android.content.pm.ActivityInfo;
+import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.os.SystemClock;
 import android.view.MotionEvent;
+import android.view.PixelCopy;
+import android.view.SurfaceView;
+import android.os.Handler;
+import android.os.Looper;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
@@ -13,78 +21,117 @@ import android.view.inputmethod.InputConnection;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.nio.file.Files;
+import java.util.function.Predicate;
 
-/** Exercises Android input and Activity recreation without a custom IME or global settings. */
+/** Physical IME, lifecycle and the same queue trace as the Linux host. */
 public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); start(); }
     private JSONObject state() throws Exception {
-        return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(), "qa-state.json").toPath()), java.nio.charset.StandardCharsets.UTF_8));
+        return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private JSONObject until(Predicate<JSONObject> predicate) throws Exception {
+        long deadline=SystemClock.uptimeMillis()+8000;
+        while(SystemClock.uptimeMillis()<deadline) {
+            JSONObject data=state();
+            if(data.optInt("pid")==android.os.Process.myPid() && predicate.test(data)) return data;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("Expected fresh Rust state was not observed");
+    }
+    private SurfaceView surface(View view) {
+        if(view instanceof SurfaceView) return (SurfaceView)view;
+        if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { SurfaceView found=surface(group.getChildAt(i));if(found!=null) return found; } }
+        return null;
+    }
+    private void capture(String name) throws Exception {
+        final Bitmap[] image={null}; final int[] status={-1}; CountDownLatch copied=new CountDownLatch(1);
+        runOnMainSync(() -> {
+            SurfaceView view=surface(activity.getWindow().getDecorView());
+            if(view==null || view.getWidth()==0 || view.getHeight()==0) { copied.countDown(); return; }
+            image[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);
+            // Copy only Doremi's own EGL surface, never the launcher or another app.
+            PixelCopy.request(view,image[0],value -> { status[0]=value;copied.countDown(); },new Handler(Looper.getMainLooper()));
+        });
+        if(!copied.await(3,TimeUnit.SECONDS) || status[0]!=PixelCopy.SUCCESS) throw new AssertionError("Doremi surface capture failed: "+status[0]);
+        try(FileOutputStream file=new FileOutputStream(new File(getTargetContext().getFilesDir(),name+".png"))) { image[0].compress(Bitmap.CompressFormat.PNG,100,file); }
+        image[0].recycle();
     }
     private void tap(String name) throws Exception {
-        JSONObject data = state();
-        JSONArray controls = data.getJSONArray("controls");
-        JSONArray rect = null;
-        for (int i=0; i<controls.length(); i++) {
-            JSONObject control = controls.getJSONObject(i);
-            if (name.equals(control.getString("name"))) { rect = control.getJSONArray("rect"); break; }
-        }
-        if (rect == null) throw new AssertionError("Missing control: " + name);
-        final int[] origin = new int[2];
+        JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
+        for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
+        if(rect==null) throw new AssertionError("Missing control: "+name);
+        final int[] origin=new int[2];
         runOnMainSync(() -> activity.findViewById(android.R.id.content).getLocationOnScreen(origin));
-        float scale = (float)data.getDouble("pixels_per_point");
-        float x = origin[0] + (float)(rect.getDouble(0)+rect.getDouble(2))*scale/2;
-        float y = origin[1] + (float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
+        float scale=(float)data.getDouble("pixels_per_point");
+        float x=origin[0]+(float)(rect.getDouble(0)+rect.getDouble(2))*scale/2;
+        float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
-        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);
-        sendPointerSync(down); down.recycle();
-        MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0);
-        sendPointerSync(up); up.recycle();
-        SystemClock.sleep(700);
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0); sendPointerSync(down); down.recycle();
+        MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
+        SystemClock.sleep(500);
     }
     private InputConnection connection(View view) {
-        if (view.onCheckIsTextEditor()) {
-            InputConnection result=view.onCreateInputConnection(new EditorInfo());
-            if(result!=null) return result;
-        }
-        if(view instanceof ViewGroup) {
-            ViewGroup group=(ViewGroup)view;
-            for(int i=0;i<group.getChildCount();i++) {
-                InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result;
-            }
-        }
+        if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
+        if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result; } }
         return null;
+    }
+    private void text(String text,boolean burst) throws Exception {
+        final boolean[] committed={false};
+        runOnMainSync(() -> {
+            InputConnection input=connection(activity.getWindow().getDecorView());
+            if(input!=null) {
+                input.beginBatchEdit(); input.deleteSurroundingText(512,512);
+                if(burst) { for(int i=0;i<text.length();i++) input.commitText(text.substring(i,i+1),1); committed[0]=true; }
+                else committed[0]=input.commitText(text,1);
+                input.endBatchEdit();
+            }
+        });
+        if(!committed[0]) throw new AssertionError("Android InputConnection unavailable");
+        until(s -> text.equals(s.optString("query")));
+        SystemClock.sleep(500);
+        if(!text.equals(state().getString("query"))) throw new AssertionError("A late frame undid text input");
     }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity=startActivitySync(intent);
-            SystemClock.sleep(1800);
-            tap("search"); tap("query");
-            final boolean[] committed={false};
-            runOnMainSync(() -> {
-                InputConnection input=connection(activity.getWindow().getDecorView());
-                if(input!=null) { input.beginBatchEdit(); input.deleteSurroundingText(512,512); committed[0]=input.commitText("Café",1); input.endBatchEdit(); }
-            });
-            if(!committed[0]) throw new AssertionError("GameActivity InputConnection unavailable");
-            SystemClock.sleep(1000);
-            if(!"Café".equals(state().getString("query"))) throw new AssertionError("Unicode text did not reach Rust");
-            // Hide only this app's keyboard before exercising recreation.
+            until(s -> s.optString("page").equals("Home"));
+            tap("add:dawn");tap("add:dawn");tap("select:rain");
+            until(s -> s.optString("current").equals("rain") && s.optJSONArray("manual").length()==2);
+            tap("search");tap("query");
+            text("Lluvia",true);text("Café",false);
             runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
-            long revision=state().getLong("revision");
-            long instance=state().getLong("instance");
+            SystemClock.sleep(600);
+            capture("qa-unicode");
+            JSONObject before=state(); long instance=before.getLong("instance"); String manual=before.getJSONArray("manual").toString();
+            ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
             runOnMainSync(() -> activity.recreate());
-            long deadline=SystemClock.uptimeMillis()+8000;
-            while(SystemClock.uptimeMillis()<deadline && state().getLong("instance")==instance) SystemClock.sleep(200);
-            JSONObject after=state();
-            if(after.getLong("instance")<=instance) throw new AssertionError("No new Rust UI instance after Activity recreation");
-            if(!"Café".equals(after.getString("query")) || after.getLong("revision")<revision) throw new AssertionError("Activity recreation lost state");
-            result.putString("stream","PASS: Unicode Android InputConnection and Activity recreation\n");
+            Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
+            if(recreated==null) throw new AssertionError("Recreated Activity did not resume");
+            activity=recreated;
+            JSONObject after=until(s -> s.optLong("instance")>instance);
+            if(!"Café".equals(after.getString("query")) || !"rain".equals(after.getString("current")) || !manual.equals(after.getJSONArray("manual").toString())) throw new AssertionError("Activity recreation lost text or queue occurrences");
+            capture("qa-recreated");
+            int originalOrientation=activity.getRequestedOrientation();
+            runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+            until(s -> s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1));
+            SystemClock.sleep(400);capture("qa-landscape");
+            runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+            until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));
+            SystemClock.sleep(400);capture("qa-portrait");
+            runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
+            tap("cancel-search");until(s -> s.optString("query").isEmpty());
+            tap("next");until(s -> s.optString("current").equals("dawn") && s.optJSONArray("manual").length()==1);
+            tap("next");until(s -> s.optString("current").equals("dawn") && s.optJSONArray("manual").length()==0);
+            tap("next");until(s -> s.optString("current").equals("cafe"));
+            tap("pause");until(s -> s.optString("playback").equals("Paused"));
+            capture("qa-shared-queue-trace");
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace\n");
             finish(Activity.RESULT_OK,result);
-        } catch(Throwable error) {
-            result.putString("stream","FAIL: "+error+"\n"); finish(Activity.RESULT_CANCELED,result);
-        }
+        } catch(Throwable error) { result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result); }
     }
 }
