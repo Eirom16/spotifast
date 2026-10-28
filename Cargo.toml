@@ -29,6 +29,11 @@ path = "src/lib.rs"
 name = "spotifast"
 path = "src/spotifast.rs"
 
+[[bin]]
+name = "doremi-preview"
+path = "src/doremi-preview.rs"
+required-features = ["demo"]
+
 [dependencies]
 # Shared pure queue rules; no external source or platform dependencies.
 doremi-core = { path = "crates/doremi-core" }

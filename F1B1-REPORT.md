@@ -9,6 +9,13 @@ intento 1, conclusión **success**. Base: `b9fe1a5`.
 Esto acredita el corte y contratos descritos, no un reproductor independiente,
 una prueba audible o una APK funcional.
 
+Reconsultado para preparar Preview 0.1 mediante
+`gh run view 40608269489 --repo Eirom16/spotifast --json status,conclusion,headSha,jobs`:
+`status=completed`, el SHA completo coincide y los **siete jobs**
+`quick`, `full-tests`, `clippy`, `desktop-build` Windows, `desktop-build`
+macOS, `android-core` y `verified-artifacts` tienen `conclusion=success`.
+Esta evidencia corresponde a F1B-1; no acredita los cambios de Preview.
+
 No se modificaron UI, DSP, credenciales, perfiles, actualizador, versión ni
 identidades nativas. No hay releases ni dependencias productivas de
 Tubefast, RustyPipe o yt-dlp. La fase informativa de artifacts es F1B1.

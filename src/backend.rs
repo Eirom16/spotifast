@@ -1163,6 +1163,8 @@ pub struct Backend {
     activity: Arc<NetActivity>,
     thread: Option<std::thread::JoinHandle<()>>,
     offline: bool,
+    /// Preview cannot enable transport, even if a caller clears `offline`.
+    preview: bool,
     #[cfg(test)]
     network_statuses: std::sync::Mutex<Vec<bool>>,
     #[cfg(test)]
@@ -1206,6 +1208,29 @@ impl Backend {
         waker: Waker,
         restore_sign_in: bool,
     ) -> Self {
+        Self::spawn_inner(
+            dirs,
+            engine_config,
+            web_client_id,
+            waker,
+            restore_sign_in,
+            false,
+        )
+    }
+
+    #[cfg(feature = "demo")]
+    pub(crate) fn preview(dirs: AppDirs, engine_config: EngineConfig, waker: Waker) -> Self {
+        Self::spawn_inner(dirs, engine_config, None, waker, false, true)
+    }
+
+    fn spawn_inner(
+        dirs: AppDirs,
+        engine_config: EngineConfig,
+        web_client_id: Option<String>,
+        waker: Waker,
+        restore_sign_in: bool,
+        preview: bool,
+    ) -> Self {
         let (command_tx, command_rx) = mpsc::unbounded_channel();
         let (event_tx, event_rx) = std::sync::mpsc::channel();
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -1214,7 +1239,9 @@ impl Backend {
             .enable_all()
             .build()
             .expect("unable to start the async runtime");
-        let http = if restore_sign_in {
+        let http = if preview {
+            Http::unavailable("Doremi Preview is offline".into())
+        } else if restore_sign_in {
             Http::unavailable("Restoring proxy settings".into())
         } else {
             Http::from_proxy(&engine_config.proxy).unwrap_or_else(|error| {
@@ -1234,6 +1261,17 @@ impl Backend {
             .name("spotifast-backend".to_string())
             .spawn(move || {
                 runtime.block_on(async move {
+                    if preview {
+                        // No Worker, credential store, engine, updater, discovery
+                        // or API client is constructed in the Preview process.
+                        let mut commands = command_rx;
+                        while let Some(command) = commands.recv().await {
+                            if matches!(command, Command::Shutdown) {
+                                break;
+                            }
+                        }
+                        return;
+                    }
                     let mut worker = Worker::new(
                         dirs,
                         engine_config,
@@ -1261,7 +1299,8 @@ impl Backend {
             art,
             activity,
             thread: Some(thread),
-            offline: false,
+            offline: preview,
+            preview,
             #[cfg(test)]
             network_statuses: std::sync::Mutex::new(Vec::new()),
             #[cfg(test)]
@@ -1310,6 +1349,9 @@ impl Backend {
     }
 
     pub fn send(&self, command: Command) {
+        if self.preview && !matches!(command, Command::Shutdown) {
+            return;
+        }
         #[cfg(test)]
         if let Command::StoreLibraryCache(cache) = &command {
             self.library_cache_stores

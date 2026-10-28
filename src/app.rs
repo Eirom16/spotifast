@@ -401,6 +401,8 @@ pub struct App {
     control_devices_stale: bool,
     /// Sample data is loaded; Spotify requests are disabled.
     pub offline: bool,
+    #[cfg(feature = "demo")]
+    pub(crate) preview: Option<crate::preview::Preferences>,
     /// OS reports network path is available.
     pub network_reachable: bool,
     pub palette: Palette,
@@ -963,7 +965,54 @@ fn link_recording(
 }
 
 impl App {
-    pub fn new(waker: &Waker, dirs: AppDirs, mut settings: Settings, options: AppOptions) -> Self {
+    pub fn new(waker: &Waker, dirs: AppDirs, settings: Settings, options: AppOptions) -> Self {
+        Self::new_inner(waker, dirs, settings, options, false)
+    }
+
+    #[cfg(feature = "demo")]
+    pub(crate) fn new_preview(waker: &Waker, dirs: AppDirs, settings: Settings) -> Self {
+        Self::new_inner(
+            waker,
+            dirs,
+            settings,
+            AppOptions {
+                media_controls: false,
+                restore_sign_in: false,
+                tray: false,
+                autostart: false,
+            },
+            true,
+        )
+    }
+
+    pub fn is_preview(&self) -> bool {
+        #[cfg(feature = "demo")]
+        {
+            self.preview.is_some()
+        }
+        #[cfg(not(feature = "demo"))]
+        {
+            false
+        }
+    }
+
+    #[cfg(feature = "demo")]
+    pub fn preview_preferences(&self) -> Option<crate::preview::Preferences> {
+        self.preview
+            .as_ref()
+            .map(|preferences| crate::preview::Preferences {
+                accent: preferences.accent,
+                theme: self.settings.theme,
+            })
+    }
+
+    fn new_inner(
+        waker: &Waker,
+        dirs: AppDirs,
+        mut settings: Settings,
+        options: AppOptions,
+        preview: bool,
+    ) -> Self {
         // The legacy password file has no endpoint of its own. Keep the old
         // settings beside it until migration binds that password in the store.
         settings.proxy_password_legacy |= dirs.proxy_secret_file().try_exists().unwrap_or(true);
@@ -985,6 +1034,19 @@ impl App {
             std::sync::Arc::clone(&tap),
             std::sync::Arc::clone(&eq),
         );
+        #[cfg(feature = "demo")]
+        let backend = if preview {
+            Backend::preview(dirs.clone(), engine_config, waker.clone())
+        } else {
+            Backend::spawn(
+                dirs.clone(),
+                engine_config,
+                settings.web_client_id.clone(),
+                waker.clone(),
+                options.restore_sign_in,
+            )
+        };
+        #[cfg(not(feature = "demo"))]
         let backend = Backend::spawn(
             dirs.clone(),
             engine_config,
@@ -1092,7 +1154,9 @@ impl App {
             control_now_playing: None,
             control_devices: None,
             control_devices_stale: true,
-            offline: false,
+            offline: preview,
+            #[cfg(feature = "demo")]
+            preview: preview.then(crate::preview::Preferences::default),
             network_reachable: true,
             palette,
             locale,
@@ -4249,6 +4313,15 @@ impl App {
     }
 
     fn save_settings(&mut self) {
+        #[cfg(feature = "demo")]
+        if let Some(preferences) = &mut self.preview {
+            preferences.theme = self.settings.theme;
+            self.files.write(
+                &self.dirs.config.join("preview.json"),
+                serde_json::to_string_pretty(preferences).expect("preview preferences"),
+                fastframe_file::Access::Default,
+            );
+        }
         if self.settings.proxy_password_legacy {
             self.settings_dirty = false;
             self.last_settings_save = Instant::now();
@@ -4387,6 +4460,11 @@ impl App {
                 Palette::light()
             }
         });
+        #[cfg(feature = "demo")]
+        let palette = self
+            .preview
+            .as_ref()
+            .map_or(palette, |preferences| preferences.accent.palette(palette));
         if self.applied_dark != Some(dark) || self.palette != palette {
             // The first colours need no reveal, and the mini player's window
             // is drawn by its skin.
@@ -6417,6 +6495,11 @@ impl App {
     }
 
     fn run_search(&mut self, query: String) {
+        #[cfg(feature = "demo")]
+        if self.is_preview() {
+            crate::preview::search(self, &query);
+            return;
+        }
         if !query.is_empty()
             && query == self.search.committed
             && !self.search.results.needs_load()
@@ -10857,6 +10940,10 @@ impl App {
     /// Apply one queued UI action after drawing, updating optimistic local state
     /// and scheduling any backend work or preference persistence it requires.
     pub(crate) fn apply(&mut self, action: Action, ctx: &egui::Context) {
+        #[cfg(feature = "demo")]
+        if self.preview.is_some() && crate::preview::handle(self, &action, ctx) {
+            return;
+        }
         if matches!(
             &action,
             Action::Open(_)
@@ -12914,10 +13001,14 @@ impl App {
 
     /// Keeps the current track in the window and taskbar title (#94).
     fn sync_window_title(&mut self, ctx: &egui::Context) {
-        let title = match self.now_playing().filter(|now| now.playing) {
-            Some(now) if now.subtitle.is_empty() => format!("{} - Spotifast", now.title),
-            Some(now) => format!("{} - {}", now.subtitle, now.title),
-            None => "Spotifast".to_string(),
+        let title = if self.is_preview() {
+            "Doremi Preview 0.1 — demo · no audio".to_string()
+        } else {
+            match self.now_playing().filter(|now| now.playing) {
+                Some(now) if now.subtitle.is_empty() => format!("{} - Spotifast", now.title),
+                Some(now) => format!("{} - {}", now.subtitle, now.title),
+                None => "Spotifast".to_string(),
+            }
         };
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));

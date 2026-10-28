@@ -45,6 +45,8 @@ pub mod player;
 pub mod playlist_cover;
 pub mod power;
 pub mod prerelease;
+#[cfg(feature = "demo")]
+pub mod preview;
 mod queue_bridge;
 pub mod resample;
 pub mod session_reads;

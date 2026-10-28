@@ -24,7 +24,10 @@ class F0Tests(unittest.TestCase):
         self.assertEqual(data["workspace"]["default-members"], [".", "crates/doremi-core"])
         self.assertEqual(data["package"]["name"], "spotifast")
         self.assertEqual(data["lib"]["path"], "src/lib.rs")
-        self.assertEqual(data["bin"], [{"name": "spotifast", "path": "src/spotifast.rs"}])
+        self.assertEqual(data["bin"], [
+            {"name": "spotifast", "path": "src/spotifast.rs"},
+            {"name": "doremi-preview", "path": "src/doremi-preview.rs", "required-features": ["demo"]},
+        ])
 
     def test_core_has_no_dependency_or_build_script(self):
         directory = ROOT / "crates/doremi-core"
@@ -64,7 +67,7 @@ class F0Tests(unittest.TestCase):
                           "pages: write", "publish = true"):
             self.assertNotIn(forbidden, workflow)
         self.assertIn("aarch64-linux-android", workflow)
-        self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core]", workflow)
+        self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux]", workflow)
 
     def test_payload_hash_and_missing_file(self):
         with tempfile.TemporaryDirectory() as name:

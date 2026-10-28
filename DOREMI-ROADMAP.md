@@ -6,7 +6,10 @@ F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.
 F1A introdujo dominio/cola neutral. F1B-1 integra edición manual/confirmación
 y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
-No hay proveedor productivo nuevo ni APK. Estado actual: `F1B1-REPORT.md`;
+No hay proveedor productivo nuevo ni APK. Preview 0.1 añade un ejecutable
+offline independiente que reutiliza las vistas, no un motor musical nuevo.
+Su gate de distribución/CI se registra por separado en `DOREMI-PREVIEW-REPORT.md`.
+Estado del núcleo: `F1B1-REPORT.md`;
 evaluación de proveedores: `TUBEFAST-ASSESSMENT.md`.
 El resultado verificable, los checks fallidos/no ejecutados y los riesgos
 están en `F0-REPORT.md`. Una fase no se acepta solo porque exista su código.
@@ -194,9 +197,36 @@ Capacidades, límites, deadlines, errores, leases y redacción están en
 URLs/headers. Los experimentos actuales son sintéticos y loopback.
 La propuesta de caches es `CACHE-ROTATION.md`; no ejecutar DELETE sin permiso.
 
-#### F1B-2: APK offline y lifecycle mínimo
+#### Preview 0.1 Linux: entrega visual antes del proveedor
+
+Prioridad inmediata de entrega: binario `doremi-preview` independiente,
+identidad/rutas propias, sin credenciales, updater ni integraciones nativas
+del legado. Conserva las vistas originales y su binario. El acento inicial
+de Preview es #9966E8; verde original y claro/oscuro siguen disponibles.
+La preferencia vive en `preview.json`, no en los perfiles Spotifast.
+
+El catálogo y el reproductor son demostraciones explícitas, no audio real.
+Búsqueda local acotada y navegación, no proveedor elegido anticipadamente.
+Las carátulas sin red usan los placeholders existentes.
+Los logos originales se preservan con procedencia y su licencia GPL v3
+separada; no se importó código de Doremi-Rust ni se alteró MIT del baseline.
+
+Gates: paquete portable con ejecutable Linux, assets originales, launcher,
+versión/SHA/checksums; ejecución real y capturas Home/Search/Library/Settings,
+claro/oscuro, cambio con ratón y persistencia de acento, búsqueda con teclado;
+CI completa del SHA, sin releases. No declarar estos gates verdes por un
+`cargo check`, ni atribuir un run anterior a Preview.
+El job gráfico reutiliza el ejecutable construido por las pruebas CLI
+all-features; no inicia otro build completo ni otra caché desktop.
+
+#### Android Preview 0.1 / F1B-2: siguiente hito, APK offline y lifecycle mínimo
 
 Depende de gates F1B-1 verdes. Alcance:
+
+Es el siguiente hito tras Preview Linux; no bloquea la entrega Linux.
+Debe conservar nombre/logo/acento seleccionable, navegación táctil y
+teclado/IME funcionales. Reusar el mismo `doremi-core`, no portar el árbol
+desktop ni duplicar su estado. La demo de Linux no demuestra paridad móvil.
 
 1. GameActivity/eframe con el mismo core y fake en memoria, sin importar el
    paquete desktop ni sus integraciones fastframe. Sin Internet/login/Spotify.

@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 COMMANDS = [
     [sys.executable, "scripts/test-f0.py"],
     [sys.executable, "scripts/test-ci.py"],
+    [sys.executable, "scripts/test-preview.py"],
     [sys.executable, "scripts/test-provider-harness.py", "--unit-only"],
     [sys.executable, "scripts/audit-dependencies.py", "--check"],
     [sys.executable, ".github/scripts/check-dependency-sources.py"],

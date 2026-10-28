@@ -2,9 +2,9 @@ name: Doremi CI
 
 on:
   push:
-    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1"]
     # Recording evidence must not launch another complete build of unchanged code.
-    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md"]
+    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md", "DOREMI-PREVIEW-REPORT.md"]
   pull_request:
   workflow_dispatch:
 
@@ -130,6 +130,21 @@ jobs:
         run: |
           python3 scripts/ci-report.py run tests-all-features -- cargo test --locked --workspace --all-targets --all-features
           python3 scripts/ci-report.py run doctests -- cargo test --locked --workspace --all-features --doc
+      - name: Export the Preview executable built and exercised by preview_cli
+        run: |
+          mkdir -p target/preview-binary
+          cp target/ci/debug/doremi-preview target/preview-binary/
+          target/preview-binary/doremi-preview --version
+          python3 scripts/build-manifest.py --target x86_64-unknown-linux-gnu \
+            --kind doremi-preview --payload target/preview-binary/doremi-preview \
+            --output target/preview-binary/manifest.json
+      - uses: actions/upload-artifact@v6
+        with:
+          name: preview-binary-${{ github.sha }}
+          path: target/preview-binary/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
       - uses: actions/upload-artifact@v6
         with:
           name: payload-linux-${{ github.sha }}
@@ -306,8 +321,55 @@ jobs:
           path: target/ci-reports/
           retention-days: 7
 
+  preview-linux:
+    needs: full-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      WINIT_UNIX_BACKEND: x11
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: preview-binary-${{ github.sha }}
+          path: target/preview-binary
+      - name: Graphical runtime only, no second Rust dependency build or cache
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xauth xdotool libasound2t64 libpipewire-0.3-0 \
+            libxkbcommon0 libwayland-client0 libgl1 libegl1 libx11-6
+          chmod +x target/preview-binary/doremi-preview
+      - name: Package tested Preview with original assets, version, SHA and checksums
+        run: python3 scripts/ci-report.py run preview-package -- python3 scripts/package-preview.py target/preview-binary target/preview-dist
+      - name: Real graphical execution, captures and input/persistence tests
+        run: |
+          python3 scripts/ci-report.py run preview-visual -- xvfb-run -a -s "-screen 0 1440x1000x24" \
+            python3 scripts/preview-qa.py target/preview-dist/DoremiPreview-0.1.0/doremi-preview \
+            target/ci-reports/preview-visual
+          cd target/preview-dist/DoremiPreview-0.1.0
+          sha256sum -c SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        with:
+          name: doremi-preview-0.1.0-linux-x86_64-${{ github.sha }}
+          path: |
+            target/preview-dist/*.tar.gz
+            target/preview-dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Preview report
+        if: always()
+        run: python3 scripts/ci-report.py finalize
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: report-preview-${{ github.sha }}-${{ github.run_attempt }}
+          path: target/ci-reports/
+          retention-days: 7
+
   verified-artifacts:
-    needs: [quick, full-tests, clippy, desktop-build, android-core]
+    needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10

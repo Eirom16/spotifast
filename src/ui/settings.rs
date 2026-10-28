@@ -59,6 +59,76 @@ impl<'a> RowText<'a> {
     }
 }
 
+#[cfg(feature = "demo")]
+fn preview_settings(app: &mut App, ui: &mut egui::Ui) {
+    use crate::preview::Accent;
+    let palette = app.palette;
+    ui.add_space(8.0);
+    theme::text(
+        ui,
+        "Settings · Doremi Preview",
+        theme::bold(28.0),
+        palette.text,
+    );
+    ui.add_space(4.0);
+    section(ui, &palette, "Appearance", |ui| {
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Theme",
+            "The original light and dark palettes.",
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (choice, label) in
+                        [(ThemeChoice::Dark, "Dark"), (ThemeChoice::Light, "Light")]
+                    {
+                        let response =
+                            theme::pill_button(ui, &palette, label, app.settings.theme == choice);
+                        crate::preview::note_control(ui.ctx(), label, response.rect);
+                        if response.clicked() {
+                            app.actions.push(Action::SetTheme(choice));
+                        }
+                    }
+                });
+            },
+        );
+        widgets::setting_row(
+            ui,
+            &palette,
+            "Accent",
+            "Purple #9966E8 or the preserved Spotifast green.",
+            |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    for (choice, label) in [(Accent::Purple, "Purple"), (Accent::Green, "Green")] {
+                        let selected = app.preview.as_ref().is_some_and(|p| p.accent == choice);
+                        let response = theme::pill_button(ui, &palette, label, selected);
+                        crate::preview::note_control(ui.ctx(), label, response.rect);
+                        if response.clicked() {
+                            app.preview.as_mut().expect("preview preferences").accent = choice;
+                            app.mark_settings_dirty();
+                        }
+                    }
+                });
+            },
+        );
+    });
+    section(ui, &palette, "Doremi Preview 0.1", |ui| {
+        theme::text(
+            ui,
+            "Offline demo · simulated catalogue · no audio",
+            theme::semibold(15.0),
+            palette.text,
+        );
+        ui.add_space(8.0);
+        ui.label("Home, search, library, playlists, artist, album and queue reuse the Spotifast interface. Playback and account/system actions are disabled.");
+        ui.add_space(8.0);
+        ui.label("No sign-in, automatic updater, tray, autostart or profile migration.");
+        ui.add_space(8.0);
+        ui.label("Spotifast © 2026 Carmine Paolino · MIT. Doremi artwork: Eirom16/Doremi-Rust; original license supplied in assets/doremi/LICENSE.");
+        ui.add_space(8.0);
+    });
+}
+
 /// The guide to writing a palette file for the themes folder.
 const THEMES_GUIDE_URL: &str = "https://spotifast.rocks/settings-and-files/#custom-themes";
 /// Saving the equalizer as a named preset, and deleting the saved preset
@@ -365,6 +435,11 @@ fn local_files_detail(app: &App) -> String {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    #[cfg(feature = "demo")]
+    if app.is_preview() {
+        preview_settings(app, ui);
+        return;
+    }
     let palette = app.palette;
     let locale = app.locale;
     ui.add_space(8.0);

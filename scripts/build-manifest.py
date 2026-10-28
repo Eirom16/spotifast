@@ -38,6 +38,7 @@ def main():
     parser.add_argument("--target", required=True)
     parser.add_argument("--kind", required=True, choices=(
         "legacy-desktop", "legacy-desktop-macos", "legacy-desktop-windows", "core-rlib-not-apk",
+        "doremi-preview",
     ))
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
