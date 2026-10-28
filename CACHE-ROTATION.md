@@ -73,5 +73,9 @@ Comandos de auditoría de solo lectura:
 ```sh
 gh api repos/Eirom16/spotifast/actions/cache/usage
 gh api 'repos/Eirom16/spotifast/actions/caches?per_page=100'
-gh api repos/Eirom16/spotifast/actions/caches/ID
+gh api 'repos/Eirom16/spotifast/actions/caches?per_page=100' --jq '.actions_caches[] | select(.id == 9600597326)'
 ```
+
+La revisión individual se hace filtrando el listado por ID; no se presupone
+un endpoint GET `/actions/caches/ID`. El último comando es un ejemplo de
+consulta de uno de los candidatos, no una solicitud de eliminación.
