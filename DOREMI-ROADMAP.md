@@ -452,3 +452,6 @@ Custom Tabs en Android cuando corresponda. El registro de cliente, redirect,
 scopes, almacén, revocación y capacidades reales se aprobarán con evidencia
 oficial vigente antes de implementar. La entrega deberá demostrar datos
 realmente soportados y errores explícitos; no simular colecciones ausentes.
+
+
+Validación de restauración P1: `ac1a2c4`, CI enfocada `40783624535`, APK instalada y probada en SM-J701M. Reinicio de proceso conserva identidades de duplicados, selección, orden, modos y posición en pausa. Unicode, recreación y rotación repetidos con instrumentación del mismo SHA. Evidencia y limitaciones en DOREMI-GOAL-REPORT.md. Siguiente corte activo: audio PCM local original; autenticación permanece posterior. CI completa del legado pendiente.

@@ -105,11 +105,16 @@ def main():
     tap('green'); wait_for(lambda s:s['green']); capture('green-dark')
     tap('light'); wait_for(lambda s:s['light']); capture('green-light')
     tap('purple'); wait_for(lambda s:not s['green']); capture('purple-light')
+    checkpoint=state()
     # Force stop only this app, without clearing its data.
     adb('shell','am','force-stop',PACKAGE)
     adb('shell','am','start','-W','-n',f'{PACKAGE}/{ACTIVITY}')
     pid=int(adb('shell','pidof',PACKAGE).strip())
     wait_for(lambda s:s.get('pid')==pid and s['page']=='Home' and s['light'] and not s['green'])
+    restored=state()
+    assert restored['manual']==checkpoint['manual']
+    assert restored['manual_occurrences']==checkpoint['manual_occurrences']
+    page('queue','Queue'); tap('clear'); wait_for(lambda s:not s['manual'])
     page('settings','Settings'); capture('restored-preferences')
     tap('dark'); wait_for(lambda s:not s['light'])
     page('home','Home'); tap('select:dawn')
@@ -123,6 +128,14 @@ def main():
     adb('shell','input','keyevent','3'); time.sleep(.7)
     adb('shell','am','start','-W','-n',f'{PACKAGE}/{ACTIVITY}')
     wait_for(lambda s:s['current']=='dawn'); capture('foreground')
+    checkpoint=state()
+    adb('shell','am','force-stop',PACKAGE)
+    adb('shell','am','start','-W','-n',f'{PACKAGE}/{ACTIVITY}')
+    pid=int(adb('shell','pidof',PACKAGE).strip())
+    restored=wait_for(lambda s:s.get('pid')==pid and s['current']==checkpoint['current'] and s['playback']=='Paused')
+    for key in ['current_occurrence','manual_occurrences','upcoming','repeat','shuffle','position_ms']:
+        assert restored[key]==checkpoint[key],key
+    tap('player');wait_for(lambda s:s['page']=='Player');capture('restored-player')
     pid=adb('shell','pidof',PACKAGE).strip(); assert pid
     (output/'meminfo.txt').write_text(adb('shell','dumpsys','meminfo',PACKAGE))
     (output/'gfxinfo.txt').write_text(adb('shell','dumpsys','gfxinfo',PACKAGE))
