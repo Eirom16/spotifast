@@ -204,7 +204,7 @@ impl DoremiApp {
             egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
             Default::default(),
         );
-        cc.egui_ctx.style_mut(|style| {
+        cc.egui_ctx.all_styles_mut(|style| {
             style.spacing.item_spacing = egui::vec2(GAP, GAP);
             style.spacing.button_padding = egui::vec2(12.0, 10.0);
             style.spacing.interact_size.y = TOUCH;

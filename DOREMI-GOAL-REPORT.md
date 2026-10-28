@@ -15,3 +15,10 @@ La reproducción inicial es simulada y está identificada como tal.
 Pendiente de evidencia: compilación APK, descarga, instalación, pruebas reales,
 16 KiB, CI completa, audio local y proveedores. No declarar estos gates
 completados por los tests del núcleo ni por la Preview Linux anterior.
+
+Primeras iteraciones CI:
+- `40769993298` (`0aac395`): quick y core Android aprobados; APK falló antes
+  de compilar al pedir el paquete SDK retirado `tools`. Corregido a platform-tools.
+- `40770336343` (`156fb14`): SDK/NDK y cargo-ndk instalados; falló por usar
+  `-p 26` en lugar de `-P 26`. Corregido en `529494c`.
+- El test local de launchers no pudo ejecutarse por falta de Ruby. CI lo ejecuta.

@@ -21,7 +21,9 @@ def check(directory, create=False):
     assert "sdkVersion:'26'" in badging and "targetSdkVersion:'36'" in badging
     assert "application-label:'Doremi'" in badging
     assert "launchable-activity: name='dev.eirom.doremi.MainActivity'" in badging
-    assert 'uses-permission:' not in badging, badging
+    permissions = re.findall(r"uses-permission: name='([^']+)'", badging)
+    # AndroidX protects its own dynamic receivers with a signature permission.
+    assert set(permissions) <= {PACKAGE + '.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'}, permissions
     assert "native-code: 'arm64-v8a' 'armeabi-v7a'" in badging
     subprocess.run([str(tools / 'apksigner'), 'verify', '--verbose', str(apk)], check=True)
     subprocess.run([str(tools / 'zipalign'), '-c', '-P', '16', '-v', '4', str(apk)], check=True, stdout=subprocess.DEVNULL)

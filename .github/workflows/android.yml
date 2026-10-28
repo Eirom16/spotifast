@@ -42,6 +42,7 @@ jobs:
       - name: Build both Android ABIs, test APK and verify packaging
         run: bash scripts/build-android.sh
       - uses: actions/upload-artifact@v6
+        if: always()
         with:
           name: doremi-android-dev-${{ github.sha }}
           path: target/android-dist/
