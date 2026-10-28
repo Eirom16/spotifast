@@ -26,3 +26,20 @@ Primeras iteraciones CI:
   Gradle falló por clases Kotlin duplicadas entre stdlib 1.8.22 y jdk7/jdk8
   1.6.21. Se alinea con Kotlin BOM 1.8.22, sin modificar fuentes externas.
   Aún no se generó ni instaló un APK verificable.
+
+Primer APK real: `7e0fd83`, CI `40772870294` aprobada. Descargado con gh,
+SHA-256 `62f129d76892c4e242c66106ca39accf88b18b4a6a0f9e11dcc41130323d3657`.
+APK 20 MB, ARM64 y ARMv7; firma, zipalign y segmentos ARM64 de 16.384 bytes
+verificados en CI. Instalación ADB Success en SM-J701M. Abrió y permitió
+Inicio/Biblioteca/Buscar. Capturas reales en `target/android-qa/`.
+Primera apertura am start: ThisTime 1921 ms, no equivale a primer frame útil.
+El teléfono usa páginas de 4 KiB. ARM64/16 KiB no ejecutados en hardware.
+
+Fallos de dispositivo que impiden cerrar A/B: el teclado visible no entrega
+texto a egui, tanto por ADB como con toques reales. La recreación de Activity
+produce pantalla vacía, timeout de apertura y bucle de errores del host.
+Se detuvo únicamente Doremi, sin borrar datos. La prueba instrumentada falló
+al no encontrar InputConnection; no se cuenta como pasada. Se cambia solo
+el host Android a Activity/GLSurfaceView/egui_glow con IME framework. Se
+conservan vistas/core, eframe Linux, forks y la Preview aprobada. Pendiente
+validar esta corrección instalada, con la misma firma y datos existentes.

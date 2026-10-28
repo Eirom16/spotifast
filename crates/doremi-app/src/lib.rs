@@ -5,7 +5,8 @@ use doremi_core::{
     queue::{Command, Effect, Event, Order, Queue, Repeat},
     requests::SessionId,
 };
-use eframe::egui;
+#[cfg(target_os = "android")]
+mod android_native;
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
@@ -16,7 +17,7 @@ use std::{
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
 const GAP: f32 = 8.0;
-static RETAINED: Mutex<Option<Model>> = Mutex::new(None);
+static RETAINED: Mutex<Option<Retained>> = Mutex::new(None);
 
 #[derive(Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
@@ -144,6 +145,12 @@ struct DiskWrite {
     state: Vec<u8>,
 }
 
+struct Retained {
+    model: Model,
+    sender: mpsc::SyncSender<DiskWrite>,
+    worker: std::thread::JoinHandle<()>,
+}
+
 pub struct DoremiApp {
     instance: usize,
     model: Option<Model>,
@@ -156,51 +163,53 @@ pub struct DoremiApp {
 }
 
 impl DoremiApp {
+    #[cfg(not(target_os = "android"))]
     pub fn new(cc: &eframe::CreationContext<'_>, directory: PathBuf) -> Self {
         Self::new_context(&cc.egui_ctx, directory)
     }
 
     pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
-        // Startup reads precede the UI event loop. Writes always run on a worker.
-        let prefs = std::fs::read(directory.join("preferences-v1.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
-        let model = RETAINED
-            .lock()
-            .unwrap()
-            .take()
-            .unwrap_or_else(|| Model::new(prefs));
-        let (tx, rx) = mpsc::sync_channel::<DiskWrite>(1);
-        let worker = std::thread::spawn(move || {
-            let result = std::fs::create_dir_all(&directory);
-            if result.is_err() {
-                return;
-            }
-            while let Ok(mut write) = rx.recv() {
-                while let Ok(newer) = rx.try_recv() {
-                    write = newer;
+        let retained = RETAINED.lock().unwrap().take();
+        let (model, tx, worker) = if let Some(retained) = retained {
+            (retained.model, retained.sender, retained.worker)
+        } else {
+            // Startup reads precede drawing; every durable write runs on the worker.
+            let prefs = std::fs::read(directory.join("preferences-v1.json"))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or_default();
+            let (tx, rx) = mpsc::sync_channel::<DiskWrite>(1);
+            let worker = std::thread::spawn(move || {
+                let result = std::fs::create_dir_all(&directory);
+                if result.is_err() {
+                    return;
                 }
-                for (name, bytes) in [
-                    ("preferences-v1.json", write.prefs),
-                    ("qa-state.json", write.state),
-                ] {
-                    let path = directory.join(name);
-                    let temporary = path.with_extension("tmp");
-                    let result = (|| -> std::io::Result<()> {
-                        use std::io::Write;
-                        let mut file = std::fs::File::create(&temporary)?;
-                        file.write_all(&bytes)?;
-                        file.sync_all()?;
-                        std::fs::rename(&temporary, &path)?;
-                        std::fs::File::open(&directory)?.sync_all()
-                    })();
-                    if let Err(error) = result {
-                        eprintln!("Doremi persistence: {error}");
+                while let Ok(mut write) = rx.recv() {
+                    while let Ok(newer) = rx.try_recv() {
+                        write = newer;
+                    }
+                    for (name, bytes) in [
+                        ("preferences-v1.json", write.prefs),
+                        ("qa-state.json", write.state),
+                    ] {
+                        let path = directory.join(name);
+                        let temporary = path.with_extension("tmp");
+                        let result = (|| -> std::io::Result<()> {
+                            use std::io::Write;
+                            let mut file = std::fs::File::create(&temporary)?;
+                            file.write_all(&bytes)?;
+                            file.sync_all()?;
+                            std::fs::rename(&temporary, &path)?;
+                            std::fs::File::open(&directory)?.sync_all()
+                        })();
+                        if let Err(error) = result {
+                            eprintln!("Doremi persistence: {error}");
+                        }
                     }
                 }
-            }
-        });
+            });
+            (Model::new(prefs), tx, worker)
+        };
         let image = image::load_from_memory(include_bytes!("../../../assets/doremi/Doremi.png"))
             .unwrap()
             .to_rgba8();
@@ -280,7 +289,7 @@ impl DoremiApp {
     fn persist(&mut self, ctx: &egui::Context) {
         let model = self.model.as_ref().unwrap();
         let state = serde_json::json!({
-            "schema": 1, "instance": self.instance, "page": model.page, "query": model.query,
+            "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
             "manual": model.queue.manual().iter().map(|e| e.media.id.local()).collect::<Vec<_>>(),
@@ -329,7 +338,7 @@ impl DoremiApp {
             ui.horizontal(|ui| {
                 ui.image((self.logo.id(), egui::vec2(40.0, 40.0)));
                 ui.heading("Doremi");
-                ui.colored_label(accent, "Preview Android");
+                ui.colored_label(accent, "Preview nativa");
             });
         });
         egui::Panel::bottom("navigation").show(ui, |ui| {
@@ -432,6 +441,7 @@ impl DoremiApp {
         self.persist(&ctx);
     }
 }
+#[cfg(not(target_os = "android"))]
 impl eframe::App for DoremiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.draw(ui);
@@ -441,37 +451,23 @@ impl Drop for DoremiApp {
     fn drop(&mut self) {
         if let Some(mut model) = self.model.take() {
             model.command(Command::Cancel);
-            *RETAINED.lock().unwrap() = Some(model);
-        }
-        self.writer.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            // Retain the owner and its idle writer across Activity lifetimes.
+            // Never join disk work from the drawing/lifecycle thread.
+            *RETAINED.lock().unwrap() = Some(Retained {
+                model,
+                sender: self.writer.take().unwrap(),
+                worker: self.worker.take().unwrap(),
+            });
         }
     }
 }
-
-#[cfg(target_os = "android")]
-#[unsafe(no_mangle)]
-fn android_main(app: winit::platform::android::activity::AndroidApp) {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Info)
-            .with_tag("Doremi"),
-    );
-    let directory = app
-        .internal_data_path()
-        .expect("Android private data directory");
-    let options = eframe::NativeOptions {
-        android_app: Some(app),
-        renderer: eframe::Renderer::Glow,
-        ..Default::default()
-    };
-    if let Err(error) = eframe::run_native(
-        "Doremi",
-        options,
-        Box::new(move |cc| Ok(Box::new(DoremiApp::new(cc, directory)))),
-    ) {
-        log::error!("Doremi startup: {error}");
+impl DoremiApp {
+    /// Desktop calls this only after its UI event loop has exited.
+    pub fn shutdown() {
+        if let Some(retained) = RETAINED.lock().unwrap().take() {
+            drop(retained.sender);
+            let _ = retained.worker.join();
+        }
     }
 }
 
@@ -562,7 +558,7 @@ mod tests {
             }
         }
         drop(app);
-        RETAINED.lock().unwrap().take();
+        DoremiApp::shutdown();
         let _ = std::fs::remove_dir_all(directory);
     }
 }

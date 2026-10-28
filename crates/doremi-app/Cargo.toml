@@ -11,15 +11,21 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 doremi-core = { path = "../doremi-core" }
-# Reuse the workspace's pinned UI, without any Spotifast integration.
-eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "android-game-activity", "x11", "wayland"] }
+egui = { version = "0.36.2", default-features = false, features = ["default_fonts"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Decode the original logo once at startup, before drawing.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Preserve the pinned eframe desktop host. Android owns EGL via GLSurfaceView
+# because the pinned winit/GameActivity loop cannot survive Activity recreation.
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+
 [target.'cfg(target_os = "android")'.dependencies]
-# Select the same GameActivity bridge used by eframe and expose AndroidApp.
-winit = { version = "0.30", default-features = false, features = ["android-game-activity"] }
+# Use the existing pinned renderer directly, without another Android event loop.
+egui_glow = { version = "0.36.2", default-features = false }
+# JNI carries only EGL lifecycle, touch and Android's Unicode InputConnection.
+jni = "0.21"
 android_logger = "0.15"
 log = "0.4"

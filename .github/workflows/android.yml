@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -24,6 +24,7 @@ env:
   GH_TOKEN: ${{ github.token }}
   CARGO_BUILD_JOBS: "2"
   CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_INCREMENTAL: "0"
   RUSTUP_HOME: ${{ github.workspace }}/target/rustup
 
@@ -61,5 +62,44 @@ jobs:
         with:
           name: doremi-android-dev-${{ github.sha }}
           path: target/android-dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  native-host:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CARGO_TARGET_DIR: target/native-cargo
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - name: Native UI libraries and isolated graphical QA
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev xvfb xauth xdotool imagemagick
+      - name: Host tests and lint, without the Spotifast dependency tree
+        run: |
+          cargo fmt --all --check
+          cargo test --locked -p doremi-app --all-targets
+          cargo clippy --locked -p doremi-app --all-targets -- -D warnings
+          cargo build --locked -p doremi-app --bin doremi-app
+      - name: Real X11 navigation, keyboard and queue sequence
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          xvfb-run -a -s '-screen 0 1440x1000x24' python3 scripts/native-qa.py target/native-cargo/debug/doremi-app target/native-qa
+          mkdir -p target/native-dist
+          cp target/native-cargo/debug/doremi-app target/native-dist/
+          cp LICENSE target/native-dist/
+          git rev-parse HEAD > target/native-dist/SOURCE_COMMIT
+          cd target/native-dist
+          sha256sum doremi-app LICENSE SOURCE_COMMIT > SHA256SUMS
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: doremi-native-linux-${{ github.sha }}
+          path: |
+            target/native-dist/
+            target/native-qa/
           if-no-files-found: error
           retention-days: 7

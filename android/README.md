@@ -1,6 +1,11 @@
 # Doremi Android development host
 
-Independent Rust/egui host using `doremi-core`, GameActivity 4.4.0 and OpenGL.
+Independent Rust/egui host using `doremi-core`, GLSurfaceView and OpenGL ES 3.
+Linux uses eframe; Android uses the same egui views through egui_glow.
+The pinned GameActivity/winit host was built and installed, but physical testing
+found broken text input and a blank Activity recreation loop. The framework
+host avoids replacing or modifying any pinned dependency. JNI carries EGL,
+touch and the standard Android EditText/InputConnection, never music rules.
 No Spotify dependencies, network permission or personal storage access.
 API 26 minimum, target/compile 36, NDK 28.2.13676358, JDK 17, Gradle 8.13,
 AGP 8.13.0 and cargo-ndk 4.1.2. CI builds ARM64 and ARMv7 in one test APK.

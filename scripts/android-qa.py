@@ -66,7 +66,8 @@ def main():
         adb('install','-r','-t',str(apk))
     launch=adb('shell','am','start','-W','-n',f'{PACKAGE}/{ACTIVITY}')
     (output/'launch.txt').write_text(launch)
-    wait_for(lambda s:bool(s['controls']))
+    pid=int(adb('shell','pidof',PACKAGE).strip())
+    wait_for(lambda s:bool(s['controls']) and s.get('pid')==pid)
     time.sleep(1)
     def capture(name):
         (output/f'{name}.png').write_bytes(adb('exec-out','screencap','-p',raw=True))
@@ -102,7 +103,8 @@ def main():
     # Force stop only this app, without clearing its data.
     adb('shell','am','force-stop',PACKAGE)
     adb('shell','am','start','-W','-n',f'{PACKAGE}/{ACTIVITY}')
-    wait_for(lambda s:s['page']=='Home' and s['light'] and not s['green'])
+    pid=int(adb('shell','pidof',PACKAGE).strip())
+    wait_for(lambda s:s.get('pid')==pid and s['page']=='Home' and s['light'] and not s['green'])
     page('settings','Settings'); capture('restored-preferences')
     tap('dark'); wait_for(lambda s:not s['light'])
     page('home','Home'); tap('select:dawn')
