@@ -343,7 +343,7 @@ impl DoremiApp {
         });
         egui::Panel::bottom("navigation").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                let width = ((ui.available_width() - 4.0 * GAP) / 5.0).max(48.0);
+                let width = ((ui.available_width() - 4.0 * GAP) / 5.0).floor().max(48.0);
                 for (page, name, label) in [
                     (Page::Home, "home", "Inicio"),
                     (Page::Search, "search", "Buscar"),
@@ -550,6 +550,12 @@ mod tests {
                     );
                     assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
                 }
+                assert!(
+                    navigation
+                        .iter()
+                        .all(|c| c.rect[1] == navigation[0].rect[1]),
+                    "navigation unexpectedly wraps at {size:?}"
+                );
                 for pair in navigation.windows(2) {
                     assert!(
                         pair[0].rect[2] <= pair[1].rect[0] || pair[0].rect[3] <= pair[1].rect[1]
