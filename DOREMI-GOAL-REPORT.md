@@ -43,3 +43,9 @@ al no encontrar InputConnection; no se cuenta como pasada. Se cambia solo
 el host Android a Activity/GLSurfaceView/egui_glow con IME framework. Se
 conservan vistas/core, eframe Linux, forks y la Preview aprobada. Pendiente
 validar esta corrección instalada, con la misma firma y datos existentes.
+
+Decisiones adicionales incorporadas al roadmap: cada estable requiere Linux,
+Windows y Android con versión/commit comunes y gate global; previews separadas
+permitidas, publicación siempre con autorización. Cuenta Google/YouTube opcional
+separada de catálogo/credenciales/audio, OAuth/PKCE y retorno seguro a investigar
+tras los hitos activos. No se implementó autenticación ni acceso a cookies.

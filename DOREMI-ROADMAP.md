@@ -384,3 +384,60 @@ tests instrumentados y dispositivo. Los builds macOS/Windows no sustituyen
 sus suites de tests nativos; recuperarlas, junto con Nix, sin destinos de
 publicación. No declarar soporte probado solo por un build.
 Reactivar Pages, triage, releases, AUR/Homebrew o firma exige revisión separada.
+
+## Decisiones adicionales de producto: estables y cuenta opcional
+
+### Gate global de una versión estable
+
+Las plataformas obligatorias de **cada versión estable** son Linux, Windows
+y Android. Todas usan el mismo número de versión y el mismo commit de
+lanzamiento. Las previews experimentales pueden distribuirse por separado,
+como los artifacts de desarrollo actuales; no son releases estables.
+
+La futura CI de releases tendrá una matriz de plataformas con artefactos
+independientes y un gate global que depende de todas sus validaciones:
+
+| Plataforma | Evidencia obligatoria antes de una estable |
+|---|---|
+| Linux | Build, contratos compartidos, ejecución nativa, reproducción y paquete instalable verificado |
+| Windows | Build nativo, contratos compartidos, reproducción, persistencia y paquete instalable verificado |
+| Android | APK/AAB, ABI/SDK/páginas, firma, instalación, IME/lifecycle, audio y pruebas en dispositivo |
+
+Cada manifiesto identifica versión, commit, plataforma, arquitectura, formato,
+hash y resultado de gates. El gate global rechaza versiones/commits distintos,
+artefactos ausentes o checks fallidos/no ejecutados en cualquiera de las tres.
+Compilar una plataforma no sustituye sus pruebas obligatorias. macOS puede
+seguir en regresiones del legado, pero no sustituye Windows en esta matriz.
+El gate deja un conjunto revisable; **publicar exige autorización explícita**.
+No se reactiva la publicación histórica ni se configura una release automática.
+
+### Cuenta Google/YouTube opcional, después de Android/audio
+
+Se preserva la experiencia del login histórico de `Eirom16/Doremi-Rust`:
+conectar, volver automáticamente a Doremi, mostrar estado y cerrar sesión.
+Los archivos de referencia son `src/doremi/ui/dialogs/login_dialog.py` y
+`src/doremi/api/youtube_music.py`; su mecanismo no es un contrato a copiar.
+No interceptar cookies, manipular Storage Access API, pedir contraseñas ni
+extraer sesiones del navegador.
+
+La prioridad sigue siendo APK real, núcleo compartido y audio. Después se
+investigarán por separado API oficial de YouTube, funciones específicas de
+YouTube Music no oficiales y sus límites de políticas, seguridad, licencia
+y estabilidad. OAuth de Google no implica acceso a una API oficial de YT Music
+ni autoriza reproducción o sustitución de audio por sí solo.
+
+Fronteras previstas, sin introducir autenticación prematura:
+
+- Identidad: cuenta opcional, estado de sesión, revocación y cierre de sesión.
+- Credenciales: adaptador de almacén seguro por plataforma, permisos mínimos,
+  sin tokens en core, UI, logs, artifacts, CI ni servidores ajenos.
+- Catálogo personal: capacidades explícitas por fuente; sincronización en
+  workers cancelables, opcional y sin bloquear UI ni catálogo público/local.
+- Reproducción: puerto separado, IDs neutrales y recursos permitidos. Una
+  sesión autenticada no prueba que un medio esté disponible para reproducir.
+
+Se prioriza navegador del sistema, OAuth 2.0 con PKCE y retorno seguro;
+Custom Tabs en Android cuando corresponda. El registro de cliente, redirect,
+scopes, almacén, revocación y capacidades reales se aprobarán con evidencia
+oficial vigente antes de implementar. La entrega deberá demostrar datos
+realmente soportados y errores explícitos; no simular colecciones ausentes.
