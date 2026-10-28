@@ -49,3 +49,51 @@ Windows y Android con versión/commit comunes y gate global; previews separadas
 permitidas, publicación siempre con autorización. Cuenta Google/YouTube opcional
 separada de catálogo/credenciales/audio, OAuth/PKCE y retorno seguro a investigar
 tras los hitos activos. No se implementó autenticación ni acceso a cookies.
+
+## APK funcional comprobada en el teléfono
+
+`cd0b9a4`, CI enfocada `40774964947`: ambos jobs Android y Linux verdes.
+APK descargada/verificada/actualizada sin desinstalar: conserva la biblioteca
+previa. ADB comprobó navegación, búsqueda Lluvia, selección, biblioteca,
+cola editable/duplicados, Next/Previous, pausa simulada, Shuffle/Repeat,
+cancelación, morado/verde, claro/oscuro, persistencia y background/foreground.
+Instrumentación comprobó Café Unicode y una nueva instancia tras recreate.
+
+`561497d`, CI enfocada `40777190887`: ambos jobs verdes. Actualizada en el
+mismo teléfono, con hashes/manifest del SHA. La instrumentación ampliada pasó
+entrada rápida/Unicode, recreación conservando dos ocurrencias, horizontal/
+vertical y `rain -> dawn -> dawn -> cafe`, la misma secuencia del host Linux.
+Capturas PixelCopy de la superficie propia: `target/android-qa/561497d5da5e`.
+No se encontraron fatal/panic/ANR/shutdown timeout en el log de ese proceso.
+Una captura accidental del launcher tras finalizar instrumentación fue
+eliminada; las pruebas ahora verifican foco y usan PixelCopy de Doremi.
+
+Linux `cd0b9a4`: artifact descargado, checksums correctos, sin librerías
+faltantes en ldd. Repitió el QA X11/XTest en CachyOS bajo Xvfb/Mesa software.
+No se atribuye ese resultado a Wayland, GPU nativa o Windows. La Preview
+aprobada y `src/` no cambiaron. El ajuste de redondeo de navegación se verificó
+en el siguiente job Linux y en las capturas reales horizontal/vertical Android.
+
+Mediciones puntuales, sin extrapolación: PSS 56.279 kB (gráficos 14.240 kB),
+CPU idle 0,0% en dos muestras top de un segundo; RES top 121 MB, de los cuales
+105 MB compartidos. Gfxinfo registró solo 5 frames HWUI y uno janky; no mide
+la cadencia completa de egui/OpenGL y no permite afirmar FPS o jank global.
+am start -W del nuevo host reportó ThisTime 901 ms tras instalar. No es un
+benchmark frío/caliente ni una medida del primer audio o primer frame útil.
+
+Siguiente corte activo: checkpoint de cola JSON versionado, validado en core,
+restauración pausada tras process death, archivos incompatibles conservados,
+writer acotado y errores de disco visibles. `doremi-library` permite probar
+ese codec/worker localmente sin compilar UI. Audio local viene después.
+La CI completa del legado sobre el cambio final sigue pendiente.
+
+Corte de restauración implementado, aún pendiente de CI/dispositivo:
+`queue::checkpoint` expone datos neutrales y valida índices/permutaciones,
+identidades, límites y posiciones antes de restaurar transaccionalmente.
+Tres nuevas pruebas core (una recorre 2000 estados), tres de codec/worker y
+Clippy core/library pasaron localmente. `doremi-library` no importa egui ni
+Spotify. El host migra preferencias schema 0, preserva archivos desconocidos,
+muestra fallos de disco, guarda cola/historial/orden/posición y restaura pausado.
+Se corrige además una duplicación de proyección en la vista de cola: cada
+ocurrencia se dibuja una vez, con edición solo de las manuales. La prueba de
+render cuenta las dos copias reales, no solo el tamaño del vector del core.

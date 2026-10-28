@@ -20,7 +20,7 @@ VERIFY = runpy.run_path(str(ROOT / "scripts/verify-artifacts.py"))
 class F0Tests(unittest.TestCase):
     def test_workspace_preserves_the_legacy_entrypoints(self):
         data = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        self.assertEqual(data["workspace"]["members"], [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app"])
+        self.assertEqual(data["workspace"]["members"], [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library"])
         self.assertEqual(data["workspace"]["default-members"], [".", "crates/doremi-core"])
         self.assertEqual(data["package"]["name"], "spotifast")
         self.assertEqual(data["lib"]["path"], "src/lib.rs")

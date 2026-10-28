@@ -6,7 +6,9 @@ F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.
 F1A introdujo dominio/cola neutral. F1B-1 integra edición manual/confirmación
 y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
-No hay proveedor productivo nuevo ni APK. Preview 0.1 añade un ejecutable
+Hay APK de desarrollo instalada y validada en Android real, sin audio todavía
+(ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo nuevo.
+Preview 0.1 añade un ejecutable
 offline independiente que reutiliza las vistas, no un motor musical nuevo.
 Su gate de distribución/CI se registra por separado en `DOREMI-PREVIEW-REPORT.md`.
 Estado del núcleo: `F1B1-REPORT.md`;
@@ -219,9 +221,18 @@ CI completa del SHA, sin releases. No declarar estos gates verdes por un
 El job gráfico reutiliza el ejecutable construido por las pruebas CLI
 all-features; no inicia otro build completo ni otra caché desktop.
 
-#### Android Preview 0.1 / F1B-2: siguiente hito, APK offline y lifecycle mínimo
+#### Android Preview 0.1 / F1B-2: APK offline y lifecycle mínimo
 
-Depende de gates F1B-1 verdes. Alcance:
+Depende de gates F1B-1 verdes. APK offline `561497d` validada en Samsung
+SM-J701M/API 28 (ARMv7): Unicode, navegación, dos temas/acento, persistencia
+de preferencias, recreación con duplicados, rotación y secuencia compartida.
+CI enfocada `40777190887` verde. El host final usa GLSurfaceView/egui_glow:
+GameActivity/eframe se probó en hardware y falló en IME y recreación.
+Faltan la nueva CI completa del legado y los gates de audio/restauración de
+proceso; ARM64 y 16 KiB se verificaron en el paquete, no en hardware.
+El propietario Rust y las mismas vistas se usan en el host eframe Linux.
+
+Alcance original, conservado como contrato:
 
 Es el siguiente hito tras Preview Linux; no bloquea la entrega Linux.
 Debe conservar nombre/logo/acento seleccionable, navegación táctil y

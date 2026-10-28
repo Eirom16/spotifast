@@ -15,7 +15,7 @@ COMMANDS = [
     [sys.executable, ".github/scripts/check-dependency-sources.py"],
     [sys.executable, ".github/scripts/check-review-evidence.py"],
     ["cargo", "fmt", "--all", "--check"],
-    ["cargo", "test", "--locked", "-p", "doremi-core"],
+    ["cargo", "test", "--locked", "-p", "doremi-core", "-p", "doremi-library"],
 ]
 
 if __name__ == "__main__":

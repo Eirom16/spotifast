@@ -19,9 +19,9 @@ def render(root):
         "",
         "Generado con `python3 scripts/audit-dependencies.py`. No editar a mano.",
         "Clasificación y decisiones Android: `../../F0-REPORT.md`.",
-        "F0/F1 no cambian fuentes externas; el harness reutiliza serde_json ya bloqueado.",
+        "Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.io.",
         "",
-        "## Dependencias directas del paquete legado",
+        "## Dependencias directas del workspace",
         "",
         "| Ámbito | Crate | Especificación |",
         "|---|---|---|",
@@ -39,6 +39,9 @@ def render(root):
         for kind in ("dependencies", "build-dependencies", "dev-dependencies"):
             if kind in data:
                 scopes.append((f"{member}: {kind}", data[kind]))
+        for target, tables in sorted(data.get("target", {}).items()):
+            for kind, deps in sorted(tables.items()):
+                scopes.append((f"{member}/{target}: {kind}", deps))
     for scope, deps in scopes:
         for name, spec in sorted(deps.items()):
             if isinstance(spec, str):

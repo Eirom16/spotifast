@@ -1,0 +1,15 @@
+[package]
+name = "doremi-library"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+description = "Versioned Doremi session persistence, independent of UI and platform hosts"
+
+[dependencies]
+doremi-core = { path = "../doremi-core" }
+# Host-owned readable checkpoints and atomic worker writes, without adding serde
+# or filesystem operations to the neutral queue reducer.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

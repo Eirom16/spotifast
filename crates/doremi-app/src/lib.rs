@@ -7,12 +7,9 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
+use doremi_library as persistence;
 use serde::{Deserialize, Serialize};
-use std::{
-    path::PathBuf,
-    sync::{Mutex, mpsc},
-    time::Duration,
-};
+use std::{path::PathBuf, sync::Mutex, time::Duration};
 
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
@@ -47,6 +44,9 @@ struct Model {
     query: String,
     notice: String,
     revision: u64,
+    write_prefs: bool,
+    write_queue: bool,
+    storage_warning: Option<&'static str>,
 }
 
 fn songs() -> Vec<Media> {
@@ -85,9 +85,70 @@ impl Model {
             query: String::new(),
             notice: "Demostración sin audio. No es reproducción real.".into(),
             revision: 0,
+            write_prefs: true,
+            write_queue: true,
+            storage_warning: None,
         }
     }
+    fn load(directory: &std::path::Path) -> Self {
+        let mut model = Self::new(Preferences::default());
+        match persistence::read(directory, "preferences-v1.json") {
+            Ok(Some(bytes)) => match serde_json::from_slice::<Preferences>(&bytes) {
+                Ok(mut prefs) if prefs.schema <= 1 => {
+                    prefs.schema = 1;
+                    model.prefs = prefs;
+                }
+                _ => {
+                    model.write_prefs = false;
+                    model.storage_warning = Some(
+                        "Preferencias incompatibles. El archivo se conserva y los cambios no se guardarán.",
+                    );
+                }
+            },
+            Ok(None) => {
+                model.prefs.schema = 1;
+            }
+            Err(_) => {
+                model.write_prefs = false;
+                model.storage_warning =
+                    Some("No se pudieron leer las preferencias. El archivo se conserva.");
+            }
+        }
+        match persistence::read(directory, "queue-v1.json") {
+            Ok(Some(bytes)) => match persistence::decode(&bytes).and_then(|checkpoint| {
+                model
+                    .queue
+                    .restore_checkpoint(checkpoint)
+                    .map_err(|_| persistence::Error::InvalidQueue)
+            }) {
+                Ok(_) => {
+                    model.notice = "Sesión restaurada en pausa. Demostración sin audio.".into();
+                }
+                Err(_) => {
+                    model.write_queue = false;
+                    model.storage_warning = Some(
+                        "Cola guardada incompatible. Se conserva; la sesión actual no se guardará.",
+                    );
+                }
+            },
+            Ok(None) => {}
+            Err(_) => {
+                model.write_queue = false;
+                model.storage_warning =
+                    Some("No se pudo leer la cola guardada. Se conserva el archivo.");
+            }
+        }
+        model
+    }
     fn command(&mut self, command: Command) {
+        if let Command::Append(media) = &command
+            && self.queue.manual().len().saturating_add(media.len())
+                > doremi_core::queue::checkpoint::ENTRY_LIMIT
+        {
+            self.notice = "La cola manual admite hasta 4096 canciones.".into();
+            self.revision += 1;
+            return;
+        }
         match self.queue.command(command) {
             Ok(effects) => self.effects(effects),
             Err(error) => self.notice = format!("No se pudo cambiar la cola: {error:?}"),
@@ -140,22 +201,34 @@ struct Control {
     name: String,
     rect: [f32; 4],
 }
-struct DiskWrite {
-    prefs: Vec<u8>,
-    state: Vec<u8>,
-}
-
 struct Retained {
     model: Model,
-    sender: mpsc::SyncSender<DiskWrite>,
-    worker: std::thread::JoinHandle<()>,
+    writer: persistence::Writer,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StorageError {
+    Encoding,
+    Io,
+    Closed,
+}
+impl StorageError {
+    fn message(self) -> &'static str {
+        match self {
+            Self::Encoding => "No se pudo guardar la cola. El estado anterior se conserva.",
+            Self::Io => "No se pudieron guardar los cambios. El estado anterior se conserva.",
+            Self::Closed => {
+                "No se pudieron guardar los cambios. Reabre Doremi para volver a intentarlo."
+            }
+        }
+    }
+}
 pub struct DoremiApp {
     instance: usize,
     model: Option<Model>,
-    writer: Option<mpsc::SyncSender<DiskWrite>>,
-    worker: Option<std::thread::JoinHandle<()>>,
+    writer: Option<persistence::Writer>,
+    pending_write: usize,
+    storage_error: Option<StorageError>,
     controls: Vec<Control>,
     logo: egui::TextureHandle,
     saved_state: Vec<u8>,
@@ -170,45 +243,12 @@ impl DoremiApp {
 
     pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
         let retained = RETAINED.lock().unwrap().take();
-        let (model, tx, worker) = if let Some(retained) = retained {
-            (retained.model, retained.sender, retained.worker)
+        let (model, writer) = if let Some(retained) = retained {
+            (retained.model, retained.writer)
         } else {
-            // Startup reads precede drawing; every durable write runs on the worker.
-            let prefs = std::fs::read(directory.join("preferences-v1.json"))
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-                .unwrap_or_default();
-            let (tx, rx) = mpsc::sync_channel::<DiskWrite>(1);
-            let worker = std::thread::spawn(move || {
-                let result = std::fs::create_dir_all(&directory);
-                if result.is_err() {
-                    return;
-                }
-                while let Ok(mut write) = rx.recv() {
-                    while let Ok(newer) = rx.try_recv() {
-                        write = newer;
-                    }
-                    for (name, bytes) in [
-                        ("preferences-v1.json", write.prefs),
-                        ("qa-state.json", write.state),
-                    ] {
-                        let path = directory.join(name);
-                        let temporary = path.with_extension("tmp");
-                        let result = (|| -> std::io::Result<()> {
-                            use std::io::Write;
-                            let mut file = std::fs::File::create(&temporary)?;
-                            file.write_all(&bytes)?;
-                            file.sync_all()?;
-                            std::fs::rename(&temporary, &path)?;
-                            std::fs::File::open(&directory)?.sync_all()
-                        })();
-                        if let Err(error) = result {
-                            eprintln!("Doremi persistence: {error}");
-                        }
-                    }
-                }
-            });
-            (Model::new(prefs), tx, worker)
+            // Startup reads precede drawing. The writer does all durable I/O.
+            let model = Model::load(&directory);
+            (model, persistence::Writer::new(directory))
         };
         let image = image::load_from_memory(include_bytes!("../../../assets/doremi/Doremi.png"))
             .unwrap()
@@ -227,8 +267,9 @@ impl DoremiApp {
         Self {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             model: Some(model),
-            writer: Some(tx),
-            worker: Some(worker),
+            writer: Some(writer),
+            pending_write: 0,
+            storage_error: None,
             controls: vec![],
             logo,
             saved_state: vec![],
@@ -287,11 +328,28 @@ impl DoremiApp {
         }
     }
     fn persist(&mut self, ctx: &egui::Context) {
+        if self.pending_write > 0 {
+            match self.writer.as_ref().unwrap().completed(self.pending_write) {
+                None => ctx.request_repaint_after(Duration::from_millis(50)),
+                Some(failed) => {
+                    self.pending_write = 0;
+                    if failed {
+                        self.storage_error = Some(StorageError::Io);
+                    } else if self.storage_error == Some(StorageError::Io) {
+                        self.storage_error = None;
+                    }
+                    ctx.request_repaint();
+                }
+            }
+        }
         let model = self.model.as_ref().unwrap();
         let state = serde_json::json!({
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
+            "current_occurrence": model.queue.current().map(|e|e.id.as_u64()),
+            "manual_occurrences": model.queue.manual().iter().map(|e|e.id.as_u64()).collect::<Vec<_>>(),
+            "position_ms":model.queue.position_ms(),
             "manual": model.queue.manual().iter().map(|e| e.media.id.local()).collect::<Vec<_>>(),
             "upcoming": model.queue.upcoming().map(|e| e.media.id.local()).collect::<Vec<_>>(),
             "playback": format!("{:?}", model.queue.playback()), "audio": false,
@@ -303,15 +361,47 @@ impl DoremiApp {
         if !self.pending && self.saved_state == state {
             return;
         }
-        let write = DiskWrite {
-            prefs: serde_json::to_vec(&model.prefs).unwrap(),
-            state: state.clone(),
-        };
-        self.pending = self.writer.as_ref().unwrap().try_send(write).is_err();
-        if !self.pending {
-            self.saved_state = state;
+        let queue = if model.write_queue {
+            match persistence::encode(&model.queue) {
+                Ok(bytes) => {
+                    if self.storage_error == Some(StorageError::Encoding) {
+                        self.storage_error = None;
+                    }
+                    Some(bytes)
+                }
+                Err(_) => {
+                    self.storage_error = Some(StorageError::Encoding);
+                    None
+                }
+            }
         } else {
-            ctx.request_repaint_after(Duration::from_millis(50));
+            None
+        };
+        let prefs = model
+            .write_prefs
+            .then(|| serde_json::to_vec(&model.prefs).unwrap());
+        match self
+            .writer
+            .as_ref()
+            .unwrap()
+            .submit(prefs, queue, state.clone())
+        {
+            Ok(id) => {
+                self.pending = false;
+                self.pending_write = id;
+                self.saved_state = state;
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+            Err(persistence::SubmitError::Busy) => {
+                self.pending = true;
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+            Err(persistence::SubmitError::Closed) => {
+                self.pending = false;
+                self.saved_state = state;
+                self.storage_error = Some(StorageError::Closed);
+                ctx.request_repaint();
+            }
         }
     }
 }
@@ -340,6 +430,15 @@ impl DoremiApp {
                 ui.heading("Doremi");
                 ui.colored_label(accent, "Preview nativa");
             });
+            if let Some(error) = self
+                .model
+                .as_ref()
+                .unwrap()
+                .storage_warning
+                .or(self.storage_error.map(StorageError::message))
+            {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
         });
         egui::Panel::bottom("navigation").show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -360,11 +459,17 @@ impl DoremiApp {
             });
         });
         egui::CentralPanel::default().show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| {
+            let page=self.model.as_ref().unwrap().page;
+            egui::ScrollArea::vertical().id_salt(format!("page:{page:?}")).show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
-                let page = self.model.as_ref().unwrap().page;
                 match page {
-                    Page::Home => { ui.heading("Tu música, a tu ritmo"); ui.label("Catálogo de prueba local. Sin Spotify ni conexión."); self.rows(ui, songs()); }
+                    Page::Home => {
+                        ui.heading("Tu música, a tu ritmo");ui.label("Catálogo de prueba local. Sin Spotify ni conexión.");
+                        if self.model.as_ref().unwrap().queue.current().is_some() && self.button(ui,"player","Abrir reproductor",220.0) {
+                            let model=self.model.as_mut().unwrap();model.page=Page::Player;model.revision+=1;
+                        }
+                        self.rows(ui,songs());
+                    }
                     Page::Search => {
                         ui.heading("Buscar");
                         let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text("Busca en la demostración").char_limit(128));
@@ -386,17 +491,20 @@ impl DoremiApp {
                     Page::Queue => {
                         ui.heading("Cola");
                         if self.button(ui,"clear","Vaciar cola manual",210.0) { self.model.as_mut().unwrap().command(Command::ClearManual); }
-                        let entries = self.model.as_ref().unwrap().queue.manual().to_vec();
-                        ui.label("Añadidas por ti (cada copia es independiente)");
-                        for (index, entry) in entries.iter().enumerate() {
-                            ui.label(&entry.media.title);
-                            ui.horizontal_wrapped(|ui| {
-                                if self.button(ui,&format!("remove:{index}"),"Quitar",90.0) { self.model.as_mut().unwrap().command(Command::Remove(entry.id)); }
-                                if index > 0 && self.button(ui,&format!("up:{index}"),"Subir",90.0) { self.model.as_mut().unwrap().command(Command::Move { entry: entry.id, gap: index - 1 }); }
-                            });
+                        ui.label("Las canciones que siguen, en orden.");
+                        let entries=self.model.as_ref().unwrap().queue.upcoming().cloned().collect::<Vec<_>>();
+                        let manual=self.model.as_ref().unwrap().queue.manual().iter().map(|e|e.id).collect::<Vec<_>>();
+                        for entry in entries {
+                            ui.strong(&entry.media.title);
+                            if let Some(index)=manual.iter().position(|id|*id==entry.id) {
+                                ui.small("Añadida por ti");
+                                ui.horizontal_wrapped(|ui| {
+                                    if self.button(ui,&format!("remove:{index}"),"Quitar",90.0) { self.model.as_mut().unwrap().command(Command::Remove(entry.id)); }
+                                    if index>0 && self.button(ui,&format!("up:{index}"),"Subir",90.0) { self.model.as_mut().unwrap().command(Command::Move{entry:entry.id,gap:index-1}); }
+                                });
+                            } else {ui.small("Continuación");}
+                            ui.separator();
                         }
-                        ui.separator(); ui.label("Orden completo de lo que sigue");
-                        for entry in self.model.as_ref().unwrap().queue.upcoming() { ui.label(&entry.media.title); }
                     }
                     Page::Settings => {
                         ui.heading("Configuración"); ui.label("Acento");
@@ -436,6 +544,7 @@ impl DoremiApp {
                 let model = self.model.as_ref().unwrap();
                 ui.label(format!("Estado demo: {:?} · Repeat {:?} · Shuffle {}",model.queue.playback(),model.queue.repeat(),model.queue.shuffled()));
                 ui.small(&model.notice);
+                if let Some(error)=model.storage_warning.or(self.storage_error) { ui.colored_label(ui.visuals().error_fg_color,error); }
             });
         });
         self.persist(&ctx);
@@ -455,8 +564,7 @@ impl Drop for DoremiApp {
             // Never join disk work from the drawing/lifecycle thread.
             *RETAINED.lock().unwrap() = Some(Retained {
                 model,
-                sender: self.writer.take().unwrap(),
-                worker: self.worker.take().unwrap(),
+                writer: self.writer.take().unwrap(),
             });
         }
     }
@@ -465,8 +573,7 @@ impl DoremiApp {
     /// Desktop calls this only after its UI event loop has exited.
     pub fn shutdown() {
         if let Some(retained) = RETAINED.lock().unwrap().take() {
-            drop(retained.sender);
-            let _ = retained.worker.join();
+            retained.writer.shutdown();
         }
     }
 }
@@ -474,6 +581,7 @@ impl DoremiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
     use doremi_core::queue::Playback;
     #[test]
     fn unicode_search_cancel_and_duplicate_occurrences_use_core() {
@@ -510,6 +618,7 @@ mod tests {
     }
     #[test]
     fn touch_navigation_fits_phone_and_landscape_in_both_themes() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
         let directory =
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-layout-test");
         let ctx = egui::Context::default();
@@ -563,6 +672,79 @@ mod tests {
                 }
             }
         }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn old_preferences_migrate_and_unknown_queue_data_is_preserved() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("preferences-migration-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("preferences-v1.json"),
+            br#"{"schema":0,"green":true,"light":true,"library":["dawn"]}"#,
+        )
+        .unwrap();
+        let future = br#"{"schema":99,"future_data":"preserve"}"#;
+        std::fs::write(directory.join("queue-v1.json"), future).unwrap();
+        let model = Model::load(&directory);
+        assert!(model.prefs.green && model.prefs.light);
+        assert_eq!(model.prefs.schema, 1);
+        assert_eq!(model.prefs.library, ["dawn"]);
+        assert!(!model.write_queue);
+        assert!(model.storage_warning.is_some());
+        assert_eq!(
+            std::fs::read(directory.join("queue-v1.json")).unwrap(),
+            future
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn queue_view_draws_each_upcoming_occurrence_once() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/queue-render-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let model = app.model.as_mut().unwrap();
+        model.command(Command::ClearManual);
+        model.command(Command::StartContext {
+            media: songs(),
+            start: 1,
+            order: Order::Sequential,
+        });
+        model.command(Command::Append(vec![
+            songs()[0].clone(),
+            songs()[0].clone(),
+        ]));
+        model.page = Page::Queue;
+        fn count(shape: &egui::epaint::Shape) -> usize {
+            match shape {
+                egui::epaint::Shape::Text(text) => {
+                    usize::from(text.galley.text() == "Amanecer violeta")
+                }
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().map(count).sum(),
+                _ => 0,
+            }
+        }
+        let mut copies = 0;
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(440.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| app.draw(ui),
+            );
+            copies = output.shapes.iter().map(|shape| count(&shape.shape)).sum();
+            output.textures_delta.clear();
+        }
+        assert_eq!(copies, 2, "two queued copies must produce two rows");
         drop(app);
         DoremiApp::shutdown();
         let _ = std::fs::remove_dir_all(directory);

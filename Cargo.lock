@@ -1554,6 +1554,7 @@ version = "0.1.0"
 dependencies = [
  "android_logger",
  "doremi-core",
+ "doremi-library",
  "eframe",
  "egui",
  "egui_glow",
@@ -1567,6 +1568,15 @@ dependencies = [
 [[package]]
 name = "doremi-core"
 version = "0.14.2"
+
+[[package]]
+name = "doremi-library"
+version = "0.1.0"
+dependencies = [
+ "doremi-core",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "doremi-provider-harness"

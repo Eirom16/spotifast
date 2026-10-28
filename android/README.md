@@ -21,7 +21,12 @@ Home, Unicode search, saved demo library, editable queue, player simulation,
 purple/green and light/dark themes are offline. Preferences and saved library
 are atomically persisted by a bounded worker in Android's private files directory.
 The Rust owner survives Activity recreation in-process and pauses when dropped.
-Process-death queue restoration and real audio remain separate gates.
+Queue/history/order/position checkpoints live in `queue-v1.json` and restore
+paused after process death. Unknown or corrupt files are preserved with a
+visible warning. The codec and bounded disk worker are shared in
+`doremi-library`; the pure reducer validates occurrence identities before
+accepting a checkpoint. Manual queues are bounded to 4096 entries and JSON
+files to 1 MiB. Real audio remains the next gate.
 `qa-state.json` contains this demo's state and control bounds for ADB testing.
 No screenshots/logs belong in Git.
 
