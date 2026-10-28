@@ -99,8 +99,10 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `tools/provider-harness: dependencies` | `serde_json` | `1` |
 | `crates/doremi-app: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-app: dependencies` | `doremi-library` | `path=../doremi-library` |
+| `crates/doremi-app: dependencies` | `doremi-player` | `features=['native-output']; path=../doremi-player` |
 | `crates/doremi-app: dependencies` | `egui` | `default-features=False; features=['default_fonts']; version=0.36.2` |
 | `crates/doremi-app: dependencies` | `image` | `default-features=False; features=['png']; version=0.25` |
+| `crates/doremi-app: dependencies` | `rand` | `0.9` |
 | `crates/doremi-app: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-app: dependencies` | `serde_json` | `1` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
@@ -108,13 +110,17 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `egui_glow` | `default-features=False; version=0.36.2` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `jni` | `0.21` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `log` | `0.4` |
+| `crates/doremi-app/cfg(target_os = "android"): dependencies` | `ndk-context` | `0.1` |
 | `crates/doremi-library: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
+| `crates/doremi-player: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-player/cfg(not(target_os = "linux")): dependencies` | `cpal` | `default-features=False; optional=True; version=0.18.2` |
+| `crates/doremi-player/cfg(target_os = "linux"): dependencies` | `cpal` | `default-features=False; features=['pipewire', 'pulseaudio']; optional=True; version=0.18.2` |
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 801 entradas (incluye miembros locales).
+`Cargo.lock`: 802 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -126,7 +132,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
 | 752 | `registry+https://github.com/rust-lang/crates.io-index` |
-| 5 | `workspace` |
+| 6 | `workspace` |
 
 ## Patches
 

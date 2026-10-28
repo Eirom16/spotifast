@@ -1555,12 +1555,15 @@ dependencies = [
  "android_logger",
  "doremi-core",
  "doremi-library",
+ "doremi-player",
  "eframe",
  "egui",
  "egui_glow",
  "image",
  "jni 0.21.1",
  "log",
+ "ndk-context",
+ "rand 0.9.5",
  "serde",
  "serde_json",
 ]
@@ -1576,6 +1579,14 @@ dependencies = [
  "doremi-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "doremi-player"
+version = "0.1.0"
+dependencies = [
+ "cpal",
+ "doremi-core",
 ]
 
 [[package]]

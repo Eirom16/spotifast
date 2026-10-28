@@ -12,6 +12,10 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 doremi-core = { path = "../doremi-core" }
 doremi-library = { path = "../doremi-library" }
+# Local PCM worker/output, separate from the neutral queue and Spotify engine.
+doremi-player = { path = "../doremi-player", features = ["native-output"] }
+# Host supplies explicit shuffle permutations; the deterministic core owns order.
+rand = "0.9"
 egui = { version = "0.36.2", default-features = false, features = ["default_fonts"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -28,5 +32,7 @@ eframe = { version = "0.36.2", default-features = false, features = ["glow", "de
 egui_glow = { version = "0.36.2", default-features = false }
 # JNI carries only EGL lifecycle, touch and Android's Unicode InputConnection.
 jni = "0.21"
+# CPAL/AAudio needs a process-lifetime application context, initialized once.
+ndk-context = "0.1"
 android_logger = "0.15"
 log = "0.4"

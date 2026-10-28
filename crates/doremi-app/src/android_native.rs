@@ -4,13 +4,13 @@ use super::*;
 use egui_glow::{Painter, ShaderVersion, glow};
 use jni::{
     JNIEnv,
-    objects::{JClass, JString},
+    objects::{GlobalRef, JClass, JObject, JString},
     sys::{jboolean, jfloat, jint, jlong, jstring},
 };
 use std::{
     cell::RefCell,
     ffi::{CString, c_char, c_void},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Instant,
 };
 
@@ -27,6 +27,7 @@ struct Renderer {
     started: Instant,
     text_generation: jlong,
 }
+static APPLICATION: OnceLock<GlobalRef> = OnceLock::new();
 thread_local! { static RENDERER: RefCell<Option<Renderer>> = const { RefCell::new(None) }; }
 
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeInit")]
@@ -34,6 +35,7 @@ pub extern "system" fn native_init(
     mut env: JNIEnv<'_>,
     _: JClass<'_>,
     directory: JString<'_>,
+    context: JObject<'_>,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -44,6 +46,23 @@ pub extern "system" fn native_init(
         return 0;
     };
     let directory = PathBuf::from(String::from(directory));
+    let Ok(vm) = env.get_java_vm() else {
+        return 0;
+    };
+    let Ok(context) = env.new_global_ref(context) else {
+        return 0;
+    };
+    APPLICATION.get_or_init(|| {
+        // The application GlobalRef and JavaVM remain valid for process lifetime.
+        // This singleton is initialized once, before starting the AAudio worker.
+        unsafe {
+            ndk_context::initialize_android_context(
+                vm.get_java_vm_pointer().cast(),
+                context.as_obj().as_raw().cast(),
+            );
+        }
+        context
+    });
     RENDERER.with(|cell| {
         if cell.borrow().is_some() {
             return 1;
@@ -101,7 +120,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -181,6 +200,23 @@ pub extern "system" fn native_destroy(_: JNIEnv<'_>, _: JClass<'_>) {
         if let Some(mut renderer) = cell.borrow_mut().take() {
             // Called on the GL thread while its context is still current.
             renderer.painter.destroy();
+        }
+    });
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeFocus")]
+pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jboolean) {
+    RENDERER.with(|cell| {
+        if let Some(renderer) = cell.borrow_mut().as_mut() {
+            let model = renderer.app.model.as_mut().unwrap();
+            model.focus = granted != 0;
+            if !model.focus && model.real_audio() {
+                model.command(Command::Pause);
+                model.notice =
+                    "Audio en pausa: foco no disponible o aplicación en segundo plano.".into();
+            } else if let Some(engine) = &model.audio {
+                engine.set_playing(model.needs_focus() && model.focus);
+            }
         }
     });
 }

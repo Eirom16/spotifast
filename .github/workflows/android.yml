@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -76,7 +76,7 @@ jobs:
       - name: Native UI libraries and isolated graphical QA
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev xvfb xauth xdotool imagemagick
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick
       - name: Host tests and lint, without the Spotifast dependency tree
         run: |
           cargo fmt --all --check
@@ -94,6 +94,8 @@ jobs:
           mkdir -p target/native-dist/licenses
           cp assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           cp assets/doremi/PROVENANCE.md target/native-dist/licenses/
+          cp assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
+          cp assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
           python3 scripts/native-manifest.py target/native-dist/doremi-app target/native-dist/manifest.json
           git rev-parse HEAD > target/native-dist/SOURCE_COMMIT
           cd target/native-dist

@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-files=subprocess.check_output(['git','ls-files','-z','Cargo.toml','Cargo.lock','rust-toolchain.toml','.cargo','assets/doremi','scripts/build-android.sh','scripts/android-native-identity.py','crates/doremi-app','crates/doremi-core','crates/doremi-library'],text=True).split('\0')
+files=subprocess.check_output(['git','ls-files','-z','Cargo.toml','Cargo.lock','rust-toolchain.toml','.cargo','assets/doremi','assets/audio','scripts/build-android.sh','scripts/android-native-identity.py','crates/doremi-app','crates/doremi-core','crates/doremi-library','crates/doremi-player'],text=True).split('\0')
 digest=hashlib.sha256()
 for name in sorted(filter(None,files)):
     digest.update(name.encode()+b'\0'+Path(name).read_bytes()+b'\0')

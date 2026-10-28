@@ -1,0 +1,18 @@
+{
+  "license": "CC0-1.0",
+  "origin": "Original mathematical synthesis by the Doremi development project. No recordings or third-party music.",
+  "sample_rate": 48000,
+  "duration_ms": 8000,
+  "files": [
+    {
+      "file": "scale.wav",
+      "sha256": "63aa41e98d3ff67982e2b56bb782df1f8ce151ae0f46666b32e761a81c24994d",
+      "bytes": 768044
+    },
+    {
+      "file": "chord.wav",
+      "sha256": "64312482dac0eb3c9887a838d43f6e2d7faa0654274c1a099a11bcde69d9a0eb",
+      "bytes": 768044
+    }
+  ]
+}

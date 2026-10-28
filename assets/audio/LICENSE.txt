@@ -1,0 +1,9 @@
+Doremi original test tones, 2026.
+
+These fixtures are generated exclusively by scripts/generate-audio-fixtures.py
+using mathematical oscillators. They contain no recordings or samples from
+third-party music. To the extent rights exist, the project dedicates these
+fixtures to the public domain under CC0 1.0 Universal:
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The generator source remains covered by the repository's MIT license.

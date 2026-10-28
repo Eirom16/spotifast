@@ -17,6 +17,8 @@ cp target/android-jni/native-source.json target/android-assets/
 cp LICENSE target/android-assets/licenses/MIT.txt
 cp assets/doremi/LICENSE target/android-assets/licenses/Doremi-assets-GPL-3.txt
 cp assets/doremi/PROVENANCE.md target/android-assets/licenses/
+cp assets/audio/LICENSE.txt target/android-assets/licenses/Audio-CC0.txt
+cp assets/audio/manifest.json target/android-assets/licenses/Audio-manifest.json
 git rev-parse HEAD > target/android-assets/SOURCE_COMMIT
 gradle -p android --no-daemon assembleDebug assembleDebugAndroidTest
 cp target/android-gradle/app/outputs/apk/debug/*.apk target/android-dist/

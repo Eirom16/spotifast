@@ -2,29 +2,47 @@
 use doremi_core::{
     catalog::{Capabilities, Catalog, ProviderCommand, ProviderEvent, Tick},
     media::{Media, MediaId, ProviderId},
-    queue::{Command, Effect, Event, Order, Queue, Repeat},
+    queue::{Command, Effect, Event, Order, Playback, Queue, Repeat},
     requests::SessionId,
 };
 #[cfg(target_os = "android")]
 mod android_native;
 use doremi_library as persistence;
+use doremi_player::{Builtin, Engine, EngineError, EngineEvent};
+use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::Mutex, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::Mutex,
+    time::{Duration, Instant},
+};
 
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
 const GAP: f32 = 8.0;
 static RETAINED: Mutex<Option<Retained>> = Mutex::new(None);
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 struct Preferences {
     schema: u32,
     green: bool,
     light: bool,
     library: Vec<String>,
+    volume: f32,
 }
 
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            schema: 1,
+            green: false,
+            light: false,
+            library: vec![],
+            volume: 0.7,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 enum Page {
     #[default]
@@ -47,6 +65,8 @@ struct Model {
     write_prefs: bool,
     write_queue: bool,
     storage_warning: Option<&'static str>,
+    audio: Option<Engine>,
+    focus: bool,
 }
 
 fn songs() -> Vec<Media> {
@@ -62,6 +82,7 @@ fn songs() -> Vec<Media> {
         title: title.into(),
         duration_ms: Some(30_000),
     })
+    .chain([Builtin::Scale.media(), Builtin::Chord.media()])
     .collect()
 }
 
@@ -88,6 +109,8 @@ impl Model {
             write_prefs: true,
             write_queue: true,
             storage_warning: None,
+            audio: None,
+            focus: !cfg!(target_os = "android"),
         }
     }
     fn load(directory: &std::path::Path) -> Self {
@@ -96,6 +119,11 @@ impl Model {
             Ok(Some(bytes)) => match serde_json::from_slice::<Preferences>(&bytes) {
                 Ok(mut prefs) if prefs.schema <= 1 => {
                     prefs.schema = 1;
+                    prefs.volume = if prefs.volume.is_finite() {
+                        prefs.volume.clamp(0.0, 1.0)
+                    } else {
+                        0.7
+                    };
                     model.prefs = prefs;
                 }
                 _ => {
@@ -122,7 +150,7 @@ impl Model {
                     .map_err(|_| persistence::Error::InvalidQueue)
             }) {
                 Ok(_) => {
-                    model.notice = "Sesión restaurada en pausa. Demostración sin audio.".into();
+                    model.notice = "Sesión restaurada en pausa.".into();
                 }
                 Err(_) => {
                     model.write_queue = false;
@@ -155,13 +183,128 @@ impl Model {
         }
         self.revision += 1;
     }
-    fn effects(&mut self, effects: Vec<Effect>) {
-        // Fake transport is explicit. It never claims to produce sound.
-        for effect in effects {
-            if let Effect::Load { request, .. } = effect {
-                let _ = self.queue.event(Event::Ready(request));
+    fn enable_audio(&mut self) {
+        if self.audio.is_none() {
+            match Engine::new() {
+                Ok(engine) => {
+                    engine.set_volume(self.prefs.volume);
+                    self.audio = Some(engine);
+                }
+                Err(_) => self.notice = "No se pudo iniciar el worker de audio.".into(),
             }
         }
+    }
+    fn real_audio(&self) -> bool {
+        self.queue
+            .current()
+            .is_some_and(|entry| Builtin::from_media(&entry.media.id).is_some())
+    }
+    #[cfg(target_os = "android")]
+    fn needs_focus(&self) -> bool {
+        self.real_audio() && self.queue.playback() == Playback::Playing
+    }
+    fn event(&mut self, event: Event) {
+        match self.queue.event(event) {
+            Ok(effects) => self.effects(effects),
+            Err(error) => self.notice = format!("Audio: {error:?}"),
+        }
+    }
+    fn effects(&mut self, effects: Vec<Effect>) {
+        for effect in effects {
+            match effect {
+                Effect::Load {
+                    request,
+                    entry,
+                    position_ms,
+                    ..
+                } => {
+                    if let Some(builtin) = Builtin::from_media(&entry.media.id) {
+                        let result = self
+                            .audio
+                            .as_mut()
+                            .ok_or(EngineError::Closed)
+                            .and_then(|engine| engine.load(request, builtin, position_ms));
+                        match result {
+                            Ok(()) => self.notice = "Preparando audio local original…".into(),
+                            Err(error) => {
+                                self.notice = format!("No se pudo preparar el audio: {error:?}");
+                                self.event(Event::Failed(request));
+                            }
+                        }
+                    } else if songs().iter().any(|s| s.id == entry.media.id) {
+                        if let Some(engine) = self.audio.as_mut() {
+                            engine.cancel();
+                        }
+                        self.notice = "Demostración sin audio. No es reproducción real.".into();
+                        self.event(Event::Ready(request));
+                    } else {
+                        self.notice = "Fuente no disponible en esta versión.".into();
+                        self.event(Event::Failed(request));
+                    }
+                }
+                Effect::Cancel(request) => {
+                    if let Some(engine) = self.audio.as_mut()
+                        && engine.current_request() == Some(request)
+                    {
+                        engine.cancel();
+                    }
+                }
+                Effect::SetPlaying(playing) => {
+                    if let Some(engine) = &self.audio {
+                        engine.set_playing(playing && self.focus);
+                    }
+                }
+                Effect::Stop => {
+                    if let Some(engine) = self.audio.as_mut() {
+                        engine.cancel();
+                    }
+                }
+                Effect::ReadAppend(_) => {}
+            }
+        }
+    }
+    fn poll_audio(&mut self) {
+        let event = self.audio.as_ref().and_then(Engine::poll);
+        if let Some(event) = event {
+            let request = match event {
+                EngineEvent::Ready(r) | EngineEvent::Failed(r, _) | EngineEvent::Ended(r) => r,
+            };
+            if self.audio.as_ref().and_then(Engine::current_request) == Some(request) {
+                match event {
+                    EngineEvent::Ready(r) => {
+                        self.notice = "Audio local original · CC0 · 8 segundos".into();
+                        self.event(Event::Ready(r));
+                    }
+                    EngineEvent::Ended(r) => self.event(Event::Ended(r)),
+                    EngineEvent::Failed(r, error) => {
+                        self.notice = format!("La salida de audio falló: {error:?}");
+                        self.event(Event::Failed(r));
+                    }
+                }
+                self.revision += 1;
+            }
+        }
+        if let Some(engine) = &self.audio
+            && let Some(request) = engine.current_request()
+            && let Some(metrics) = engine.metrics()
+        {
+            let _ = self.queue.event(Event::Position {
+                request,
+                position_ms: metrics.position_ms,
+            });
+        }
+    }
+    fn start_context(&mut self, rows: Vec<Media>, start: usize) {
+        let order = if self.queue.shuffled() {
+            shuffled(rows.len(), Some(start))
+        } else {
+            Order::Sequential
+        };
+        self.command(Command::StartContext {
+            media: rows,
+            start,
+            order,
+        });
     }
     fn search(&mut self) {
         if self.query.trim().is_empty() {
@@ -194,6 +337,17 @@ impl Model {
         }
         self.revision += 1;
     }
+}
+
+fn shuffled(length: usize, first: Option<usize>) -> Order {
+    let mut indices: Vec<_> = (0..length).collect();
+    indices.shuffle(&mut rand::rng());
+    if let Some(first) = first
+        && let Some(index) = indices.iter().position(|value| *value == first)
+    {
+        indices.swap(0, index);
+    }
+    Order::Shuffled(indices)
 }
 
 #[derive(Serialize)]
@@ -233,6 +387,9 @@ pub struct DoremiApp {
     logo: egui::TextureHandle,
     saved_state: Vec<u8>,
     pending: bool,
+    last_persist: Instant,
+    last_queue_persist: Instant,
+    saved_revision: u64,
 }
 
 impl DoremiApp {
@@ -243,13 +400,14 @@ impl DoremiApp {
 
     pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
         let retained = RETAINED.lock().unwrap().take();
-        let (model, writer) = if let Some(retained) = retained {
+        let (mut model, writer) = if let Some(retained) = retained {
             (retained.model, retained.writer)
         } else {
             // Startup reads precede drawing. The writer does all durable I/O.
             let model = Model::load(&directory);
             (model, persistence::Writer::new(directory))
         };
+        model.enable_audio();
         let image = image::load_from_memory(include_bytes!("../../../assets/doremi/Doremi.png"))
             .unwrap()
             .to_rgba8();
@@ -274,6 +432,9 @@ impl DoremiApp {
             logo,
             saved_state: vec![],
             pending: true,
+            last_persist: Instant::now(),
+            last_queue_persist: Instant::now(),
+            saved_revision: u64::MAX,
         }
     }
     fn button(&mut self, ui: &mut egui::Ui, name: &str, label: &str, width: f32) -> bool {
@@ -290,11 +451,15 @@ impl DoremiApp {
         response.clicked()
     }
     fn rows(&mut self, ui: &mut egui::Ui, rows: Vec<Media>) {
-        for media in &rows {
+        for (start, media) in rows.iter().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width((ui.available_width() - 4.0).max(0.0));
                 ui.label(egui::RichText::new(&media.title).strong());
-                ui.small(format!("demo:{} · 0:30 · sin audio", media.id.local()));
+                ui.small(if Builtin::from_media(&media.id).is_some() {
+                    "Audio local original · 0:08 · CC0".into()
+                } else {
+                    format!("demo:{} · 0:30 · sin audio", media.id.local())
+                });
                 ui.horizontal_wrapped(|ui| {
                     if self.button(
                         ui,
@@ -302,12 +467,10 @@ impl DoremiApp {
                         "Seleccionar",
                         118.0,
                     ) {
-                        let start = rows.iter().position(|s| s.id == media.id).unwrap();
-                        self.model.as_mut().unwrap().command(Command::StartContext {
-                            media: rows.clone(),
-                            start,
-                            order: Order::Sequential,
-                        });
+                        self.model
+                            .as_mut()
+                            .unwrap()
+                            .start_context(rows.clone(), start);
                         self.model.as_mut().unwrap().page = Page::Player;
                     }
                     if self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0) {
@@ -343,6 +506,14 @@ impl DoremiApp {
             }
         }
         let model = self.model.as_ref().unwrap();
+        let urgent = self.saved_revision != model.revision;
+        if !self.pending && !urgent && self.last_persist.elapsed() < Duration::from_millis(250) {
+            return;
+        }
+        let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
+            "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
+            "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,
+        }));
         let state = serde_json::json!({
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
@@ -352,7 +523,7 @@ impl DoremiApp {
             "position_ms":model.queue.position_ms(),
             "manual": model.queue.manual().iter().map(|e| e.media.id.local()).collect::<Vec<_>>(),
             "upcoming": model.queue.upcoming().map(|e| e.media.id.local()).collect::<Vec<_>>(),
-            "playback": format!("{:?}", model.queue.playback()), "audio": false,
+            "playback": format!("{:?}", model.queue.playback()), "audio": model.real_audio(), "audio_metrics": audio_metrics, "volume": model.prefs.volume, "focus":model.focus,
             "repeat": format!("{:?}", model.queue.repeat()), "shuffle": model.queue.shuffled(),
             "library": model.prefs.library, "controls": self.controls,
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
@@ -361,7 +532,9 @@ impl DoremiApp {
         if !self.pending && self.saved_state == state {
             return;
         }
-        let queue = if model.write_queue {
+        let write_queue = model.write_queue
+            && (urgent || self.last_queue_persist.elapsed() >= Duration::from_secs(2));
+        let queue = if write_queue {
             match persistence::encode(&model.queue) {
                 Ok(bytes) => {
                     if self.storage_error == Some(StorageError::Encoding) {
@@ -388,6 +561,11 @@ impl DoremiApp {
         {
             Ok(id) => {
                 self.pending = false;
+                self.last_persist = Instant::now();
+                if write_queue {
+                    self.last_queue_persist = self.last_persist;
+                }
+                self.saved_revision = model.revision;
                 self.pending_write = id;
                 self.saved_state = state;
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -409,6 +587,13 @@ impl DoremiApp {
 impl DoremiApp {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        self.model.as_mut().unwrap().poll_audio();
+        let model = self.model.as_ref().unwrap();
+        if model.queue.playback() == Playback::Loading
+            || (model.real_audio() && model.queue.playback() == Playback::Playing)
+        {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
         self.controls.clear();
         let prefs = &self.model.as_ref().unwrap().prefs;
         let accent = if prefs.green {
@@ -468,6 +653,11 @@ impl DoremiApp {
                         if self.model.as_ref().unwrap().queue.current().is_some() && self.button(ui,"player","Abrir reproductor",220.0) {
                             let model=self.model.as_mut().unwrap();model.page=Page::Player;model.revision+=1;
                         }
+                        if self.button(ui,"local-audio","Probar audio original",240.0) {
+                            let model=self.model.as_mut().unwrap();
+                            model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);
+                            model.page=Page::Player;
+                        }
                         self.rows(ui,songs());
                     }
                     Page::Search => {
@@ -520,20 +710,36 @@ impl DoremiApp {
                         });
                         ui.label("Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales.");
                     }
-                    Page::Player => { ui.heading("Reproducción de demostración"); ui.label("Simulación de controles. Esta versión no produce audio."); }
+                    Page::Player => {
+                        if self.model.as_ref().unwrap().real_audio() {
+                            ui.heading("Audio local"); ui.label("Muestras originales de Doremi · CC0");
+                            #[cfg(target_os = "android")]
+                            ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
+                            let model = self.model.as_mut().unwrap();
+                            let duration = model.queue.current().and_then(|e|e.media.duration_ms).unwrap_or(0);
+                            let mut position = model.queue.position_ms();
+                            ui.label(format!("{}:{:02} / {}:{:02}",position/60000,position/1000%60,duration/60000,duration/1000%60));
+                            let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut position,0..=duration).text("Posición").show_value(false));
+                            self.controls.push(Control{name:"seek".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
+                            if response.changed() { model.command(Command::Seek(position)); }
+                            let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut model.prefs.volume,0.0..=1.0).text("Volumen").show_value(false));
+                            self.controls.push(Control{name:"volume".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
+                            if response.changed() { if let Some(engine)=&model.audio {engine.set_volume(model.prefs.volume);} model.revision+=1; }
+                        } else { ui.heading("Reproducción de demostración"); ui.label("Simulación de controles. Esta selección no produce audio."); }
+                    }
                 }
                 ui.separator();
                 let title = self.model.as_ref().unwrap().queue.current().map(|e| e.media.title.clone()).unwrap_or_else(|| "Ninguna canción seleccionada".into());
                 ui.strong(title);
                 ui.horizontal_wrapped(|ui| {
-                    for (name,label,command) in [("previous","Anterior",Command::Previous),("pause","Pausa",Command::Pause),("play","Play demo",Command::Play),("next","Siguiente",Command::Next),("stop","Cancelar",Command::Cancel)] {
+                    for (name,label,command) in [("previous","Anterior",Command::Previous),("pause","Pausa",Command::Pause),("play",if self.model.as_ref().unwrap().real_audio() {"Play"} else {"Play demo"},Command::Play),("next","Siguiente",Command::Next),("stop","Cancelar",Command::Cancel)] {
                         if self.button(ui,name,label,100.0) { self.model.as_mut().unwrap().command(command); }
                     }
                 });
                 ui.horizontal_wrapped(|ui| {
                     if self.button(ui,"shuffle","Shuffle",110.0) {
                         let queue = &self.model.as_ref().unwrap().queue;
-                        let order = if queue.shuffled() { Order::Sequential } else { Order::Shuffled((0..queue.context().len()).rev().collect()) };
+                        let order = if queue.shuffled() { Order::Sequential } else { shuffled(queue.context().len(), queue.current().and_then(|current|queue.context().iter().position(|entry|entry.id==current.id))) };
                         self.model.as_mut().unwrap().command(Command::SetOrder(order));
                     }
                     if self.button(ui,"repeat","Repeat",110.0) {
@@ -542,7 +748,7 @@ impl DoremiApp {
                     }
                 });
                 let model = self.model.as_ref().unwrap();
-                ui.label(format!("Estado demo: {:?} · Repeat {:?} · Shuffle {}",model.queue.playback(),model.queue.repeat(),model.queue.shuffled()));
+                ui.label(format!("Estado: {:?} · Repeat {:?} · Shuffle {}",model.queue.playback(),model.queue.repeat(),model.queue.shuffled()));
                 ui.small(&model.notice);
 
             });
@@ -615,6 +821,41 @@ mod tests {
         model.command(Command::Restore(Box::new(snapshot)));
         assert_eq!(model.queue.current().unwrap().media.id.local(), "rain");
         assert_eq!(model.queue.playback(), Playback::Paused);
+    }
+    #[test]
+    fn duplicate_context_selection_and_shuffle_keep_occurrence_identity() {
+        let mut model = Model::new(Preferences::default());
+        let rows = vec![songs()[0].clone(), songs()[0].clone(), songs()[1].clone()];
+        model.command(Command::SetOrder(Order::Shuffled(vec![])));
+        model.start_context(rows, 1);
+        assert_eq!(
+            model.queue.current().unwrap().id,
+            model.queue.context()[1].id
+        );
+        assert_ne!(
+            model.queue.current().unwrap().id,
+            model.queue.context()[0].id
+        );
+        assert!(model.queue.shuffled());
+        let mut ids = model.queue.upcoming().map(|e| e.id).collect::<Vec<_>>();
+        ids.push(model.queue.current().unwrap().id);
+        ids.sort_by_key(|id| id.as_u64());
+        ids.dedup();
+        assert_eq!(ids.len(), 3);
+    }
+    #[test]
+    fn unavailable_sources_and_missing_output_never_become_fake_playback() {
+        let mut model = Model::new(Preferences::default());
+        let media = Media {
+            id: MediaId::new(ProviderId::new("unavailable").unwrap(), "track").unwrap(),
+            title: "Unavailable".into(),
+            duration_ms: None,
+        };
+        model.start_context(vec![media], 0);
+        assert_eq!(model.queue.playback(), Playback::Failed);
+        model.start_context(vec![Builtin::Scale.media()], 0);
+        assert_eq!(model.queue.playback(), Playback::Failed);
+        assert!(model.notice.contains("Closed"));
     }
     #[test]
     fn touch_navigation_fits_phone_and_landscape_in_both_themes() {

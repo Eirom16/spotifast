@@ -26,7 +26,14 @@ paused after process death. Unknown or corrupt files are preserved with a
 visible warning. The codec and bounded disk worker are shared in
 `doremi-library`; the pure reducer validates occurrence identities before
 accepting a checkpoint. Manual queues are bounded to 4096 entries and JSON
-files to 1 MiB. Real audio remains the next gate.
+files to 1 MiB. The local-audio slice adds two original 8-second PCM16/WAV tones (CC0).
+`doremi-player` decodes on its worker into a hard-capped immutable PCM buffer;
+the native CPAL callback only reads samples/atomics. Play/Pause/seek/volume
+and end-of-track use the same queue reducer. The four mock songs stay silent.
+This implementation is pending CI and physical output validation.
+Android requests music audio focus before enabling output, pauses on focus
+loss/noisy route, and pauses on background. MediaSession/background playback
+is a later gate. Focus follows the [Android platform guidance](https://developer.android.com/media/optimize/audio-focus).
 `qa-state.json` contains this demo's state and control bounds for ADB testing.
 No screenshots/logs belong in Git.
 
