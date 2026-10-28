@@ -1,3 +1,7 @@
+> Doremi Android: host de desarrollo independiente en [`android/`](android/README.md).
+> Estado y evidencia del objetivo: [`DOREMI-GOAL-REPORT.md`](DOREMI-GOAL-REPORT.md).
+> El catálogo inicial es una demostración sin audio. La Preview Linux se conserva.
+
 # Doremi
 
 Reproductor musical nativo en Rust, en migración desde

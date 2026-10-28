@@ -2,9 +2,9 @@ name: Doremi CI
 
 on:
   push:
-    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1", "feature/doremi-android-real"]
     # Recording evidence must not launch another complete build of unchanged code.
-    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md", "DOREMI-PREVIEW-REPORT.md"]
+    paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md", "DOREMI-PREVIEW-REPORT.md", "DOREMI-GOAL-REPORT.md"]
   pull_request:
   workflow_dispatch:
 
@@ -368,8 +368,34 @@ jobs:
           path: target/ci-reports/
           retention-days: 7
 
+  android-apk:
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      CARGO_TARGET_DIR: target/android-cargo
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+          cache-disabled: true
+      - run: rustup show active-toolchain
+      - name: Build both Android ABIs, test APK and verify packaging
+        run: bash scripts/build-android.sh
+      - uses: actions/upload-artifact@v6
+        with:
+          name: doremi-android-dev-${{ github.sha }}
+          path: target/android-dist/
+          if-no-files-found: error
+          retention-days: 7
   verified-artifacts:
-    needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux]
+    needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux, android-apk]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 10
