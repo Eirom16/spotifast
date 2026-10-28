@@ -544,7 +544,7 @@ impl DoremiApp {
                 let model = self.model.as_ref().unwrap();
                 ui.label(format!("Estado demo: {:?} · Repeat {:?} · Shuffle {}",model.queue.playback(),model.queue.repeat(),model.queue.shuffled()));
                 ui.small(&model.notice);
-                if let Some(error)=model.storage_warning.or(self.storage_error) { ui.colored_label(ui.visuals().error_fg_color,error); }
+
             });
         });
         self.persist(&ctx);
