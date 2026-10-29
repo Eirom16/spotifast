@@ -44,6 +44,7 @@ fn experiment(
         })
         .ok_or(ProviderError::InvalidRequest)?;
     let at = Instant::now();
+    eprintln!("phase=search");
     let wire = commons::search(&client, &request.query, request.limit)?;
     let results = Ok(wire.iter().map(|v| v.media.clone()).collect());
     let search_ms = at.elapsed().as_secs_f64() * 1000.0;
@@ -79,6 +80,7 @@ fn experiment(
         })
         .ok_or(ProviderError::InvalidRequest)?;
     let at = Instant::now();
+    eprintln!("phase=resolve");
     let info = if let Some(executable) = extractor {
         let info = wire
             .into_iter()
@@ -108,7 +110,7 @@ fn experiment(
         },
     )?;
     catalog.complete(
-        ProviderEvent::Resolved {
+        ProviderEvent::Resolve {
             ticket: request.ticket,
             result: Ok(resource),
         },
@@ -119,6 +121,7 @@ fn experiment(
     }
     let resource = catalog.resource().ok_or(ProviderError::Unavailable)?;
     let at = Instant::now();
+    eprintln!("phase=download");
     let mut response = client
         .get(resource.expose_uri())
         .send()
