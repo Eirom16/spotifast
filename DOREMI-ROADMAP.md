@@ -461,6 +461,14 @@ scopes, almacén, revocación y capacidades reales se aprobarán con evidencia
 oficial vigente antes de implementar. La entrega deberá demostrar datos
 realmente soportados y errores explícitos; no simular colecciones ausentes.
 
+Investigación posterior al primer corte P2:
+[`account-feasibility.md`](docs/doremi/account-feasibility.md) separa datos
+oficiales, capacidades Music no oficiales, políticas y fronteras de seguridad.
+La guía Google vigente excluye custom schemes Android y loopback móvil;
+el retorno Desktop con PKCE no se traslada automáticamente a Android.
+Se propone estudiar AuthorizationClient con tokens cortos en Android sin
+backend obligatorio. Login todavía no implementado ni probado con una cuenta.
+
 
 Validación de restauración P1: `ac1a2c4`, CI enfocada `40783624535`, APK instalada y probada en SM-J701M. Reinicio de proceso conserva identidades de duplicados, selección, orden, modos y posición en pausa. Unicode, recreación y rotación repetidos con instrumentación del mismo SHA. Evidencia y limitaciones en DOREMI-GOAL-REPORT.md. Siguiente corte activo: audio PCM local original; autenticación permanece posterior. CI completa del legado pendiente.
 
