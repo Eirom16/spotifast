@@ -28,7 +28,7 @@ import javax.microedition.khronos.opengles.GL10;
 /** Android EGL, touch, IME and lifecycle only. All music rules remain in Rust. */
 public final class MainActivity extends Activity {
     static { System.loadLibrary("doremi_app"); }
-    private static native boolean nativeInit(String directory,Context application);
+    private static native boolean nativeInit(String directory,Context application,long inputGeneration);
     private static native String nativeDraw(int width,int height,float scale);
     private static native void nativeTouch(int action,float x,float y);
     private static native void nativeText(String text,long generation);
@@ -139,7 +139,7 @@ public final class MainActivity extends Activity {
         public void onSurfaceChanged(GL10 gl,int w,int h) { width=w; height=h; }
         public void onDrawFrame(GL10 gl) {
             if(!ready) {
-                ready=nativeInit(getFilesDir().getAbsolutePath(),getApplicationContext());
+                ready=nativeInit(getFilesDir().getAbsolutePath(),getApplicationContext(),inputGeneration);
                 if(!ready) { runOnUiThread(() -> Toast.makeText(MainActivity.this,"No se pudo iniciar OpenGL de Doremi",Toast.LENGTH_LONG).show()); return; }
             }
             String output=nativeDraw(width,height,scale);

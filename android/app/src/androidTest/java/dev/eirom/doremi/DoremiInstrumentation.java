@@ -47,17 +47,30 @@ public final class DoremiInstrumentation extends Instrumentation {
         return null;
     }
     private void capture(String name) throws Exception {
-        final Bitmap[] image={null}; final int[] status={-1}; CountDownLatch copied=new CountDownLatch(1);
-        runOnMainSync(() -> {
-            SurfaceView view=surface(activity.getWindow().getDecorView());
-            if(view==null || view.getWidth()==0 || view.getHeight()==0) { copied.countDown(); return; }
-            image[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);
-            // Copy only Doremi's own EGL surface, never the launcher or another app.
-            PixelCopy.request(view,image[0],value -> { status[0]=value;copied.countDown(); },new Handler(Looper.getMainLooper()));
-        });
-        if(!copied.await(3,TimeUnit.SECONDS) || status[0]!=PixelCopy.SUCCESS) throw new AssertionError("Doremi surface capture failed: "+status[0]);
-        try(FileOutputStream file=new FileOutputStream(new File(getTargetContext().getFilesDir(),name+".png"))) { image[0].compress(Bitmap.CompressFormat.PNG,100,file); }
-        image[0].recycle();
+        long deadline=SystemClock.uptimeMillis()+4000;int lastStatus=-1;
+        do {
+            final Bitmap[] image={null};final int[] status={-1};CountDownLatch copied=new CountDownLatch(1);
+            runOnMainSync(() -> {
+                SurfaceView view=surface(activity.getWindow().getDecorView());
+                if(view==null || view.getWidth()==0 || view.getHeight()==0) {copied.countDown();return;}
+                image[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);
+                // State publication precedes EGL swap. After recreation the first
+                // own surface buffer can legitimately be unavailable briefly.
+                PixelCopy.request(view,image[0],value -> {status[0]=value;copied.countDown();},new Handler(Looper.getMainLooper()));
+            });
+            if(!copied.await(3,TimeUnit.SECONDS)) throw new AssertionError("Doremi capture timed out: "+name);
+            lastStatus=status[0];
+            if(lastStatus==PixelCopy.SUCCESS) {
+                try(FileOutputStream file=new FileOutputStream(new File(getTargetContext().getFilesDir(),name+".png"))) {image[0].compress(Bitmap.CompressFormat.PNG,100,file);}
+                image[0].recycle();
+                Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),state().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                return;
+            }
+            if(image[0]!=null) image[0].recycle();
+            if(lastStatus!=PixelCopy.ERROR_SOURCE_NO_DATA && lastStatus!=PixelCopy.ERROR_TIMEOUT) break;
+            SystemClock.sleep(120);
+        } while(SystemClock.uptimeMillis()<deadline);
+        throw new AssertionError("Doremi surface capture failed: "+name+" status="+lastStatus);
     }
     private void tap(String name) throws Exception {
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
@@ -86,6 +99,24 @@ public final class DoremiInstrumentation extends Instrumentation {
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendPointerSync(down);down.recycle();
         MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0);sendPointerSync(up);up.recycle();SystemClock.sleep(500);
+    }
+    private void backgroundInput() throws Exception {
+        tap("search");tap("query");text("Lluvia",true);
+        runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+        SystemClock.sleep(400);long before=state().getLong("instance");
+        runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(600);
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        until(s -> s.optLong("instance")!=before && s.optString("query").equals("Lluvia"));
+        tap("cancel-search");until(s -> s.optString("query").isEmpty());tap("query");
+        runOnMainSync(() -> {
+            InputConnection input=connection(activity.getWindow().getDecorView());
+            if(input==null || !input.commitText("X",1)) throw new AssertionError("InputConnection unavailable after resume");
+        });
+        // Deliberately do not clear the editor from the test. Cancel must have
+        // synchronized Android's editor, otherwise this becomes LluviaX.
+        until(s -> s.optString("query").equals("X"));capture("qa-input-background");
+        runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+        SystemClock.sleep(400);tap("cancel-search");
     }
     private void audio() throws Exception {
         tap("home");tap("local-audio");
@@ -194,8 +225,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             tap("next");until(s -> s.optString("current").equals("cafe"));
             tap("pause");until(s -> s.optString("playback").equals("Paused"));
             capture("qa-shared-queue-trace");
+            backgroundInput();
             audio();
-            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background\n");
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background\n");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable error) { result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result); }
     }

@@ -36,6 +36,7 @@ pub extern "system" fn native_init(
     _: JClass<'_>,
     directory: JString<'_>,
     context: JObject<'_>,
+    input_generation: jlong,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -90,7 +91,7 @@ pub extern "system" fn native_init(
             painter,
             events: vec![],
             started: Instant::now(),
-            text_generation: 0,
+            text_generation: input_generation,
         });
         1
     })
@@ -210,7 +211,13 @@ pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jbool
         if let Some(renderer) = cell.borrow_mut().as_mut() {
             let model = renderer.app.model.as_mut().unwrap();
             model.focus = granted != 0;
-            if !model.focus && model.real_audio() {
+            if !model.focus
+                && model.real_audio()
+                && matches!(
+                    model.queue.playback(),
+                    Playback::Playing | Playback::Loading
+                )
+            {
                 model.command(Command::Pause);
                 model.notice =
                     "Audio en pausa: foco no disponible o aplicación en segundo plano.".into();
