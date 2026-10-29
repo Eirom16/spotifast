@@ -46,7 +46,18 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { SurfaceView found=surface(group.getChildAt(i));if(found!=null) return found; } }
         return null;
     }
+    private void foreground() throws Exception {
+        long deadline=SystemClock.uptimeMillis()+6000;
+        do {
+            final boolean[] focused={false};
+            runOnMainSync(() -> focused[0]=!activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus() && activity.getWindow().getDecorView().isShown());
+            if(focused[0]) {waitForIdleSync();return;}
+            SystemClock.sleep(80);
+        } while(SystemClock.uptimeMillis()<deadline);
+        throw new AssertionError("Doremi did not regain window focus; no input injected");
+    }
     private void capture(String name) throws Exception {
+        foreground();
         long deadline=SystemClock.uptimeMillis()+4000;int lastStatus=-1;
         do {
             final Bitmap[] image={null};final int[] status={-1};CountDownLatch copied=new CountDownLatch(1);
@@ -73,6 +84,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         throw new AssertionError("Doremi surface capture failed: "+name+" status="+lastStatus);
     }
     private void tap(String name) throws Exception {
+        foreground();
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
         for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
         if(rect==null) throw new AssertionError("Missing control: "+name);
@@ -87,6 +99,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(500);
     }
     private void slide(String name,float fraction) throws Exception {
+        foreground();
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
         for(int i=0;i<controls.length();i++) {JSONObject c=controls.getJSONObject(i);if(name.equals(c.getString("name"))) rect=c.getJSONArray("rect");}
         if(rect==null) throw new AssertionError("Missing slider: "+name);
