@@ -159,6 +159,11 @@ public final class DoremiInstrumentation extends Instrumentation {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
+            // Existing development data is retained. Normalize modes through controls.
+            tap("search");tap("cancel-search");
+            if(state().optBoolean("shuffle")) tap("shuffle");
+            while(!state().optString("repeat").equals("Off")) tap("repeat");
+            tap("home");
             tap("add:dawn");tap("add:dawn");tap("select:rain");
             until(s -> s.optString("current").equals("rain") && s.optJSONArray("manual").length()==2);
             tap("search");tap("query");

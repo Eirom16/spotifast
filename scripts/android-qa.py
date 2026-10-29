@@ -120,6 +120,8 @@ def main():
     page('home','Home'); tap('select:dawn')
     wait_for(lambda s:s['page']=='Player' and s['current']=='dawn'); capture('player')
     tap('pause'); wait_for(lambda s:s['playback']=='Paused')
+    if state()['shuffle']: tap('shuffle')
+    while state()['repeat']!='Off': tap('repeat')
     tap('next'); wait_for(lambda s:s['current']=='rain')
     tap('previous'); wait_for(lambda s:s['current']=='dawn')
     tap('shuffle'); wait_for(lambda s:s['shuffle'])

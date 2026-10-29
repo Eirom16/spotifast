@@ -87,7 +87,6 @@ jobs:
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: |
-          xvfb-run -a -s '-screen 0 1440x1000x24' python3 scripts/native-qa.py target/native-cargo/debug/doremi-app target/native-qa
           mkdir -p target/native-dist
           cp target/native-cargo/debug/doremi-app target/native-dist/
           cp LICENSE target/native-dist/
@@ -98,8 +97,11 @@ jobs:
           cp assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
           python3 scripts/native-manifest.py target/native-dist/doremi-app target/native-dist/manifest.json
           git rev-parse HEAD > target/native-dist/SOURCE_COMMIT
-          cd target/native-dist
-          find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          (
+            cd target/native-dist
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+          xvfb-run -a -s '-screen 0 1440x1000x24' python3 scripts/native-qa.py target/native-cargo/debug/doremi-app target/native-qa
       - uses: actions/upload-artifact@v6
         if: always()
         with:

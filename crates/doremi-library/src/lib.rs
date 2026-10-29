@@ -198,6 +198,18 @@ struct Write {
     queue: Option<Vec<u8>>,
     state: Vec<u8>,
 }
+impl Write {
+    fn supersede(self, mut newer: Self) -> Self {
+        // An omitted document means unchanged, not cancellation of an older save.
+        if newer.prefs.is_none() {
+            newer.prefs = self.prefs;
+        }
+        if newer.queue.is_none() {
+            newer.queue = self.queue;
+        }
+        newer
+    }
+}
 pub struct Writer {
     sender: mpsc::SyncSender<Write>,
     worker: std::thread::JoinHandle<()>,
@@ -217,7 +229,7 @@ impl Writer {
             let mut previous = std::collections::BTreeMap::new();
             while let Ok(mut write) = receiver.recv() {
                 while let Ok(newer) = receiver.try_recv() {
-                    write = newer;
+                    write = write.supersede(newer);
                 }
                 let mut failed = false;
                 for (name, bytes) in [
@@ -231,7 +243,7 @@ impl Writer {
                     if previous.get(name) == Some(&bytes) {
                         continue;
                     }
-                    match atomic_write(&directory, name, &bytes) {
+                    match atomic_write(&directory, name, &bytes, name != "qa-state.json") {
                         Ok(()) => {
                             previous.insert(name, bytes);
                         }
@@ -284,17 +296,21 @@ impl Writer {
         let _ = self.worker.join();
     }
 }
-fn atomic_write(directory: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
+fn atomic_write(directory: &Path, name: &str, bytes: &[u8], durable: bool) -> std::io::Result<()> {
     use std::io::Write;
     std::fs::create_dir_all(directory)?;
     let path = directory.join(name);
     let temporary = path.with_extension("tmp");
     let mut file = std::fs::File::create(&temporary)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    if durable {
+        file.sync_all()?;
+    }
     std::fs::rename(temporary, path)?;
     #[cfg(unix)]
-    std::fs::File::open(directory)?.sync_all()?;
+    if durable {
+        std::fs::File::open(directory)?.sync_all()?;
+    }
     Ok(())
 }
 pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
@@ -316,6 +332,35 @@ pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
 #[cfg(test)]
 mod storage_tests {
     use super::*;
+    #[test]
+    fn newer_diagnostics_cannot_discard_an_accepted_queue_save() {
+        let save = Write {
+            id: 1,
+            prefs: Some(vec![1]),
+            queue: Some(vec![2]),
+            state: vec![3],
+        };
+        let diagnostics = Write {
+            id: 2,
+            prefs: None,
+            queue: None,
+            state: vec![4],
+        };
+        let merged = save.supersede(diagnostics);
+        assert_eq!(merged.id, 2);
+        assert_eq!(merged.prefs, Some(vec![1]));
+        assert_eq!(merged.queue, Some(vec![2]));
+        assert_eq!(merged.state, vec![4]);
+        let update = Write {
+            id: 3,
+            prefs: Some(vec![5]),
+            queue: Some(vec![6]),
+            state: vec![7],
+        };
+        let merged = merged.supersede(update);
+        assert_eq!(merged.prefs, Some(vec![5]));
+        assert_eq!(merged.queue, Some(vec![6]));
+    }
     fn directory(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../../target")

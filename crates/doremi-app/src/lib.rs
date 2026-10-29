@@ -350,7 +350,7 @@ fn shuffled(length: usize, first: Option<usize>) -> Order {
     Order::Shuffled(indices)
 }
 
-#[derive(Serialize)]
+#[derive(Clone, PartialEq, Serialize)]
 struct Control {
     name: String,
     rect: [f32; 4],
@@ -390,6 +390,7 @@ pub struct DoremiApp {
     last_persist: Instant,
     last_queue_persist: Instant,
     saved_revision: u64,
+    saved_controls: Vec<Control>,
 }
 
 impl DoremiApp {
@@ -435,6 +436,7 @@ impl DoremiApp {
             last_persist: Instant::now(),
             last_queue_persist: Instant::now(),
             saved_revision: u64::MAX,
+            saved_controls: vec![],
         }
     }
     fn button(&mut self, ui: &mut egui::Ui, name: &str, label: &str, width: f32) -> bool {
@@ -506,8 +508,11 @@ impl DoremiApp {
             }
         }
         let model = self.model.as_ref().unwrap();
-        let urgent = self.saved_revision != model.revision;
+        let urgent = self.saved_revision != model.revision || self.saved_controls != self.controls;
         if !self.pending && !urgent && self.last_persist.elapsed() < Duration::from_millis(250) {
+            ctx.request_repaint_after(
+                Duration::from_millis(250).saturating_sub(self.last_persist.elapsed()),
+            );
             return;
         }
         let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
@@ -566,6 +571,7 @@ impl DoremiApp {
                     self.last_queue_persist = self.last_persist;
                 }
                 self.saved_revision = model.revision;
+                self.saved_controls = self.controls.clone();
                 self.pending_write = id;
                 self.saved_state = state;
                 ctx.request_repaint_after(Duration::from_millis(50));
@@ -589,10 +595,11 @@ impl DoremiApp {
         let ctx = ui.ctx().clone();
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
-        if model.queue.playback() == Playback::Loading
-            || (model.real_audio() && model.queue.playback() == Playback::Playing)
-        {
+        if model.queue.playback() == Playback::Loading {
             ctx.request_repaint_after(Duration::from_millis(50));
+        } else if model.real_audio() && model.queue.playback() == Playback::Playing {
+            // Audio runs independently. The position label needs only 5 updates/s.
+            ctx.request_repaint_after(Duration::from_millis(200));
         }
         self.controls.clear();
         let prefs = &self.model.as_ref().unwrap().prefs;
@@ -945,6 +952,80 @@ mod tests {
         model.start_context(vec![Builtin::Scale.media()], 0);
         assert_eq!(model.queue.playback(), Playback::Failed);
         assert!(model.notice.contains("Closed"));
+    }
+    #[test]
+    fn diagnostics_publish_new_page_geometry_before_the_audio_throttle() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-geometry-test");
+        let ctx = egui::Context::default();
+        DoremiApp::shutdown();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.model.as_mut().unwrap().page = Page::Home;
+        let input = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(384.0, 614.0),
+            )),
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+        // Emulate an intent applied after drawing Home: the first publication
+        // names Player, but still carries Home's controls from that frame.
+        app.model.as_mut().unwrap().page = Page::Player;
+        app.model.as_mut().unwrap().revision += 1;
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app
+            .writer
+            .as_ref()
+            .unwrap()
+            .completed(app.pending_write)
+            .is_none()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Diagnostic worker failed to acknowledge"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        app.persist(&ctx);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while app
+            .writer
+            .as_ref()
+            .unwrap()
+            .completed(app.pending_write)
+            .is_none()
+        {
+            assert!(
+                Instant::now() < deadline,
+                "Diagnostic worker failed to acknowledge"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        app.last_persist = Instant::now();
+        let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+        let state: serde_json::Value = serde_json::from_slice(&app.saved_state).unwrap();
+        let pause = state["controls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "pause")
+            .unwrap();
+        assert!(
+            pause["rect"][3].as_f64().unwrap() < 550.0,
+            "Published controls must belong to the visible Player page"
+        );
+        assert!(
+            !state["controls"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["name"] == "select:dawn")
+        );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
     }
     #[test]
     fn touch_navigation_fits_phone_and_landscape_in_both_themes() {
