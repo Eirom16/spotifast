@@ -38,6 +38,8 @@ impl From<RoutingError> for ProviderError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioFormat {
     WavPcm16,
+    /// Explicit container/codec pair used by the authorized live provider probe.
+    OggVorbis,
     AacMp4,
     OpusWebm,
     Flac,

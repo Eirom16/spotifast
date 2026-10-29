@@ -1,0 +1,63 @@
+name: Doremi bounded provider experiment
+
+on:
+  push:
+    branches: ["feature/doremi-android-real"]
+    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doremi-provider-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TARGET_DIR: target/provider-cargo
+  CARGO_BUILD_JOBS: "2"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_INCREMENTAL: "0"
+  RUSTUP_HOME: ${{ github.workspace }}/target/rustup
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - name: Offline policy tests and build; no requests to media providers in CI
+        run: |
+          cargo fmt --all --check
+          cargo test --locked -p doremi-core -p doremi-provider-live-probe
+          cargo clippy --locked -p doremi-provider-live-probe --all-targets -- -D warnings
+          cargo build --locked -p doremi-provider-live-probe
+      - name: Identify source, executable and audited corpus
+        run: |
+          mkdir -p target/provider-dist/licenses
+          cp target/provider-cargo/debug/doremi-provider-live-probe target/provider-dist/
+          cp tools/provider-live-probe/corpus.json tools/provider-live-probe/README.md target/provider-dist/
+          cp LICENSE target/provider-dist/licenses/
+          cp docs/doremi/dependencies.md target/provider-dist/licenses/
+          python3 - <<'PY'
+          import hashlib, json, os, subprocess
+          from pathlib import Path
+          output = Path('target/provider-dist')
+          executable = output / 'doremi-provider-live-probe'
+          manifest = dict(schema=1, experiment=True, source_commit=os.environ['GITHUB_SHA'],
+                          target='x86_64-unknown-linux-gnu',
+                          version=subprocess.check_output([str(executable), '--version'], text=True).strip(),
+                          binary_sha256=hashlib.sha256(executable.read_bytes()).hexdigest())
+          (output / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          (output / 'SHA256SUMS').write_text(''.join(
+              hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + str(p.relative_to(output)) + '\n'
+              for p in sorted(output.rglob('*')) if p.is_file() and p.name != 'SHA256SUMS'))
+          PY
+      - uses: actions/upload-artifact@v6
+        with:
+          name: doremi-provider-probe-linux-${{ github.sha }}
+          path: target/provider-dist/
+          if-no-files-found: error
+          retention-days: 7

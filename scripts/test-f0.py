@@ -20,7 +20,7 @@ VERIFY = runpy.run_path(str(ROOT / "scripts/verify-artifacts.py"))
 class F0Tests(unittest.TestCase):
     def test_workspace_preserves_the_legacy_entrypoints(self):
         data = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        self.assertEqual(data["workspace"]["members"], [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player"])
+        self.assertEqual(data["workspace"]["members"], [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player", "tools/provider-live-probe"])
         self.assertEqual(data["workspace"]["default-members"], [".", "crates/doremi-core"])
         self.assertEqual(data["package"]["name"], "spotifast")
         self.assertEqual(data["lib"]["path"], "src/lib.rs")
@@ -61,11 +61,13 @@ class F0Tests(unittest.TestCase):
 
     def test_only_validation_workflow_is_active(self):
         active = sorted(p.name for p in (ROOT / ".github/workflows").glob("*.y*ml"))
-        self.assertEqual(active, ["android.yml", "ci.yml"])
+        self.assertEqual(active, ["android.yml", "ci.yml", "provider-probe.yml"])
+        for name in active:
+            workflow = (ROOT / ".github/workflows" / name).read_text()
+            for forbidden in ("contents: write", "pull_request_target:", "secrets.", "gh release",
+                              "pages: write", "publish = true"):
+                self.assertNotIn(forbidden, workflow, name)
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        for forbidden in ("contents: write", "pull_request_target:", "secrets.", "gh release",
-                          "pages: write", "publish = true"):
-            self.assertNotIn(forbidden, workflow)
         self.assertIn("aarch64-linux-android", workflow)
         self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux, android-apk]", workflow)
 
