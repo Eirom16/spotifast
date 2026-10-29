@@ -477,3 +477,11 @@ Avance de audio local: Linux `783501b` pasó probe de salida nativa y controles 
 
 
 Cierre del primer corte P2: APK `50030dc`, suite completa de controles PCM/foco/lifecycle aprobada en SM-J701M; sin avisos de painter perdido tras impedir draw mientras pausado. Instantánea propia: PSS 37794 KiB, CPU 236 ms/1100 ms y PCM a 48 kHz. Linux tiene reproducción local nativa y lanzador propio. Se continúa F2 con experimentos autorizados; aún no hay proveedor definitivo, reproducción online ni autenticación implementada.
+
+
+Experimento F2 ejecutado: `d1ebed0`, CI `40974787764`, ocho flujos de búsqueda
+común/resolución/descarga de dos tonos CC0 auditados. Rust y yt-dlp resolvieron
+los mismos originales; tiempos y límites en DOREMI-GOAL-REPORT.md. No acredita
+YouTube ni reproducción online integrada. Próximo corte: Ogg/Vorbis acotado y
+motor nativo, después worker/UI cancelables. APK `075f18f` revalidada físicamente
+tras la reconexión, con suite completa y capturas propias; Preview conservada.

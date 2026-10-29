@@ -140,3 +140,76 @@ Primer tramo válido del diagnóstico `9695f1d`: una notificación xrun tras 192
 CPU/PSS durante 1100 ms de reproducción: 236 ms CPU del proceso (21,45% de un núcleo), PSS 37794 KiB, 96008 frames entregados a 48 kHz, PCM 1536000 bytes. El contador no registró notificaciones xrun en ese tramo ni en las tres instantáneas de audio preservadas. Primer PCM 69262 µs y primer callback con datos 153851 µs en esa carga; son muestras puntuales, no latencia acústica ni benchmark sostenido. No aparecieron fatal nativo/JNI, panic, timeout de cierre o aviso de painter sin destruir en el log propio revisado. Cinco instancias de renderer cubrieron recreación y retornos de background, conservando ocurrencias y pausando correctamente.
 
 La suite comprueba Unicode rápido, recreación con duplicados, horizontal/vertical, la traza compartida, cancelar tras background sin restaurar texto antiguo, controles PCM, EOF real, interrupción real de foco y pausa sin autorreanudación, recreación durante audio, background/foreground y cancelación. La captura acústica sigue sin realizarse; no se afirma sonido audible medido. El siguiente corte es evaluar proveedores con contenido autorizado, sin autenticación prematura.
+
+
+## F2: experimento online admisible, separado de la aplicación
+
+CI del probe `40974353021` (`fbcd0a4`) y `40974787764` (`d1ebed0`) aprobadas:
+tests de core/políticas de transporte/licencia, Clippy y ejecutable Linux.
+Artifact de `d1ebed0` descargado con gh y verificado por manifiesto, SHA/versión,
+checksums y corpus. Evidencia local: `target/provider-live-qa/d1ebed0/report.json`.
+La CI enfocada Android/Linux `40974019600` también pasó sobre `075f18f`.
+
+Se usa Commons, no YouTube: API pública, agente descriptivo, IDs neutrales y
+solo dos tonos sintéticos propios de Ubershmekel con declaración CC0. Corpus
+con páginas primarias, tamaños y SHA-1 en `tools/provider-live-probe/corpus.json`.
+Ninguna cuenta, cookie, perfil de cliente o credencial participa. Solo se aceptan
+los originales auditados; no se conserva URI de transporte en los informes.
+
+Ocho solicitudes completas (dos archivos × dos resolutores × dos pasadas)
+aceptaron exactamente los mismos hashes. Búsqueda común nativa en ambos casos:
+yt-dlp no ofrece búsqueda Commons. Medianas de cuatro muestras por resolutor,
+en el Pentium N5000 local, procesos nuevos y cachés remotas no controladas:
+
+| Medida | Rust nativo | yt-dlp 2026.10.26 |
+|---|---:|---:|
+| Búsqueda común | 203,88 ms | 193,58 ms |
+| Resolución | 59,48 ms | 3601,09 ms |
+| Primer byte después de resolver | 198,50 ms | 199,24 ms |
+| Transferencia completa, sin escritura del archivo | 251,65 ms | 251,76 ms |
+| Proceso completo | 555,08 ms | 4095,06 ms |
+| CPU usuario / sistema del proceso y descendientes esperados | 34,96 / 17,53 ms | 2952,70 / 212,97 ms |
+| Mayor RSS individual observado | 27292 KiB | 73500 KiB |
+
+RSS no es el pico simultáneo del grupo. Las repeticiones no acreditan un
+benchmark frío/caliente controlado. Con FFmpeg idéntico y los archivos locales
+ya verificados, primer PCM de decodificación entre 179,83 y 209,57 ms;
+se obtuvieron diez segundos mono/48 kHz/f32 no vacíos por archivo, sin abrir
+salida de audio. No es latencia total al primer PCM ni primer sonido audible.
+
+Tras observar la fase de resolución, terminar cada grupo experimental dejó
+cero procesos vivos o zombies en 24,94/30,26 ms de observación; se observó
+el hijo Python en el caso yt-dlp. Es cancelación de un CLI aislado, no prueba
+del futuro worker integrado. Scripts: `scripts/provider-live-qa.py`.
+
+Fallos conservados: `40974019684` no compiló por usar `Resolved` en vez de
+`ProviderEvent::Resolve`; se corrigió sin cambiar el contrato. Las primeras
+cuatro resoluciones yt-dlp de `fbcd0a4` fallaron por seleccionar `wikimedia`;
+el nombre oficial es `wikimedia.org`. La corrección resolvió el original con
+los mismos límites y sin evasión. No se cuentan esos fallos como denegaciones
+remotas ni como resoluciones exitosas. Los informes originales se conservan.
+
+Este corte favorece el adaptador nativo para el experimento Commons, pero no
+decide un proveedor YouTube. El APK sigue sin permiso de red. El siguiente
+corte lleva Ogg/Vorbis acotado y el recurso permitido al motor nativo; reproducción
+online en UI, cancelación de worker y MediaSession siguen pendientes.
+
+La investigación solicitada de cuenta opcional queda en
+`docs/doremi/account-feasibility.md`, enlazada por el roadmap. Se inspeccionó
+la referencia histórica y documentación oficial vigente, sin copiar cookies,
+WebEngine ni Storage Access API y sin implementar autenticación prematura.
+
+
+Revalidación física `075f18f`: APK descargada de `40974019600`, hash
+`cc93799a3c3a82bd0fa7294ac14d3dc6d2876016c3cb60f1ab3589641da43c52`,
+actualizada preservando datos en el mismo SM-J701M autorizado. Driver básico
+aprobado y suite instrumentada completa aprobada, con nueve PixelCopy propios
+inspeccionados y sin errores críticos encontrados en el log de ese proceso.
+PSS 38134 KiB y CPU 215 ms/1100 ms (19,55% de un núcleo); PCM 96008 frames,
+48 kHz, cero notificaciones xrun en ese intervalo. No captura acústica.
+Evidencia `target/android-qa/075f18f142eb/instrumentation/summary.json`.
+El nuevo wrapper `scripts/android-instrumentation-qa.py` comprueba el hash del
+APK realmente instalado y exige PASS antes de recopilar archivos privados QA.
+El host Linux del mismo commit también se descargó/verificó y pasó controles
+nativos Play/Pause/resume/Next/Previous/cancel con XTest y Xvfb/Mesa software:
+`target/native-audio-ui-075f18f/report.json`. No se atribuye a Wayland/GPU física.
