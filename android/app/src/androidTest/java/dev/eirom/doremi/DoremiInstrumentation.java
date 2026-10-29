@@ -33,13 +33,17 @@ public final class DoremiInstrumentation extends Instrumentation {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
     private JSONObject until(Predicate<JSONObject> predicate) throws Exception {
-        long deadline=SystemClock.uptimeMillis()+8000;
+        return until(8000,"fresh Rust state",predicate);
+    }
+    private JSONObject until(long timeout,String label,Predicate<JSONObject> predicate) throws Exception {
+        long deadline=SystemClock.uptimeMillis()+timeout;
         while(SystemClock.uptimeMillis()<deadline) {
             JSONObject data=state();
             if(data.optInt("pid")==android.os.Process.myPid() && predicate.test(data)) return data;
             SystemClock.sleep(100);
         }
-        throw new AssertionError("Expected fresh Rust state was not observed");
+        JSONObject last=state();
+        throw new AssertionError("Not observed: "+label+"; current="+last.optString("current")+" playback="+last.optString("playback")+" position_ms="+last.optLong("position_ms"));
     }
     private SurfaceView surface(View view) {
         if(view instanceof SurfaceView) return (SurfaceView)view;
@@ -172,7 +176,9 @@ public final class DoremiInstrumentation extends Instrumentation {
         // Clear modes/manual entries so natural EOF must advance to the second tone.
         while(!state().optString("repeat").equals("Off")) tap("repeat");
         if(state().optBoolean("shuffle")) tap("shuffle");
-        until(s -> s.optString("current").equals("tone-chord") && s.optLong("position_ms")>100);
+        // The media lasts eight seconds; allow device preparation, rendering
+        // and state-publication time as well. Still require the actual next ID.
+        until(12000,"natural EOF of eight-second sample",s -> s.optString("current").equals("tone-chord") && s.optLong("position_ms")>100);
         capture("qa-audio-after-end");
         tap("stop");until(s -> s.optString("playback").equals("Paused") && s.isNull("audio_metrics"));
     }

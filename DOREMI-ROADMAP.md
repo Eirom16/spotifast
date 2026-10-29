@@ -455,3 +455,6 @@ realmente soportados y errores explícitos; no simular colecciones ausentes.
 
 
 Validación de restauración P1: `ac1a2c4`, CI enfocada `40783624535`, APK instalada y probada en SM-J701M. Reinicio de proceso conserva identidades de duplicados, selección, orden, modos y posición en pausa. Unicode, recreación y rotación repetidos con instrumentación del mismo SHA. Evidencia y limitaciones en DOREMI-GOAL-REPORT.md. Siguiente corte activo: audio PCM local original; autenticación permanece posterior. CI completa del legado pendiente.
+
+
+Avance de audio local: Linux `783501b` pasó probe de salida nativa y controles mediante XTest en CachyOS, y tiene lanzador de desarrollo propio. Android entrega PCM y pasó controles exploratorios; `86aa04b` pasó regresión ADB e IME después de background. Siguen abiertos el cierre instrumentado de foco/lifecycle, la clasificación de notificaciones xrun. El gate completo del legado pasó en `40795008801` sobre `86aa04b`. Reproducción acústica no capturada; MediaSession/background y proveedores online no implementados aún. La Preview se conserva. Detalles y evidencia en DOREMI-GOAL-REPORT.md.

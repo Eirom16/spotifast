@@ -25,7 +25,7 @@ def wait(predicate):
   time.sleep(.05)
  raise AssertionError('Expected native UI/audio state was not observed')
 def tap(name):
- s=state();a,b,c,d=next(c['rect'] for c in s['controls'] if c['name']==name);scale=s['pixels_per_point'];xdo('mousemove','--window',window,round((a+c)*scale/2),round((b+d)*scale/2),'click',1);time.sleep(.3)
+ s=state();a,b,c,d=next(c['rect'] for c in s['controls'] if c['name']==name);scale=s['pixels_per_point'];assert 0<=a<c<=s['viewport'][0] and 0<=b<d<=s['viewport'][1],name;assert int(xdo('getwindowfocus'))==int(window),'Doremi lost focus';xdo('mousemove','--window',window,round((a+c)*scale/2),round((b+d)*scale/2),'click',1);time.sleep(.3)
 def capture(name):
  subprocess.run(['import','-window',window,str(out/(name+'.png'))],check=True);(out/(name+'.json')).write_text(json.dumps(state(),indent=2))
 try:

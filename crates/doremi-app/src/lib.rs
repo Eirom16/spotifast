@@ -517,7 +517,7 @@ impl DoremiApp {
         }
         let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
             "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
-            "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,
+            "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
         let state = serde_json::json!({
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
@@ -818,7 +818,7 @@ pub fn audio_probe() -> Result<String, String> {
             .as_ref()
             .and_then(Engine::metrics)
             .unwrap_or_default();
-        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"reported_xruns":m.reported_xruns,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
+        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
     }
     let mut model = Model::new(Preferences::default());
     model.enable_audio();

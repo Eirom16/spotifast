@@ -40,7 +40,10 @@ pub struct Metrics {
     pub pcm_bytes: u64,
     pub first_pcm_us: Option<u64>,
     pub first_callback_us: Option<u64>,
+    /// CPAL notifications, not the hardware's raw cumulative xrun count.
     pub reported_xruns: u64,
+    pub first_xrun_frame: Option<u64>,
+    pub last_xrun_frame: Option<u64>,
 }
 #[derive(Default)]
 struct Stats {
@@ -52,6 +55,8 @@ struct Stats {
     first_pcm: AtomicU64,
     first_callback: AtomicU64,
     xruns: AtomicU64,
+    first_xrun_frame: AtomicU64,
+    last_xrun_frame: AtomicU64,
     ended: AtomicBool,
     failed: AtomicBool,
 }
@@ -197,6 +202,7 @@ impl Engine {
     pub fn metrics(&self) -> Option<Metrics> {
         let s = &self.current.as_ref()?.stats;
         let optional = |value: u64| (value > 0).then_some(value);
+        let xruns = s.xruns.load(Ordering::Acquire);
         Some(Metrics {
             position_ms: s.position.load(Ordering::Acquire),
             frames: s.frames.load(Ordering::Acquire),
@@ -205,7 +211,9 @@ impl Engine {
             pcm_bytes: s.bytes.load(Ordering::Acquire),
             first_pcm_us: optional(s.first_pcm.load(Ordering::Acquire)),
             first_callback_us: optional(s.first_callback.load(Ordering::Acquire)),
-            reported_xruns: s.xruns.load(Ordering::Acquire),
+            reported_xruns: xruns,
+            first_xrun_frame: (xruns > 0).then(|| s.first_xrun_frame.load(Ordering::Acquire)),
+            last_xrun_frame: (xruns > 0).then(|| s.last_xrun_frame.load(Ordering::Acquire)),
         })
     }
 }
@@ -475,7 +483,15 @@ fn stream<T: SizedSample + FromSample<f32>>(
             },
             move |error: cpal::Error| match error.kind() {
                 cpal::ErrorKind::Xrun => {
-                    errors.xruns.fetch_add(1, Ordering::Relaxed);
+                    // FnMut error callbacks are serialized by the backend. Publish
+                    // frame positions before the count so a reader can distinguish
+                    // startup notifications from a later playback interruption.
+                    let frame = errors.frames.load(Ordering::Acquire);
+                    if errors.xruns.load(Ordering::Relaxed) == 0 {
+                        errors.first_xrun_frame.store(frame, Ordering::Relaxed);
+                    }
+                    errors.last_xrun_frame.store(frame, Ordering::Relaxed);
+                    errors.xruns.fetch_add(1, Ordering::Release);
                 }
                 cpal::ErrorKind::RealtimeDenied => {}
                 _ => errors.failed.store(true, Ordering::Release),
