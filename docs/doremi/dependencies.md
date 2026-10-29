@@ -115,9 +115,11 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
 | `crates/doremi-player: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-player: dependencies` | `symphonia` | `default-features=False; features=['ogg', 'vorbis']; optional=True; version=0.5.5` |
 | `crates/doremi-player/cfg(not(target_os = "linux")): dependencies` | `cpal` | `default-features=False; optional=True; version=0.18.2` |
 | `crates/doremi-player/cfg(target_os = "linux"): dependencies` | `cpal` | `default-features=False; features=['pipewire', 'pulseaudio']; optional=True; version=0.18.2` |
 | `tools/provider-live-probe: dependencies` | `doremi-core` | `path=../../crates/doremi-core` |
+| `tools/provider-live-probe: dependencies` | `doremi-player` | `features=['ogg-vorbis']; path=../../crates/doremi-player` |
 | `tools/provider-live-probe: dependencies` | `reqwest` | `default-features=False; features=['blocking', 'rustls-tls-native-roots']; version=0.12` |
 | `tools/provider-live-probe: dependencies` | `serde_json` | `1` |
 | `tools/provider-live-probe: dependencies` | `sha1` | `0.10` |

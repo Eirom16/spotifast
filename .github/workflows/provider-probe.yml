@@ -3,7 +3,7 @@ name: Doremi bounded provider experiment
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
+    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "crates/doremi-player/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
   workflow_dispatch:
 
 permissions:
@@ -32,7 +32,8 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo test --locked -p doremi-core -p doremi-provider-live-probe
-          cargo clippy --locked -p doremi-provider-live-probe --all-targets -- -D warnings
+          cargo test --locked -p doremi-player --features ogg-vorbis
+          cargo clippy --locked -p doremi-provider-live-probe -p doremi-player --all-targets -- -D warnings
           cargo build --locked -p doremi-provider-live-probe
       - name: Identify source, executable and audited corpus
         run: |
@@ -40,6 +41,8 @@ jobs:
           cp target/provider-cargo/debug/doremi-provider-live-probe target/provider-dist/
           cp tools/provider-live-probe/corpus.json tools/provider-live-probe/README.md target/provider-dist/
           cp LICENSE target/provider-dist/licenses/
+          cp crates/doremi-player/licenses/* target/provider-dist/licenses/
+          cp crates/doremi-player/tests/fixtures/SOURCE.md target/provider-dist/licenses/Symphonia-source-and-fixture.md
           cp docs/doremi/dependencies.md target/provider-dist/licenses/
           python3 - <<'PY'
           import hashlib, json, os, subprocess

@@ -1,7 +1,7 @@
 //! Native output actor. Only the worker opens/closes devices or decodes PCM.
 //! The callback reads a predecoded buffer (at most MAX_SAMPLES floats), atomics
 //! and its own cursor. It performs no allocation, I/O, locks or event delivery.
-use super::{Builtin, Cursor, DecodeError, decode_wav};
+use super::{Builtin, Cursor, DecodeError, Pcm, decode_wav};
 use cpal::{
     FromSample, SizedSample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -68,10 +68,14 @@ struct Control {
 struct Load {
     epoch: u64,
     request: RequestId,
-    builtin: Builtin,
+    source: Source,
     position: u64,
     stats: Arc<Stats>,
     started: Instant,
+}
+enum Source {
+    Builtin(Builtin),
+    Prepared(Arc<Pcm>),
 }
 enum Command {
     Load(Load),
@@ -132,6 +136,24 @@ impl Engine {
         builtin: Builtin,
         position: u64,
     ) -> Result<(), EngineError> {
+        self.enqueue(request, Source::Builtin(builtin), position)
+    }
+    /// Immutable PCM prepared by a bounded decoder worker. No decoding or copy
+    /// takes place on the caller; this does not own queue or playing intent.
+    pub fn load_pcm(
+        &mut self,
+        request: RequestId,
+        pcm: Arc<Pcm>,
+        position: u64,
+    ) -> Result<(), EngineError> {
+        self.enqueue(request, Source::Prepared(pcm), position)
+    }
+    fn enqueue(
+        &mut self,
+        request: RequestId,
+        source: Source,
+        position: u64,
+    ) -> Result<(), EngineError> {
         self.control.playing.store(false, Ordering::Release);
         let epoch = self
             .control
@@ -148,7 +170,7 @@ impl Engine {
         let load = Load {
             epoch,
             request,
-            builtin,
+            source,
             position,
             stats,
             started: Instant::now(),
@@ -366,7 +388,12 @@ fn device() -> Result<(cpal::Device, cpal::SupportedStreamConfig), EngineError> 
     }
 }
 fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
-    let pcm = decode_wav(load.builtin.bytes()).map_err(EngineError::Decode)?;
+    let pcm = match load.source {
+        Source::Builtin(builtin) => {
+            Arc::new(decode_wav(builtin.bytes()).map_err(EngineError::Decode)?)
+        }
+        Source::Prepared(pcm) => pcm,
+    };
     load.stats.first_pcm.store(
         load.started.elapsed().as_micros().max(1) as u64,
         Ordering::Release,
@@ -423,7 +450,7 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
 fn stream<T: SizedSample + FromSample<f32>>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    pcm: super::Pcm,
+    pcm: Arc<Pcm>,
     mut cursor: Cursor,
     state: CallbackState,
 ) -> Result<cpal::Stream, EngineError> {

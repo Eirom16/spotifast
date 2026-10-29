@@ -10,9 +10,12 @@ description = "Bounded local PCM decoding and native output for Doremi"
 [features]
 default = []
 native-output = ["dep:cpal"]
+ogg-vorbis = ["dep:symphonia"]
 
 [dependencies]
 doremi-core = { path = "../doremi-core" }
+# Reuse the locked crates.io decoder, MPL-2.0; no external program or git source.
+symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Reuse the pinned native backend, preferring the desktop's normal audio host.

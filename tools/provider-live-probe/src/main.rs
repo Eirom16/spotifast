@@ -148,6 +148,13 @@ fn experiment(
     if bytes.get(..4) != Some(b"OggS") || bytes.get(offset..offset + 7) != Some(b"\x01vorbis") {
         return Err(ProviderError::UnsupportedFormat);
     }
+    let decoded_at = Instant::now();
+    let pcm = doremi_player::decode_ogg(&bytes).map_err(|error| match error {
+        doremi_player::DecodeError::TooLarge => ProviderError::TooLarge,
+        doremi_player::DecodeError::UnsupportedFormat => ProviderError::UnsupportedFormat,
+        _ => ProviderError::InvalidResponse,
+    })?;
+    let prepared_pcm_ms = decoded_at.elapsed().as_secs_f64() * 1000.0;
     let output = PathBuf::from("target/provider-live");
     std::fs::create_dir_all(&output).map_err(|_| ProviderError::Transport)?;
     let payload = output.join(format!(
@@ -160,7 +167,7 @@ fn experiment(
     ));
     std::fs::write(&payload, &bytes).map_err(|_| ProviderError::Transport)?;
     Ok(
-        json!({"schema":1,"experiment":true,"provider":commons::PROVIDER,"resolver":if extractor.is_some(){"yt-dlp-2026.10.26"}else{"native-rust"},"search_component":"common-native-catalog","results":found,"selected_id":selected,"search_ms":search_ms,"resolve_ms":resolve_ms,"first_byte_ms":first_byte_ms,"download_ms":download_ms,"download_bytes":bytes.len(),"sha1":info.sha1,"license":"CC0-1.0","payload":payload,"first_pcm_ms":null,"audible_audio_ms":null,"audio_played":false}),
+        json!({"schema":1,"experiment":true,"provider":commons::PROVIDER,"resolver":if extractor.is_some(){"yt-dlp-2026.10.26"}else{"native-rust"},"search_component":"common-native-catalog","results":found,"selected_id":selected,"search_ms":search_ms,"resolve_ms":resolve_ms,"first_byte_ms":first_byte_ms,"download_ms":download_ms,"download_bytes":bytes.len(),"sha1":info.sha1,"license":"CC0-1.0","payload":payload,"prepared_pcm_ms":prepared_pcm_ms,"pcm_bytes":pcm.byte_len(),"pcm_rate":pcm.sample_rate(),"pcm_duration_ms":pcm.duration_ms(),"first_pcm_ms":null,"audible_audio_ms":null,"audio_played":false}),
     )
 }
 fn main() {

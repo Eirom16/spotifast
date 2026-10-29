@@ -38,8 +38,12 @@ de procesos; la cancelación por tickets del futuro worker aún requiere integra
 El contrato descarta respuestas expiradas, pero eso no cancela por sí solo el IO.
 
 Los tiempos separan búsqueda, resolución, primer byte y transferencia completa.
-`first_pcm_ms` y audio audible permanecen nulos: esta herramienta no decodifica
-ni reproduce. CPU/RAM, frío/caliente, cancelación y decodificación común se miden
+`prepared_pcm_ms` mide la preparación completa con el mismo decoder Rust
+Ogg/Vorbis acotado de `doremi-player` para ambos resolutores. Registra bytes PCM,
+rate y duración. `first_pcm_ms` y audio audible permanecen nulos: no se sondea
+el primer paquete ni se abre salida de audio. Symphonia 0.5.5/MPL-2.0 conserva
+su licencia y enlace a las fuentes sin modificar en el artifact.
+CPU/RAM, frío/caliente, cancelación y un segundo decoder común se miden
 externamente, sin comparar una resolución con el reproductor completo de otro.
 No existe todavía evidencia equivalente sobre búsqueda o resolución de YouTube.
 
