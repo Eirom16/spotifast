@@ -228,8 +228,10 @@ SM-J701M/API 28 (ARMv7): Unicode, navegación, dos temas/acento, persistencia
 de preferencias, recreación con duplicados, rotación y secuencia compartida.
 CI enfocada `40777190887` verde. El host final usa GLSurfaceView/egui_glow:
 GameActivity/eframe se probó en hardware y falló en IME y recreación.
-Faltan la nueva CI completa del legado y los gates de audio/restauración de
-proceso; ARM64 y 16 KiB se verificaron en el paquete, no en hardware.
+Actualización: restauración de proceso y audio local inicial pasaron en el
+mismo teléfono, hasta `50030dc`. CI completa del legado `40795008801` verde
+sobre `86aa04b`; CI enfocada `40921905474` verde. ARM64 y 16 KiB se verificaron
+en el paquete, no en hardware; API 26/36 runtime siguen sin probarse.
 El propietario Rust y las mismas vistas se usan en el host eframe Linux.
 
 Alcance original, conservado como contrato:
@@ -306,6 +308,12 @@ documenta, no se crea un segundo núcleo ni un backend alojado para ocultarlo.
 ### F3a: reproductor independiente
 
 Depende de F1; medios de yt-dlp dependen de F2.
+
+Primer corte local ejecutado: `doremi-player` + CPAL, dos WAV originales CC0,
+controles/seek/EOF/cancelación y foco/lifecycle Android probados; Linux probado
+con salida nativa y XTest. Datos y límites en DOREMI-GOAL-REPORT.md. No cierra
+F3a completo: formatos arbitrarios, streaming, EQ e integración de sesiones
+siguen pendientes. Audibilidad acústica no capturada.
 
 Crear motor con fuente local y HTTP autorizada, symphonia/rodio/salida por
 puertos, sin Spirc. Seleccionar formatos que realmente se pueden decodificar,
@@ -458,3 +466,6 @@ Validación de restauración P1: `ac1a2c4`, CI enfocada `40783624535`, APK insta
 
 
 Avance de audio local: Linux `783501b` pasó probe de salida nativa y controles mediante XTest en CachyOS, y tiene lanzador de desarrollo propio. Android entrega PCM y pasó controles exploratorios; `86aa04b` pasó regresión ADB e IME después de background. Siguen abiertos el cierre instrumentado de foco/lifecycle, la clasificación de notificaciones xrun. El gate completo del legado pasó en `40795008801` sobre `86aa04b`. Reproducción acústica no capturada; MediaSession/background y proveedores online no implementados aún. La Preview se conserva. Detalles y evidencia en DOREMI-GOAL-REPORT.md.
+
+
+Cierre del primer corte P2: APK `50030dc`, suite completa de controles PCM/foco/lifecycle aprobada en SM-J701M; sin avisos de painter perdido tras impedir draw mientras pausado. Instantánea propia: PSS 37794 KiB, CPU 236 ms/1100 ms y PCM a 48 kHz. Linux tiene reproducción local nativa y lanzador propio. Se continúa F2 con experimentos autorizados; aún no hay proveedor definitivo, reproducción online ni autenticación implementada.

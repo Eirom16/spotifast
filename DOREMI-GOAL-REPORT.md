@@ -8,13 +8,11 @@ ARMv7 (sistema de 32 bits), 720×1280, densidad efectiva 300 dpi,
 MemTotal 1.843.892 kB. Depuración USB autorizada. No registrar número de serie.
 Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
-En progreso: host Rust/eframe independiente, GameActivity/IME, mismo reducer
-de cola y Catalog; preferencias/biblioteca privadas, worker de escritura atómica.
-La reproducción inicial es simulada y está identificada como tal.
+Estado actual (2026-10-29): APK `50030dc` instalada y suite completa ADB/instrumentada aprobada en este teléfono. Comparte vistas egui, core y persistencia con el host eframe Linux. El host Android usa Activity/GLSurfaceView, no el GameActivity fallido inicial. P0/P1 y el primer corte de audio local P2 tienen evidencia ejecutada: dos muestras originales CC0, Play/Pause/seek/volumen/Next/Previous/EOF/cancelación, foco y lifecycle. Las cuatro canciones de metadatos siguen siendo simuladas y silenciosas.
 
-Pendiente de evidencia: compilación APK, descarga, instalación, pruebas reales,
-16 KiB, CI completa, audio local y proveedores. No declarar estos gates
-completados por los tests del núcleo ni por la Preview Linux anterior.
+Linux `783501b` está instalado como **Doremi Native Dev**, con probe y clics XTest sobre salida nativa aprobados. La CI completa `40795008801` de `86aa04b` aprobó nueve jobs, incluida la Preview conservada. ARM64/16 KiB se verificaron en empaquetado; el hardware Android probado es ARMv7/API 28 con páginas de 4 KiB. No se atribuyen pruebas a API 26/36, ARM64 o Windows nativo Doremi.
+
+Pendientes: reproducción acústica medida (no se usó micrófono), audio arbitrario/streaming, MediaSession/background, proveedores y cuenta opcional. El historial siguiente conserva resultados y fallos de cada iteración; sus notas de pendiente se refieren a aquel momento.
 
 Primeras iteraciones CI:
 - `40769993298` (`0aac395`): quick y core Android aprobados; APK falló antes
@@ -133,3 +131,12 @@ Tras reanudar, `40795008801` se confirmó terminal/aprobada y el teléfono SM-J7
 
 
 Primer tramo válido del diagnóstico `9695f1d`: una notificación xrun tras 1924 frames entregados y ninguna adicional hasta 136604 frames, a 48 kHz. Un siguiente tramo perdió el foco y la superficie, por lo que no se cuenta como prueba sostenida. El log propio reveló una recreación de painter después de la limpieza de onPause: un repaint pendiente podía entrar antes de `surface.onPause()`. Se impide inicializar/dibujar el renderer cuando `resumed` es falso. No se modifica ninguna dependencia ni se suprime su aviso. La nueva instrumentación mide CPU/PSS de su propio proceso mediante la API Android, evitando suponer la frecuencia de ticks. Validación instalada de esta corrección pendiente.
+
+
+## P2: corte local validado
+
+`50030dc`, CI enfocada [40921905474](https://github.com/Eirom16/spotifast/actions/runs/40921905474) aprobada, APK SHA-256 `43fafc9e01b3ad8384473858f2fd3165fd48215122ed38ddd751f8a2cf7f6bc6`. Sus librerías provienen de `9695f1d`, reutilizadas solo tras verificar igualdad de fingerprint/hash; Java/manifest/assets corresponden al commit del APK. El driver de regresión y la suite completa pasaron sobre la instalación real. Nueve pares PixelCopy/JSON propios y logs del proceso en `target/android-qa/50030dcd1c15/instrumentation/`. Se inspeccionaron capturas de reproducción y pausa por foco.
+
+CPU/PSS durante 1100 ms de reproducción: 236 ms CPU del proceso (21,45% de un núcleo), PSS 37794 KiB, 96008 frames entregados a 48 kHz, PCM 1536000 bytes. El contador no registró notificaciones xrun en ese tramo ni en las tres instantáneas de audio preservadas. Primer PCM 69262 µs y primer callback con datos 153851 µs en esa carga; son muestras puntuales, no latencia acústica ni benchmark sostenido. No aparecieron fatal nativo/JNI, panic, timeout de cierre o aviso de painter sin destruir en el log propio revisado. Cinco instancias de renderer cubrieron recreación y retornos de background, conservando ocurrencias y pausando correctamente.
+
+La suite comprueba Unicode rápido, recreación con duplicados, horizontal/vertical, la traza compartida, cancelar tras background sin restaurar texto antiguo, controles PCM, EOF real, interrupción real de foco y pausa sin autorreanudación, recreación durante audio, background/foreground y cancelación. La captura acústica sigue sin realizarse; no se afirma sonido audible medido. El siguiente corte es evaluar proveedores con contenido autorizado, sin autenticación prematura.

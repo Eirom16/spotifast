@@ -30,7 +30,11 @@ files to 1 MiB. The local-audio slice adds two original 8-second PCM16/WAV tones
 `doremi-player` decodes on its worker into a hard-capped immutable PCM buffer;
 the native CPAL callback only reads samples/atomics. Play/Pause/seek/volume
 and end-of-track use the same queue reducer. The four mock songs stay silent.
-This implementation is pending CI and physical output validation.
+APK `50030dc` passed the complete physical SM-J701M instrumentation suite,
+including PCM controls, actual audio-focus interruption, EOF and lifecycle.
+Linux also passed native-output probes and XTest input. Output callbacks are
+verified; speaker audibility was not recorded. Measurements/evidence are in
+`DOREMI-GOAL-REPORT.md`.
 Android requests music audio focus before enabling output, pauses on focus
 loss/noisy route, and pauses on background. MediaSession/background playback
 is a later gate. Focus follows the [Android platform guidance](https://developer.android.com/media/optimize/audio-focus).

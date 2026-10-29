@@ -1,6 +1,6 @@
 > Doremi Android: host de desarrollo independiente en [`android/`](android/README.md).
 > Estado y evidencia del objetivo: [`DOREMI-GOAL-REPORT.md`](DOREMI-GOAL-REPORT.md).
-> APK instalada y navegación/restauración probadas en Android real. El corte de audio local está en validación. La Preview Linux se conserva.
+> APK instalada y navegación/restauración probadas en Android real. Las muestras de audio local ya funcionan en ambos hosts. La Preview Linux se conserva.
 
 # Doremi
 
@@ -27,7 +27,8 @@ El bridge conserva la integración manual del legado. El host independiente
 `doremi-app` usa el core para selección, duplicados, cola, modos y restauración
 pausada, con catálogo simulado y almacenamiento propio. El nuevo adaptador
 `doremi-player` añade dos muestras PCM/WAV originales CC0; sus controles y
-salida nativa están en validación, sin convertir las canciones simuladas en audio.
+salida nativa pasaron pruebas en Linux y Android. Las cuatro canciones simuladas
+siguen silenciosas; este corte reproduce las dos muestras incluidas.
 Estado y cobertura real: [DOREMI-GOAL-REPORT.md](DOREMI-GOAL-REPORT.md).
 Rust nativo y yt-dlp se evaluarán experimentalmente; no hay proveedor elegido.
 
