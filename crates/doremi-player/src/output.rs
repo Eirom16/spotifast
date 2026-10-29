@@ -225,10 +225,10 @@ impl Drop for Engine {
     }
 }
 fn publish(events: &Mutex<Option<EngineEvent>>, control: &Control, epoch: u64, event: EngineEvent) {
-    if control.epoch.load(Ordering::Acquire) == epoch {
-        if let Ok(mut slot) = events.lock() {
-            *slot = Some(event);
-        }
+    if control.epoch.load(Ordering::Acquire) == epoch
+        && let Ok(mut slot) = events.lock()
+    {
+        *slot = Some(event);
     }
 }
 fn worker(

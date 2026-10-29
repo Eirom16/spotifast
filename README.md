@@ -1,6 +1,6 @@
 > Doremi Android: host de desarrollo independiente en [`android/`](android/README.md).
 > Estado y evidencia del objetivo: [`DOREMI-GOAL-REPORT.md`](DOREMI-GOAL-REPORT.md).
-> El catálogo inicial es una demostración sin audio. La Preview Linux se conserva.
+> APK instalada y navegación/restauración probadas en Android real. El corte de audio local está en validación. La Preview Linux se conserva.
 
 # Doremi
 
@@ -8,8 +8,9 @@ Reproductor musical nativo en Rust, en migración desde
 [Eirom16/spotifast](https://github.com/Eirom16/spotifast), fork de
 [crmne/spotifast](https://github.com/crmne/spotifast).
 
-**Estado: F1B-1, integración manual y contratos de proveedores. Todavía no es un reproductor
-independiente de Spotify. No hay APK ni release Doremi.**
+**Estado: host Doremi independiente de desarrollo para Linux y Android, con cola,
+biblioteca de prueba y preferencias compartidas. APK probada en SM-J701M/API 28.
+No hay release estable ni proveedor online integrado.**
 
 El objetivo es usar egui/eframe y contratos neutrales de búsqueda/resolución,
 con escritorio y Android construidos sobre el mismo núcleo. No usaremos
@@ -22,9 +23,12 @@ Se conserva el ejecutable `spotifast` 0.14.2 y su biblioteca Rust. Su
 reproducción sigue usando Spotify/librespot y requiere las autorizaciones y
 Premium del baseline. La estructura nueva no elimina ese acoplamiento.
 `doremi-core` contiene tipos neutrales y una máquina de cola determinista.
-El bridge comparte edición manual y confirmación con el legado; el core todavía
-no dirige su transporte ni dispone de catálogo, motor o biblioteca propios.
-Estado de pruebas: [F1B1-REPORT.md](F1B1-REPORT.md).
+El bridge conserva la integración manual del legado. El host independiente
+`doremi-app` usa el core para selección, duplicados, cola, modos y restauración
+pausada, con catálogo simulado y almacenamiento propio. El nuevo adaptador
+`doremi-player` añade dos muestras PCM/WAV originales CC0; sus controles y
+salida nativa están en validación, sin convertir las canciones simuladas en audio.
+Estado y cobertura real: [DOREMI-GOAL-REPORT.md](DOREMI-GOAL-REPORT.md).
 Rust nativo y yt-dlp se evaluarán experimentalmente; no hay proveedor elegido.
 
 No renombramos aún IDs persistidos, keyrings, rutas, protocolos, iconos ni
@@ -45,9 +49,10 @@ cargo run --locked -p spotifast --features demo -- --demo
 ```
 
 GitHub Actions es el entorno principal para compilar el cliente completo.
-La CI separa checks rápidos, tests, Clippy y builds Linux/macOS/Windows, más
-una `.rlib` neutral para Android, del mismo commit y versión. Una `.rlib` no
-es una aplicación Android. No hay publicación automática de releases ni
+La CI separa checks rápidos, tests, Clippy y builds Linux/macOS/Windows del
+baseline. Un circuito enfocado genera el host Linux y el APK Android ARM64/ARMv7,
+con manifiestos y checksums. Las estables futuras requieren Linux, Windows y
+Android con versión/commit comunes y gate global. No hay publicación automática de releases ni
 del sitio heredado. Estado real de ejecuciones y cachés: [CI-REPORT.md](CI-REPORT.md).
 
 ## Documentación

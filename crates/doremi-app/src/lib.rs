@@ -783,6 +783,95 @@ impl DoremiApp {
         }
     }
 }
+/// Exercise the same host reducer and native output without opening a window.
+/// No profile is read or written and no microphone/loopback recording is used.
+#[cfg(not(target_os = "android"))]
+pub fn audio_probe() -> Result<String, String> {
+    fn wait(
+        model: &mut Model,
+        label: &str,
+        predicate: impl Fn(&Model) -> bool,
+    ) -> Result<(), String> {
+        let deadline = Instant::now() + Duration::from_secs(12);
+        while Instant::now() < deadline {
+            model.poll_audio();
+            if model.queue.playback() == Playback::Failed {
+                return Err(model.notice.clone());
+            }
+            if predicate(model) {
+                return Ok(());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Err(format!("Audio probe timed out: {label}; {}", model.notice))
+    }
+    fn metrics(model: &Model) -> serde_json::Value {
+        let m = model
+            .audio
+            .as_ref()
+            .and_then(Engine::metrics)
+            .unwrap_or_default();
+        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"reported_xruns":m.reported_xruns,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
+    }
+    let mut model = Model::new(Preferences::default());
+    model.enable_audio();
+    model.start_context(vec![Builtin::Scale.media(), Builtin::Chord.media()], 0);
+    wait(&mut model, "first output", |m| m.queue.position_ms() > 400)?;
+    let first = metrics(&model);
+    model.command(Command::Pause);
+    std::thread::sleep(Duration::from_millis(150));
+    model.poll_audio();
+    let paused = model.queue.position_ms();
+    std::thread::sleep(Duration::from_millis(300));
+    model.poll_audio();
+    if model.queue.position_ms() != paused {
+        return Err("PCM advanced while paused".into());
+    }
+    model.command(Command::Seek(2000));
+    wait(&mut model, "paused seek", |m| {
+        m.queue.playback() == Playback::Paused
+    })?;
+    if model.queue.position_ms() != 2000 {
+        return Err("Paused seek did not retain its requested position".into());
+    }
+    model.audio.as_ref().unwrap().set_volume(0.0);
+    model.command(Command::Play);
+    wait(&mut model, "zero volume clock", |m| {
+        m.queue.position_ms() > 2400
+    })?;
+    let muted = metrics(&model);
+    model.audio.as_ref().unwrap().set_volume(0.7);
+    model.command(Command::Next);
+    wait(&mut model, "next track", |m| {
+        m.queue
+            .current()
+            .is_some_and(|e| e.media.id.local() == "tone-chord")
+            && m.queue.position_ms() > 200
+    })?;
+    let next = metrics(&model);
+    model.command(Command::Previous);
+    wait(&mut model, "previous track", |m| {
+        m.queue
+            .current()
+            .is_some_and(|e| e.media.id.local() == "tone-scale")
+            && m.queue.position_ms() > 200
+    })?;
+    model.command(Command::Seek(7600));
+    wait(&mut model, "end-of-track transition", |m| {
+        m.queue
+            .current()
+            .is_some_and(|e| e.media.id.local() == "tone-chord")
+            && m.queue.position_ms() > 200
+    })?;
+    let ended = metrics(&model);
+    model.command(Command::Cancel);
+    if model.queue.playback() != Playback::Paused
+        || model.audio.as_ref().unwrap().metrics().is_some()
+    {
+        return Err("Cancellation left live output".into());
+    }
+    Ok(serde_json::json!({"result":"pass","output":"native device callback; acoustic output not captured","first":first,"zero_volume":muted,"next":next,"after_end":ended,"checks":["play","pause clock stable","seek paused","zero volume clock advances","next","previous","end advances queue","cancel"]}).to_string())
+}
 
 #[cfg(test)]
 mod tests {

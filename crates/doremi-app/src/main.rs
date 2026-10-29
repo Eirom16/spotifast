@@ -7,8 +7,20 @@ fn main() -> eframe::Result {
             println!("Doremi Native Dev {}-dev", env!("CARGO_PKG_VERSION"));
             return Ok(());
         }
+        [argument] if argument == "--audio-probe" => {
+            match doremi_app::audio_probe() {
+                Ok(report) => println!("{report}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
         [argument] if argument == "--help" => {
-            println!("Doremi Native Dev: --version, --help. Experimental offline host.");
+            println!(
+                "Doremi Native Dev: --version, --help, --audio-probe. Experimental offline host."
+            );
             return Ok(());
         }
         _ => {

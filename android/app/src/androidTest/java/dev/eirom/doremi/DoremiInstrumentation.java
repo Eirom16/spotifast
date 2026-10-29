@@ -73,6 +73,65 @@ public final class DoremiInstrumentation extends Instrumentation {
         MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
         SystemClock.sleep(500);
     }
+    private void slide(String name,float fraction) throws Exception {
+        JSONObject data=state(); JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
+        for(int i=0;i<controls.length();i++) {JSONObject c=controls.getJSONObject(i);if(name.equals(c.getString("name"))) rect=c.getJSONArray("rect");}
+        if(rect==null) throw new AssertionError("Missing slider: "+name);
+        final int[] origin=new int[2];runOnMainSync(() -> activity.findViewById(android.R.id.content).getLocationOnScreen(origin));
+        float scale=(float)data.getDouble("pixels_per_point");
+        // egui's slider rail is the first slider_width logical points, before its label.
+        float left=(float)rect.getDouble(0),right=Math.min((float)rect.getDouble(2),left+100f);
+        float x=origin[0]+(left+8f+(right-left-16f)*fraction)*scale;
+        float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
+        long time=SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendPointerSync(down);down.recycle();
+        MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0);sendPointerSync(up);up.recycle();SystemClock.sleep(500);
+    }
+    private void audio() throws Exception {
+        tap("home");tap("local-audio");
+        until(s -> s.optBoolean("audio") && s.optString("playback").equals("Playing") && s.optLong("position_ms")>300 && s.optJSONObject("audio_metrics")!=null && s.optJSONObject("audio_metrics").optLong("frames")>0);
+        capture("qa-audio-playing");
+        tap("pause");until(s -> s.optString("playback").equals("Paused"));SystemClock.sleep(300);
+        long paused=state().getLong("position_ms");SystemClock.sleep(400);
+        if(state().getLong("position_ms")!=paused) throw new AssertionError("PCM advanced while paused");
+        slide("seek",0.35f);until(s -> s.optString("playback").equals("Paused") && s.optLong("position_ms")>1000 && s.optLong("position_ms")<6500);
+        slide("volume",0f);until(s -> s.optDouble("volume",1)<0.05);
+        tap("play");until(s -> s.optString("playback").equals("Playing") && s.optJSONObject("audio_metrics").optLong("frames")>5000);
+        slide("volume",0.7f);until(s -> s.optDouble("volume",0)>0.3);
+        tap("next");until(s -> s.optString("current").equals("tone-chord") && s.optLong("position_ms")>100);
+        tap("previous");until(s -> s.optString("current").equals("tone-scale") && s.optLong("position_ms")>100);
+        // Request an actual competing focus grant, then release only our test grant.
+        android.media.AudioManager manager=(android.media.AudioManager)getTargetContext().getSystemService(android.content.Context.AUDIO_SERVICE);
+        android.media.AudioFocusRequest interruption=new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_MEDIA).setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC).build())
+            .setOnAudioFocusChangeListener(change -> {}).build();
+        try {
+            if(manager.requestAudioFocus(interruption)!=android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) throw new AssertionError("Test interruption focus denied");
+            until(s -> s.optString("playback").equals("Paused") && !s.optBoolean("focus"));
+        } finally { manager.abandonAudioFocusRequest(interruption); }
+        SystemClock.sleep(300);if(!state().optString("playback").equals("Paused")) throw new AssertionError("Unexpected automatic resume after focus loss");
+        capture("qa-audio-interrupted");
+        tap("play");until(s -> s.optString("playback").equals("Playing"));
+        // App-owned recreation must pause and retain the same occurrence.
+        long occurrence=state().getLong("current_occurrence"),instance=state().getLong("instance");
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+        runOnMainSync(() -> activity.recreate());
+        Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
+        if(recreated==null) throw new AssertionError("Audio recreation did not return an Activity");activity=recreated;
+        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && s.optString("playback").equals("Paused"));
+        tap("home");tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
+        long beforeBackground=state().getLong("instance");
+        runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        until(s -> s.optLong("instance")!=beforeBackground && s.optString("playback").equals("Paused"));
+        tap("home");tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
+        // Clear modes/manual entries so natural EOF must advance to the second tone.
+        while(!state().optString("repeat").equals("Off")) tap("repeat");
+        if(state().optBoolean("shuffle")) tap("shuffle");
+        until(s -> s.optString("current").equals("tone-chord") && s.optLong("position_ms")>100);
+        capture("qa-audio-after-end");
+        tap("stop");until(s -> s.optString("playback").equals("Paused") && s.isNull("audio_metrics"));
+    }
     private InputConnection connection(View view) {
         if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
         if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result; } }
@@ -130,7 +189,8 @@ public final class DoremiInstrumentation extends Instrumentation {
             tap("next");until(s -> s.optString("current").equals("cafe"));
             tap("pause");until(s -> s.optString("playback").equals("Paused"));
             capture("qa-shared-queue-trace");
-            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace\n");
+            audio();
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background\n");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable error) { result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result); }
     }
