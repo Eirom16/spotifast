@@ -4,7 +4,10 @@ export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/28.2.13676358"
 export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;28.2.13676358'
 if [[ -n "${DOREMI_NATIVE_RUN:-}" ]]; then
-  gh run download "$DOREMI_NATIVE_RUN" --repo "$GITHUB_REPOSITORY" --pattern 'doremi-android-native-*' --dir target/android-jni
+  [[ "$DOREMI_NATIVE_RUN" =~ ^[0-9]+$ ]]
+  native_artifact=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$DOREMI_NATIVE_RUN/artifacts" --jq '.artifacts | map(select(.name | startswith("doremi-android-native-"))) | if length == 1 then .[0].name else error("Expected exactly one native artifact") end')
+  # A single exact name extracts into this directory. Pattern downloads nest it.
+  gh run download "$DOREMI_NATIVE_RUN" --repo "$GITHUB_REPOSITORY" --name "$native_artifact" --dir target/android-jni
   python3 scripts/android-native-identity.py --check
 else
   rustup target add aarch64-linux-android armv7-linux-androideabi

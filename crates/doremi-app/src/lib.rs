@@ -969,7 +969,8 @@ mod tests {
             )),
             ..Default::default()
         };
-        let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+        let mut output = ctx.run_ui(input(), |ui| app.draw(ui));
+        output.textures_delta.clear();
         // Emulate an intent applied after drawing Home: the first publication
         // names Player, but still carries Home's controls from that frame.
         app.model.as_mut().unwrap().page = Page::Player;
@@ -1004,7 +1005,8 @@ mod tests {
             std::thread::sleep(Duration::from_millis(1));
         }
         app.last_persist = Instant::now();
-        let _ = ctx.run_ui(input(), |ui| app.draw(ui));
+        let mut output = ctx.run_ui(input(), |ui| app.draw(ui));
+        output.textures_delta.clear();
         let state: serde_json::Value = serde_json::from_slice(&app.saved_state).unwrap();
         let pause = state["controls"]
             .as_array()
