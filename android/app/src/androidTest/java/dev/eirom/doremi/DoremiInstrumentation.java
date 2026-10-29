@@ -139,6 +139,15 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("home");tap("local-audio");
         until(s -> s.optBoolean("audio") && s.optString("playback").equals("Playing") && s.optLong("position_ms")>300 && s.optJSONObject("audio_metrics")!=null && s.optJSONObject("audio_metrics").optLong("frames")>0);
         capture("qa-audio-playing");
+        long cpuBefore=android.os.Process.getElapsedCpuTime(),wallBefore=SystemClock.elapsedRealtime();
+        SystemClock.sleep(1100);
+        long cpuMs=android.os.Process.getElapsedCpuTime()-cpuBefore,wallMs=SystemClock.elapsedRealtime()-wallBefore;
+        android.os.Debug.MemoryInfo memory=new android.os.Debug.MemoryInfo();android.os.Debug.getMemoryInfo(memory);
+        JSONObject resources=new JSONObject();resources.put("elapsed_ms",wallMs);resources.put("process_cpu_ms",cpuMs);
+        resources.put("percent_of_one_cpu",100.0*cpuMs/wallMs);resources.put("total_pss_kib",memory.getTotalPss());
+        resources.put("method","Process.getElapsedCpuTime / SystemClock.elapsedRealtime; own process only");
+        resources.put("audio_metrics",state().optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
+        Files.write(new File(getTargetContext().getFilesDir(),"qa-audio-resources.json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         tap("pause");until(s -> s.optString("playback").equals("Paused"));SystemClock.sleep(300);
         long paused=state().getLong("position_ms");SystemClock.sleep(400);
         if(state().getLong("position_ms")!=paused) throw new AssertionError("PCM advanced while paused");
