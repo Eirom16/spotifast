@@ -138,6 +138,9 @@ public final class MainActivity extends Activity {
         public void onSurfaceCreated(GL10 gl,EGLConfig config) { nativeDestroy(); ready=false; }
         public void onSurfaceChanged(GL10 gl,int w,int h) { width=w; height=h; }
         public void onDrawFrame(GL10 gl) {
+            // A queued repaint can race the onPause cleanup. Do not recreate
+            // a native renderer after it has just been destroyed for pausing.
+            if(!resumed) return;
             if(!ready) {
                 ready=nativeInit(getFilesDir().getAbsolutePath(),getApplicationContext(),inputGeneration);
                 if(!ready) { runOnUiThread(() -> Toast.makeText(MainActivity.this,"No se pudo iniciar OpenGL de Doremi",Toast.LENGTH_LONG).show()); return; }
