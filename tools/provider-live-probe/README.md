@@ -29,6 +29,8 @@ aislado. Desactiva configuración, plugins, caché, cookies del navegador, JS,
 componentes remotos y X-Forwarded-For. Se limita al extractor Wikimedia y al
 formato `source`; no usa perfiles YouTube, suplantación, cuentas ni evasión.
 La salida del subproceso se drena con límites y se mata/espera tras ocho segundos.
+El extractor se selecciona por su nombre real `wikimedia.org`; su agente propio
+también identifica públicamente yt-dlp, sin aparentar ser un navegador.
 
 Este proceso bloqueante es un laboratorio fuera de la UI, no un adaptador listo
 para incorporarse a la app. La cancelación del experimento debe terminar su grupo
@@ -40,6 +42,13 @@ Los tiempos separan búsqueda, resolución, primer byte y transferencia completa
 ni reproduce. CPU/RAM, frío/caliente, cancelación y decodificación común se miden
 externamente, sin comparar una resolución con el reproductor completo de otro.
 No existe todavía evidencia equivalente sobre búsqueda o resolución de YouTube.
+
+`scripts/provider-live-qa.py ARTIFACT ZIPAPP target/EVIDENCE --commit SHA`
+verifica el artifact CI, ejecuta dos pasadas intercaladas en procesos nuevos y
+decodifica los primeros diez segundos de cada archivo con el mismo FFmpeg local,
+sin abrir salida de audio. Registra CPU y el mayor RSS de un proceso (no pico
+simultáneo del grupo), además de cancelación del grupo tras observar resolución.
+Los resultados fallidos se conservan; las cachés remotas no se controlan.
 
 Referencias primarias:
 [Imageinfo](https://www.mediawiki.org/wiki/API:Imageinfo),

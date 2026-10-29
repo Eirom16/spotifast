@@ -109,6 +109,53 @@ def decode(payload):
         process.stdout.close()
 
 
+def cancelled(command, phase):
+    """Cancel the isolated experimental group after an observed phase marker."""
+    process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    start = time.monotonic()
+    observed = False
+    try:
+        with selectors.DefaultSelector() as selector:
+            selector.register(process.stderr, selectors.EVENT_READ)
+            while time.monotonic() - start < 12 and process.poll() is None:
+                if selector.select(timeout=0.1):
+                    if process.stderr.readline().strip() == f"phase={phase}".encode():
+                        observed = True
+                        break
+        assert observed, "Cancellation phase was not reached"
+        # Give the resolver time to enter IO/start its extractor. The result
+        # records whether a child was actually observed; never infer one.
+        time.sleep(0.1)
+        def members():
+            listing = subprocess.check_output(["ps", "-eo", "pid,pgid,stat"], text=True)
+            return [line.split() for line in listing.splitlines()[1:]
+                    if line.split()[1] == str(process.pid)]
+        before = members()
+        assert process.poll() is None, "Operation finished before cancellation"
+        at = time.monotonic()
+        os.killpg(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+        while time.monotonic() - at < 2:
+            remaining = members()
+            if not remaining:
+                break
+            time.sleep(0.02)
+        live = [row for row in remaining if not row[2].startswith("Z")]
+        assert not live, "Live process remains after cancellation"
+        return dict(scope="isolated CLI process group", phase=phase,
+                    child_observed=any(int(row[0]) != process.pid for row in before),
+                    cancel_to_observation_ms=(time.monotonic() - at) * 1000,
+                    exit_code=process.returncode, live_processes_remaining=len(live),
+                    zombies_remaining=len(remaining) - len(live),
+                    app_worker_cancellation_tested=False)
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
+        process.stderr.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
@@ -123,6 +170,8 @@ def main():
     corpus = json.loads((args.artifact / "corpus.json").read_text())
     assert len(corpus) == 2
     rows = []
+    report = dict(schema=1, source_commit=args.commit, experiment=True, samples=rows,
+                  audio_played=False, cold_warm_cache_benchmark=False, cancellation=[])
     for repeat in range(2):
         for recording in corpus:
             for resolver in ("native", "yt-dlp"):
@@ -142,11 +191,19 @@ def main():
                     assert hashlib.sha1(payload.read_bytes()).hexdigest() == recording["sha1"]
                     result["common_decode"] = decode(payload)
                 rows.append(result)
-                (output / "report.json").write_text(json.dumps(dict(schema=1,
-                    source_commit=args.commit, experiment=True, samples=rows,
-                    audio_played=False, cold_warm_cache_benchmark=False), indent=2) + "\n")
+                (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
                 print(resolver, recording["page_id"], result.get("status", "ok"), flush=True)
                 time.sleep(1)
+    for resolver in ("native", "yt-dlp"):
+        command = [str(binary)]
+        if resolver == "yt-dlp":
+            command += ["--yt-dlp", str(args.extractor.resolve())]
+        command += ["sine", "21923157"]
+        result = cancelled(command, "resolve")
+        result["resolver"] = resolver
+        report["cancellation"].append(result)
+        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        time.sleep(1)
 
 
 if __name__ == "__main__":

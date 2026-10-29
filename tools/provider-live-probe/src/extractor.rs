@@ -64,7 +64,7 @@ pub fn resolve(executable: &Path, info: &commons::Info) -> Result<String, Provid
             "--user-agent",
             http::AGENT,
             "--use-extractors",
-            "wikimedia",
+            "wikimedia.org",
         ])
         .arg(commons::page_url(info)?)
         .stdin(Stdio::null())
@@ -133,6 +133,8 @@ pub fn resolve(executable: &Path, info: &commons::Info) -> Result<String, Provid
             }
         } else if text.contains("404") {
             ProviderError::Unavailable
+        } else if text.contains("No suitable extractor") {
+            ProviderError::Unsupported
         } else {
             ProviderError::Transport
         });
