@@ -286,3 +286,63 @@ CPU 225 ms, PSS 37513 KiB, 96008 frames a 48 kHz. Una notificación CPAL xrun
 en frame 1924 y ninguna adicional hasta 96008; no se afirma ausencia de cortes
 audibles. Android aún offline en esa APK. Siguiente corte: compartir el worker
 online con Android y validarlo físicamente, sin adelantar autenticación.
+
+
+## Primer flujo online compartido, Android físico y Linux
+
+Código Rust `acad284c82257792a37c83e798fb6adaca116dbd`: CI enfocada
+`41077946872` y CI completa `41078491263` aprobadas. Nueve jobs del gate
+completo verdes, incluida Preview y regresiones Windows/macOS del legado;
+esto no valida todavía Doremi Native en Windows. Preview descargada y todos
+los hashes del archivo/contenido verificados en
+`target/downloaded-ci/preview-acad284/verified-archive.json`.
+
+Linux: Doremi Native Dev instalado y QA online completa aprobada en
+`target/native-online-ui-acad284/report.json`. Búsqueda, selección, pausa,
+Next/Previous, duplicados, cancelación, restauración pausada sin red automática
+y cierre durante consulta pendiente. Claro/oscuro/384 px inspeccionados.
+Xvfb/Mesa software, salida nativa predeterminada; muestra 1100 ms, CPU 490 ms,
+RSS 130836 KiB y cero avisos xrun en ese tramo. No representa GPU física.
+El registro del instalador se regeneró tras una redirección de stdout al
+mismo JSON; binario/hash/lanzador revalidados sin cambiar perfiles.
+
+APK `94859d8d33c7f3c053e71c0326da11818c8b651f`, CI `41143469529` aprobada,
+SHA-256 `9597a4b83f1b31ed1f448ea2ef60adb5ccfe28db2a65684553bb66bcd5bb28f0`.
+Descargada automáticamente e instalada sobre Doremi Dev preservando datos.
+El manifiesto identifica las bibliotecas nativas reutilizadas de `acad284`;
+huella de entradas Rust y bytes de ambas ABI comprobados idénticos.
+ARM64 alineada estáticamente a 16 KiB; prueba física en SM-J701M/API28/ARMv7
+con páginas de 4 KiB. No se atribuye una prueba ARM64/16 KiB a ese teléfono.
+
+Suite instrumentada completa aprobada, con quince capturas propias:
+`target/android-qa/94859d8d33c7/instrumentation/summary.json`. Unicode,
+navegación, cola compartida, foco, recreación, background/foreground y audio
+local; además búsqueda real Commons, cancelación de carga observada, PCM
+nativo, pausa estable, Next/Previous y misma ocurrencia pausada tras lifecycle.
+Claro/oscuro y capturas reales inspeccionados. INTERNET es el único permiso
+ordinario añadido; certificados raíz incluidos en la app con licencia CDLA,
+sin instalar certificados ni modificar seguridad Android.
+
+Ambas mediciones exigen volumen de aplicación positivo 0,08 y frames nativos.
+Local: CPU 276 ms/1101 ms, PSS 38465 KiB, 118012 frames. Online completamente
+prebufferizado: CPU 264 ms/1100 ms, PSS 47396 KiB, 89324 frames; salida 48 kHz
+y 1764000 bytes PCM. Cada muestra registró un aviso xrun en frame 0 y ninguno
+adicional hasta su instantánea; no se afirma audio sin cortes. Los tiempos
+de callback comienzan con PCM ya preparado, excluyen red/decodificación.
+No se capturó salida acústica ni se midieron FPS o batería. Sin errores
+críticos relevantes encontrados en el log del propio proceso.
+
+Se conservaron los fallos del harness: `8b83333` no actualizó el volumen con
+un par de eventos instantáneo; mantener contacto real 80 ms permitió pasar
+`1e0da43`. Esa suite funcional había usado ganancia cero en la muestra online
+por asumir un tamaño de handle incorrecto. El review de esa limitación sigue
+en su evidencia; `94859d8` corrige coordenadas y exige explícitamente ganancia
+positiva. No se atribuye audibilidad a la prueba silenciada.
+
+Flujo disponible en ambos hosts: Buscar → Commons CC0 → sine/440/880 →
+Seleccionar → PCM nativo → Pausa/Siguiente/Anterior. Sigue limitado a dos
+tonos CC0 auditados de Ubershmekel, con recursos completos acotados; no es
+streaming ni catálogo YouTube ni proveedor definitivo. MediaSession y
+background playback siguen pendientes. Próximo corte: favoritos neutrales
+compartidos para guardar estas identidades reales, conservando el esquema
+y los favoritos anteriores; autenticación continúa separada y posterior.

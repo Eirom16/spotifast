@@ -6,8 +6,9 @@ F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.
 F1A introdujo dominio/cola neutral. F1B-1 integra edición manual/confirmación
 y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
-Hay APK de desarrollo instalada y validada en Android real, sin audio todavía
-(ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo nuevo.
+Hay APK de desarrollo instalada y validada en Android real, audio PCM local
+y un flujo online experimental de dos tonos Commons CC0 en Android/Linux
+(ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo definitivo.
 Preview 0.1 añade un ejecutable
 offline independiente que reutiliza las vistas, no un motor musical nuevo.
 Su gate de distribución/CI se registra por separado en `DOREMI-PREVIEW-REPORT.md`.
@@ -504,3 +505,14 @@ SM-J701M con suite completa; un aviso xrun temprano en la muestra física.
 Evidencia y límites en DOREMI-GOAL-REPORT.md. Prioridad activa: portar ese
 worker/UI compartido a Android, añadir únicamente INTERNET y probar en teléfono.
 Autenticación y biblioteca online permanecen posteriores.
+
+
+Flujo online compartido verificado: Rust `acad284`, CI completa `41078491263`
+con nueve jobs verdes; APK `94859d8`, CI enfocada `41143469529` verde e instalada
+en SM-J701M. Suite física completa con quince capturas y volumen positivo 0,08,
+PCM local/online, cancelación y lifecycle; un aviso xrun temprano en cada muestra.
+Linux Native Dev actualizado y QA online aprobada; Preview conservada y
+artefacto descargado/verificado. Evidencia y correcciones del harness en
+DOREMI-GOAL-REPORT.md. Próximo corte: biblioteca propia con identidades neutrales,
+metadatos persistidos sin URLs efímeras y conservación de favoritos existentes.
+Autenticación, streaming y MediaSession siguen pendientes.
