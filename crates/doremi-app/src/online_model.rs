@@ -76,7 +76,9 @@ impl Model {
     // pending IO. The next foreground frame cannot accept retired completions.
     pub fn suspend_online(&mut self) {
         self.cancel_online_search();
-        self.catalog.cancel();
+        if self.catalog.search_status() == Status::Pending {
+            self.catalog.cancel();
+        }
         if self.online.load.is_some() {
             self.command(Command::Cancel);
         }
@@ -355,6 +357,18 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn suspension_preserves_completed_results_without_starting_a_worker() {
+        let mut model = Model::new(Preferences::default());
+        model.query = "Café".into();
+        model.search();
+        let results = model.catalog.results().to_vec();
+        assert!(!results.is_empty());
+        model.suspend_online();
+        assert_eq!(model.catalog.results(), results);
+        assert_eq!(model.catalog.search_status(), Status::Ready);
+        assert!(model.online.worker.is_none());
+    }
     #[test]
     fn a_completion_after_its_deadline_cannot_win_the_same_frame_as_timeout() {
         let mut model = Model::new(Preferences::default());

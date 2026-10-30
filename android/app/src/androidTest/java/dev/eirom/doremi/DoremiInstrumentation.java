@@ -196,13 +196,18 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
         SystemClock.sleep(400);
     }
+    private boolean hasControl(JSONObject state,String name) {
+        JSONArray controls=state.optJSONArray("controls");
+        if(controls!=null) for(int i=0;i<controls.length();i++) if(name.equals(controls.optJSONObject(i).optString("name"))) return true;
+        return false;
+    }
     private boolean onlinePlaying(JSONObject s,String id) {
         JSONObject metrics=s.optJSONObject("audio_metrics");
         return id.equals(s.optString("current")) && "Playing".equals(s.optString("playback")) && metrics!=null && metrics.optLong("frames")>5000;
     }
     private void online() throws Exception {
         tap("search");tap("source-commons");tap("query");text("sine",true);hideKeyboard();
-        until(12000,"real Commons results",s -> s.optJSONArray("results").length()==2 && "Ready".equals(s.optJSONObject("online").optString("search_status")));
+        until(12000,"real Commons results",s -> hasControl(s,"select:21923157") && hasControl(s,"select:21923199") && "Ready".equals(s.optJSONObject("online").optString("search_status")));
         capture("qa-online-results-dark");
         tap("settings");tap("light");tap("search");capture("qa-online-results-light");
         tap("settings");tap("dark");tap("search");

@@ -218,7 +218,7 @@ pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jbool
                     Playback::Playing | Playback::Loading
                 )
             {
-                if model.queue.playback() == Playback::Loading && model.online.load.is_some() {
+                if model.queue.playback() == Playback::Loading && model.online.phase() != "idle" {
                     model.command(Command::Cancel);
                 } else {
                     model.command(Command::Pause);

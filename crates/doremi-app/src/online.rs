@@ -1,4 +1,4 @@
-//! Linux host IO actor. Queue/playing intent remain solely in Model/core.
+//! Shared Linux/Android host IO actor. Queue/playing intent remain solely in Model/core.
 //! One search and one source future, bounded commands/results and two PCMs.
 use doremi_commons as commons;
 use doremi_core::{
@@ -177,7 +177,7 @@ impl Worker {
 }
 impl Drop for Worker {
     fn drop(&mut self) {
-        // Model is retained until after the desktop UI event loop exits.
+        // Model/worker survive Android Activity lifetimes; desktop drops after its UI loop.
         self.shared.closed.store(true, Ordering::Release);
         self.sender.take();
         if let Some(thread) = self.thread.take() {
