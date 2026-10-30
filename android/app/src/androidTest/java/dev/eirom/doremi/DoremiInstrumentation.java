@@ -136,10 +136,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
         SystemClock.sleep(400);tap("cancel-search");
     }
-    private void audio() throws Exception {
-        tap("home");tap("local-audio");
-        until(s -> s.optBoolean("audio") && s.optString("playback").equals("Playing") && s.optLong("position_ms")>300 && s.optJSONObject("audio_metrics")!=null && s.optJSONObject("audio_metrics").optLong("frames")>0);
-        capture("qa-audio-playing");
+    private void measureResources(String name) throws Exception {
         long cpuBefore=android.os.Process.getElapsedCpuTime(),wallBefore=SystemClock.elapsedRealtime();
         SystemClock.sleep(1100);
         long cpuMs=android.os.Process.getElapsedCpuTime()-cpuBefore,wallMs=SystemClock.elapsedRealtime()-wallBefore;
@@ -148,7 +145,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         resources.put("percent_of_one_cpu",100.0*cpuMs/wallMs);resources.put("total_pss_kib",memory.getTotalPss());
         resources.put("method","Process.getElapsedCpuTime / SystemClock.elapsedRealtime; own process only");
         resources.put("audio_metrics",state().optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
-        Files.write(new File(getTargetContext().getFilesDir(),"qa-audio-resources.json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private void audio() throws Exception {
+        tap("home");tap("local-audio");
+        until(s -> s.optBoolean("audio") && s.optString("playback").equals("Playing") && s.optLong("position_ms")>300 && s.optJSONObject("audio_metrics")!=null && s.optJSONObject("audio_metrics").optLong("frames")>0);
+        capture("qa-audio-playing");
+        measureResources("qa-audio-resources");
         tap("pause");until(s -> s.optString("playback").equals("Paused"));SystemClock.sleep(300);
         long paused=state().getLong("position_ms");SystemClock.sleep(400);
         if(state().getLong("position_ms")!=paused) throw new AssertionError("PCM advanced while paused");
@@ -221,6 +224,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         slide("volume",0.08f);until(s -> s.optDouble("volume",1)<0.15);
         tap("play");until(15000,"online tone delivered to native output",s -> onlinePlaying(s,"21923157"));
         capture("qa-online-playing");
+        measureResources("qa-online-resources");
         tap("pause");until(s -> "Paused".equals(s.optString("playback")));SystemClock.sleep(250);
         long paused=state().getLong("position_ms");SystemClock.sleep(350);
         if(state().getLong("position_ms")!=paused) throw new AssertionError("Online PCM advanced while paused");

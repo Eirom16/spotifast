@@ -38,7 +38,7 @@ def check(directory, create=False):
         assert re.fullmatch('[0-9a-f]{40}', native['source_commit'])
         assert re.fullmatch('[0-9a-f]{64}', native['rust_inputs_sha256'])
         assert re.fullmatch('[0-9a-f]{40}', commit)
-        for name in ['assets/licenses/MIT.txt', 'assets/licenses/Doremi-assets-GPL-3.txt', 'assets/licenses/PROVENANCE.md', 'assets/licenses/Audio-CC0.txt', 'assets/licenses/Audio-manifest.json', 'assets/licenses/Symphonia-MPL-2.0.txt', 'assets/licenses/Symphonia-source-and-fixture.md', 'assets/licenses/Commons-CC0-corpus.json']:
+        for name in ['assets/licenses/MIT.txt', 'assets/licenses/Doremi-assets-GPL-3.txt', 'assets/licenses/PROVENANCE.md', 'assets/licenses/Audio-CC0.txt', 'assets/licenses/Audio-manifest.json', 'assets/licenses/Symphonia-MPL-2.0.txt', 'assets/licenses/Symphonia-source-and-fixture.md', 'assets/licenses/Commons-CC0-corpus.json', 'assets/licenses/webpki-roots-CDLA-Permissive-2.0.txt', 'assets/licenses/Android-TLS-NOTICE.txt']:
             assert len(archive.read(name)) > 0
         for name in archive.namelist():
             if not name.startswith('lib/') or not name.endswith('.so'):

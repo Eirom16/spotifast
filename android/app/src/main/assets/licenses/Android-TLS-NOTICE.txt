@@ -1,0 +1,6 @@
+Android TLS trust anchors: webpki-roots 1.0.9, unmodified crates.io package.
+Source: https://crates.io/crates/webpki-roots/1.0.9
+Repository: https://github.com/rustls/webpki-roots
+License: CDLA-Permissive-2.0; full text provided alongside this notice.
+These application-bundled roots do not install device certificates or modify
+Android security settings. HTTPS verification remains enabled.

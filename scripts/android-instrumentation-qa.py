@@ -44,6 +44,12 @@ def main():
     log = adb("shell", "am", "instrument", "-w",
               f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
     (output / "instrumentation.log").write_bytes(log)
+    # Retain failure diagnostics before evaluating PASS. Read only Doremi's
+    # own versioned QA state and process-filtered log, never the global log.
+    latest = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-state.json"))
+    (output / "latest-state.json").write_text(json.dumps(latest, indent=2) + "\n")
+    own_log = adb("logcat", "-d", f"--pid={int(latest['pid'])}", "-t", "1000").decode(errors="replace")
+    (output / "own-process.log").write_text(own_log)
     assert log.decode().startswith("PASS: ") and "FAIL:" not in log.decode(), log.decode()
     states = []
     for name in CAPTURES:
@@ -64,8 +70,10 @@ def main():
         r"FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR|"
         r"shutdown.*timed out|forgot to call.*destroy", line, re.IGNORECASE)]
     assert not critical, "Relevant critical errors retained in own-process.log"
+    online_resources = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-online-resources.json"))
+    (output / "qa-online-resources.json").write_text(json.dumps(online_resources, indent=2) + "\n")
     summary = dict(source_commit=args.commit, native_source_commit=manifest.get("native_source_commit"),
-                   result="pass", captures=len(CAPTURES), resources=resources,
+                   result="pass", captures=len(CAPTURES), resources=resources, online_resources=online_resources,
                    relevant_errors=critical, acoustic_capture=False)
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(output)
