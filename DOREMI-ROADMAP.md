@@ -485,3 +485,12 @@ los mismos originales; tiempos y límites en DOREMI-GOAL-REPORT.md. No acredita
 YouTube ni reproducción online integrada. Próximo corte: Ogg/Vorbis acotado y
 motor nativo, después worker/UI cancelables. APK `075f18f` revalidada físicamente
 tras la reconexión, con suite completa y capturas propias; Preview conservada.
+
+
+Primer corte F3 experimental ejecutado en Linux: `ed60553`, flujo CLI real de
+Commons CC0 hasta callback nativo, con pausa/seek/cambio/EOT/cancelación sobre
+el mismo Model/Queue. Los dos recursos se prebufferizan completos; aún no hay
+UI online ni streaming. `doremi-commons` extrae transporte async compartido,
+con política/tamaños/hashes auditados. CI completa `40976390452` verde sobre
+`cd3a9ad`; CI enfocada y dispositivo físico verdes sobre `ed60553`.
+La siguiente prioridad es worker/UI cancelables; autenticación sigue posterior.

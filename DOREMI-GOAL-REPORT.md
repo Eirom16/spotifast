@@ -213,3 +213,44 @@ APK realmente instalado y exige PASS antes de recopilar archivos privados QA.
 El host Linux del mismo commit también se descargó/verificó y pasó controles
 nativos Play/Pause/resume/Next/Previous/cancel con XTest y Xvfb/Mesa software:
 `target/native-audio-ui-075f18f/report.json`. No se atribuye a Wayland/GPU física.
+
+
+## Primer flujo online con salida nativa (CLI Linux experimental)
+
+`cd3a9ad`: CI enfocada `40976213322`, probe `40976213263` y CI completa
+`40976390452` aprobadas. Nueve jobs del gate completo verdes, incluida Preview,
+regresiones Windows/macOS del legado y APK. Android y Linux revalidaron los
+controles PCM después de compartir buffers inmutables con el actor de salida.
+Android: PSS 35206 KiB, CPU 244 ms/1100 ms, cero notificaciones xrun en la muestra;
+suite completa y capturas propias en `target/android-qa/cd3a9adc65f7/`.
+El decoder Rust preparó los dos tonos online a 44,1 kHz, diez segundos y
+1764000 bytes PCM cada uno; se verificaron hashes y límites, incluido rechazar
+un Ogg pequeño que expande a más de un millón de muestras. Symphonia 0.5.5
+se reutiliza sin modificar, con MPL y enlace a sus fuentes conservados.
+
+`ed60553`: CI enfocada `40977844848` y probe async `40977844882` aprobadas.
+Se comparte el adaptador `doremi-commons`; no depende de UI/audio/credenciales.
+El ejecutable descargado/verificado ejecutó `--online-audio-probe` en CachyOS:
+búsqueda real, selección por IDs auditados, resolución, descarga/hash, PCM Rust,
+salida nativa y los mismos controles/cola del host. Pasaron pausa, seek,
+volumen cero, Next/Previous, fin de pista y cancelación. Las cuatro métricas de
+salida guardadas registraron cero xruns, PCM a 48 kHz de salida y frames reales.
+No se capturó sonido acústico ni se afirma audibilidad medida.
+
+Dos recursos completos se preparan antes de reproducir: no es streaming.
+Muestra única: prefetch 1515,64 ms, proceso 4177,36 ms, CPU usuario/sistema
+198,79/48,49 ms y RSS máximo 49132 KiB. Los tiempos `first_pcm_us` de salida
+comienzan al cargar PCM ya preparado; no incluyen red/decoder ni miden primera
+salida acústica. Evidencia: `target/native-online-ed60553/report.json` y log propio.
+El CLI no creó perfil y usa volumen de aplicación 0,08 para estos tonos;
+no modifica el volumen global. UI offline del mismo build pasó QA XTest.
+El instalador privado actualizado conservó builds/Preview/perfiles anteriores.
+
+APK `ed60553` SHA-256 `0a7d945cbc08114b5e061ea6277679d85e3994c0be661d6eddb5672c1966b0a9` descargada e instalada
+sin borrar datos: regresión básica y suite instrumentada completa aprobadas.
+PSS 40392 KiB y CPU 243 ms/1100 ms, cero notificaciones xrun en ese tramo.
+Nueve capturas propias y log sin errores críticos encontrados:
+`target/android-qa/ed605534c519/instrumentation/summary.json`.
+Android sigue offline/sin permiso INTERNET. Linux ofrece el flujo online solo
+como CLI experimental; el siguiente corte añade worker/UI cancelables. Esto
+no acredita un catálogo YouTube, biblioteca Music ni autenticación.
