@@ -7,9 +7,9 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod online;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
@@ -78,7 +78,7 @@ struct Model {
     // Source data, not a second queue. Only the explicit bounded CLI corpus
     // populates this cache; no arbitrary files or persisted transport URIs.
     prepared: Vec<(MediaId, Arc<Pcm>)>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     online: online_model::State,
 }
 
@@ -125,7 +125,7 @@ impl Model {
             audio: None,
             focus: !cfg!(target_os = "android"),
             prepared: Vec::new(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             online: online_model::State::new(),
         }
     }
@@ -356,7 +356,7 @@ impl Model {
         });
     }
     fn search(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         if self.online.selected {
             self.schedule_online_search();
             return;
@@ -392,11 +392,11 @@ impl Model {
         self.revision += 1;
     }
     fn catalog_now(&self) -> Tick {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             Tick(self.online.origin.elapsed().as_millis() as u64)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             Tick(self.revision)
         }
@@ -404,16 +404,16 @@ impl Model {
     fn cancel_search(&mut self) {
         self.query.clear();
         self.catalog.cancel();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.cancel_online_search();
         self.revision += 1;
     }
     fn online_candidate(&self, _id: &MediaId) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             online_model::candidate(_id)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             false
         }
@@ -424,48 +424,48 @@ impl Model {
         _id: &MediaId,
         _position: u64,
     ) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             self.begin_online_load(_request, _id, _position)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             false
         }
     }
     fn cancel_online(&mut self, _request: Option<doremi_core::queue::RequestId>) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.cancel_online_load(_request);
     }
     fn online_search_selected(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             self.online.selected
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             false
         }
     }
     fn source_diagnostics(&self) -> serde_json::Value {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             let mut state = self.online.snapshot();
             state["search_status"] =
                 serde_json::json!(format!("{:?}", self.catalog.search_status()));
             state
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             serde_json::json!({"search_source":"demo","phase":"unavailable"})
         }
     }
     fn search_feedback(&self) -> Option<(bool, String)> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
             self.online.feedback(self.catalog.search_status())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             None
         }
@@ -731,7 +731,7 @@ impl DoremiApp {
 impl DoremiApp {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_online(&ctx);
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
@@ -796,7 +796,7 @@ impl DoremiApp {
                 ui.set_min_width(ui.available_width());
                 match page {
                     Page::Home => {
-                        ui.heading("Tu música, a tu ritmo");ui.label(if cfg!(target_os="linux") {"Audio local y demostración. Commons experimental desde Buscar."}else{"Catálogo de prueba local. Sin Spotify ni conexión."});
+                        ui.heading("Tu música, a tu ritmo");ui.label(if cfg!(any(target_os="linux",target_os="android")) {"Audio local y demostración. Commons experimental desde Buscar."}else{"Catálogo de prueba local. Sin Spotify ni conexión."});
                         if self.model.as_ref().unwrap().queue.current().is_some() && self.button(ui,"player","Abrir reproductor",220.0) {
                             let model=self.model.as_mut().unwrap();model.page=Page::Player;model.revision+=1;
                         }
@@ -809,7 +809,7 @@ impl DoremiApp {
                     }
                     Page::Search => {
                         ui.heading("Buscar");
-                        #[cfg(target_os="linux")]
+                        #[cfg(any(target_os="linux",target_os="android"))]
                         {
                             let width=((ui.available_width()-GAP)/2.0).floor().max(TOUCH);
                             ui.horizontal_wrapped(|ui| {
@@ -867,12 +867,12 @@ impl DoremiApp {
                                 if self.button(ui,name,label,130.0) { let model = self.model.as_mut().unwrap(); model.prefs.light = value; model.revision += 1; }
                             }
                         });
-                        ui.label(if cfg!(target_os="linux") {"Datos propios de Doremi. Commons es opcional y no requiere cuenta."}else{"Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."});
+                        ui.label(if cfg!(any(target_os="linux",target_os="android")) {"Datos propios de Doremi. Commons es opcional y no requiere cuenta."}else{"Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."});
                     }
                     Page::Player => {
                         if self.model.as_ref().unwrap().real_audio() {
                             let online=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().online_candidate(&entry.media.id));
-                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos online de prueba · CC0 · experimental"}else{"Muestras originales de Doremi · CC0"});
+                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else{"Muestras originales de Doremi · CC0"});
                             #[cfg(target_os = "android")]
                             ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
                             let model = self.model.as_mut().unwrap();
@@ -925,6 +925,8 @@ impl eframe::App for DoremiApp {
 impl Drop for DoremiApp {
     fn drop(&mut self) {
         if let Some(mut model) = self.model.take() {
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            model.suspend_online();
             model.command(Command::Cancel);
             // Retain the owner and its idle writer across Activity lifetimes.
             // Never join disk work from the drawing/lifecycle thread.
@@ -1048,7 +1050,7 @@ mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
     use doremi_core::queue::Playback;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
     fn source_picker_uses_equal_touch_boxes_and_fits_narrow_and_landscape_views() {
         let _guard = UI_TEST_LOCK.lock().unwrap();

@@ -9,6 +9,13 @@ description = "Bounded, credential-free Commons experiment for audited CC0 tones
 
 [dependencies]
 doremi-core = { path = "../doremi-core" }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+reqwest = { version = "0.12", default-features = false }
 serde_json = "1"
 sha1 = "0.10"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Bundled Mozilla roots; no certificate installation or device security changes.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }

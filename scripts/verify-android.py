@@ -26,7 +26,8 @@ def check(directory, create=False):
     assert "launchable-activity: name='dev.eirom.doremi.MainActivity'" in badging
     permissions = re.findall(r"uses-permission: name='([^']+)'", badging)
     # AndroidX protects its own dynamic receivers with a signature permission.
-    assert set(permissions) <= {PACKAGE + '.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION'}, permissions
+    assert set(permissions) <= {PACKAGE + '.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION', 'android.permission.INTERNET'}, permissions
+    assert 'android.permission.INTERNET' in permissions
     assert "native-code: 'arm64-v8a' 'armeabi-v7a'" in badging
     subprocess.run([str(tools / 'apksigner'), 'verify', '--verbose', str(apk)], check=True)
     subprocess.run([str(tools / 'zipalign'), '-c', '-P', '16', '-v', '4', str(apk)], check=True, stdout=subprocess.DEVNULL)
@@ -37,7 +38,7 @@ def check(directory, create=False):
         assert re.fullmatch('[0-9a-f]{40}', native['source_commit'])
         assert re.fullmatch('[0-9a-f]{64}', native['rust_inputs_sha256'])
         assert re.fullmatch('[0-9a-f]{40}', commit)
-        for name in ['assets/licenses/MIT.txt', 'assets/licenses/Doremi-assets-GPL-3.txt', 'assets/licenses/PROVENANCE.md', 'assets/licenses/Audio-CC0.txt', 'assets/licenses/Audio-manifest.json']:
+        for name in ['assets/licenses/MIT.txt', 'assets/licenses/Doremi-assets-GPL-3.txt', 'assets/licenses/PROVENANCE.md', 'assets/licenses/Audio-CC0.txt', 'assets/licenses/Audio-manifest.json', 'assets/licenses/Symphonia-MPL-2.0.txt', 'assets/licenses/Symphonia-source-and-fixture.md', 'assets/licenses/Commons-CC0-corpus.json']:
             assert len(archive.read(name)) > 0
         for name in archive.namelist():
             if not name.startswith('lib/') or not name.endswith('.so'):

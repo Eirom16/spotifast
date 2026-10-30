@@ -72,6 +72,16 @@ pub(super) fn candidate(id: &MediaId) -> bool {
         && doremi_commons::audited(id.local()).is_some()
 }
 impl Model {
+    // Keep the owner/worker across Android Activity recreation, but fence all
+    // pending IO. The next foreground frame cannot accept retired completions.
+    pub fn suspend_online(&mut self) {
+        self.cancel_online_search();
+        self.catalog.cancel();
+        if self.online.load.is_some() {
+            self.command(Command::Cancel);
+        }
+        self.revision += 1;
+    }
     fn online_worker(&mut self) -> Result<&Worker, ProviderError> {
         if self.online.worker.is_none() {
             self.online.worker = Some(Worker::new(self.online.origin)?);
@@ -378,7 +388,7 @@ mod tests {
         assert!(model.audio.is_none() && model.prepared.is_empty());
     }
     #[test]
-    fn cancelled_queue_load_rejects_a_late_pcm_completion_without_opening_audio() {
+    fn suspension_fences_search_and_rejects_late_pcm_without_opening_audio() {
         let mut model = Model::new(Preferences::default());
         let media = Media {
             id: MediaId::new(
@@ -393,7 +403,12 @@ mod tests {
         let pending = model.online.load.as_ref().unwrap();
         let generation = pending.generation;
         let request = pending.request;
-        model.command(Command::Cancel);
+        model.online.selected = true;
+        model.query = "sine".into();
+        model.schedule_online_search();
+        assert!(model.online.debounce.is_some());
+        model.suspend_online();
+        assert!(model.online.search.is_none() && model.online.debounce.is_none());
         let pcm = Arc::new(doremi_player::decode_wav(Builtin::Scale.bytes()).unwrap());
         model.online.worker.as_ref().unwrap().inject_completion(
             1,

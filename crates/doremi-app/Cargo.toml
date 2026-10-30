@@ -22,8 +22,8 @@ serde_json = "1"
 # Decode the original logo once at startup, before drawing.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-# Linux Commons experiment; Android keeps offline sources until its port is tested.
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+# Shared optional Commons experiment; no network until explicitly selected.
 doremi-commons = { path = "../doremi-commons" }
 doremi-player = { path = "../doremi-player", features = ["native-output", "ogg-vorbis"] }
 tokio = { version = "1", features = ["rt", "time", "net", "sync", "macros"] }

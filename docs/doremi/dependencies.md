@@ -105,15 +105,15 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app: dependencies` | `rand` | `0.9` |
 | `crates/doremi-app: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-app: dependencies` | `serde_json` | `1` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android")): dependencies` | `doremi-commons` | `path=../doremi-commons` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis']; path=../doremi-player` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android")): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `android_logger` | `0.15` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `egui_glow` | `default-features=False; version=0.36.2` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `jni` | `0.21` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `log` | `0.4` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `ndk-context` | `0.1` |
-| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-commons` | `path=../doremi-commons` |
-| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis']; path=../doremi-player` |
-| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-library: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
@@ -128,9 +128,11 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `tools/provider-live-probe: dependencies` | `sha2` | `0.10` |
 | `tools/provider-live-probe: dependencies` | `tokio` | `features=['rt', 'time', 'net']; version=1` |
 | `crates/doremi-commons: dependencies` | `doremi-core` | `path=../doremi-core` |
-| `crates/doremi-commons: dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-commons: dependencies` | `reqwest` | `default-features=False; version=0.12` |
 | `crates/doremi-commons: dependencies` | `serde_json` | `1` |
 | `crates/doremi-commons: dependencies` | `sha1` | `0.10` |
+| `crates/doremi-commons/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-commons/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 
 ## Fuentes transitivas bloqueadas
 

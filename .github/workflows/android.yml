@@ -95,6 +95,7 @@ jobs:
           cp assets/doremi/PROVENANCE.md target/native-dist/licenses/
           cp assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
           cp assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
+          cp tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
           cp crates/doremi-player/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           python3 scripts/native-manifest.py target/native-dist/doremi-app target/native-dist/manifest.json

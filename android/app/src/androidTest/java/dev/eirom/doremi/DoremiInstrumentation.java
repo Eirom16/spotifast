@@ -87,7 +87,8 @@ public final class DoremiInstrumentation extends Instrumentation {
         } while(SystemClock.uptimeMillis()<deadline);
         throw new AssertionError("Doremi surface capture failed: "+name+" status="+lastStatus);
     }
-    private void tap(String name) throws Exception {
+    private void tap(String name) throws Exception { tap(name,500); }
+    private void tap(String name,long settle) throws Exception {
         foreground();
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
         for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
@@ -100,7 +101,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0); sendPointerSync(down); down.recycle();
         MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
-        SystemClock.sleep(500);
+        SystemClock.sleep(settle);
     }
     private void slide(String name,float fraction) throws Exception {
         foreground();
@@ -191,6 +192,51 @@ public final class DoremiInstrumentation extends Instrumentation {
         capture("qa-audio-after-end");
         tap("stop");until(s -> s.optString("playback").equals("Paused") && s.isNull("audio_metrics"));
     }
+    private void hideKeyboard() throws Exception {
+        runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+        SystemClock.sleep(400);
+    }
+    private boolean onlinePlaying(JSONObject s,String id) {
+        JSONObject metrics=s.optJSONObject("audio_metrics");
+        return id.equals(s.optString("current")) && "Playing".equals(s.optString("playback")) && metrics!=null && metrics.optLong("frames")>5000;
+    }
+    private void online() throws Exception {
+        tap("search");tap("source-commons");tap("query");text("sine",true);hideKeyboard();
+        until(12000,"real Commons results",s -> s.optJSONArray("results").length()==2 && "Ready".equals(s.optJSONObject("online").optString("search_status")));
+        capture("qa-online-results-dark");
+        tap("settings");tap("light");tap("search");capture("qa-online-results-light");
+        tap("settings");tap("dark");tap("search");
+        // No prepared cache exists yet: observe a real pending load, then cancel.
+        tap("select:21923157",0);
+        until(2000,"online load before cancellation",s -> "Loading".equals(s.optString("playback")) && s.optJSONObject("online").optBoolean("loading"));
+        tap("stop",0);until(s -> "Paused".equals(s.optString("playback")) && !s.optJSONObject("online").optBoolean("loading"));
+        SystemClock.sleep(1200);
+        if(!"Paused".equals(state().optString("playback")) || !state().isNull("audio_metrics")) throw new AssertionError("Cancelled online source became active");
+        capture("qa-online-cancelled");
+        slide("volume",0.08f);until(s -> s.optDouble("volume",1)<0.15);
+        tap("play");until(15000,"online tone delivered to native output",s -> onlinePlaying(s,"21923157"));
+        capture("qa-online-playing");
+        tap("pause");until(s -> "Paused".equals(s.optString("playback")));SystemClock.sleep(250);
+        long paused=state().getLong("position_ms");SystemClock.sleep(350);
+        if(state().getLong("position_ms")!=paused) throw new AssertionError("Online PCM advanced while paused");
+        tap("play");until(4000,"online resume",s -> onlinePlaying(s,"21923157"));
+        tap("next");until(15000,"second audited online tone",s -> onlinePlaying(s,"21923199"));
+        tap("previous");until(4000,"previous online identity",s -> onlinePlaying(s,"21923157"));
+        long occurrence=state().getLong("current_occurrence"),instance=state().getLong("instance");
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+        runOnMainSync(() -> activity.recreate());
+        Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
+        if(recreated==null) throw new AssertionError("Online recreation did not return");activity=recreated;
+        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && !s.optJSONObject("online").optBoolean("loading"));
+        capture("qa-online-recreated");
+        tap("play");until(4000,"online explicit resume after recreation",s -> onlinePlaying(s,"21923157"));
+        long beforeBackground=state().getLong("instance");
+        runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        until(s -> s.optLong("instance")!=beforeBackground && "Paused".equals(s.optString("playback")) && s.optLong("current_occurrence")==occurrence);
+        capture("qa-online-background");
+        tap("stop");tap("search");tap("source-demo");tap("cancel-search");
+    }
     private InputConnection connection(View view) {
         if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
         if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result; } }
@@ -255,7 +301,8 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-shared-queue-trace");
             backgroundInput();
             audio();
-            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background\n");
+            online();
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; real Commons search/load/cancel/PCM/next/previous/paused recreation/background\n");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable error) { result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result); }
     }

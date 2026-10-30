@@ -218,7 +218,11 @@ pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jbool
                     Playback::Playing | Playback::Loading
                 )
             {
-                model.command(Command::Pause);
+                if model.queue.playback() == Playback::Loading && model.online.load.is_some() {
+                    model.command(Command::Cancel);
+                } else {
+                    model.command(Command::Pause);
+                }
                 model.notice =
                     "Audio en pausa: foco no disponible o aplicación en segundo plano.".into();
             } else if let Some(engine) = &model.audio {
