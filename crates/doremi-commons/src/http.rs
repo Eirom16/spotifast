@@ -1,10 +1,6 @@
 use doremi_core::catalog::ProviderError;
-use reqwest::{
-    Url,
-    blocking::{Client, Response},
-    redirect::Policy,
-};
-use std::{io::Read, time::Duration};
+use reqwest::{Client, Response, Url, redirect::Policy};
+use std::time::Duration;
 
 pub const AGENT: &str = "DoremiResearchBot/0.1 (https://github.com/Eirom16/spotifast)";
 pub const JSON_LIMIT: usize = 1024 * 1024;
@@ -59,22 +55,27 @@ pub fn status(response: &Response) -> Result<(), ProviderError> {
         _ => Err(ProviderError::Transport),
     }
 }
-pub fn bounded(mut response: Response, limit: usize) -> Result<Vec<u8>, ProviderError> {
+pub async fn bounded(response: Response, limit: usize) -> Result<Vec<u8>, ProviderError> {
     status(&response)?;
     if response.content_length().is_some_and(|n| n > limit as u64) {
         return Err(ProviderError::TooLarge);
     }
+    bounded_remaining(response, limit).await
+}
+/// Used after reading the first chunk; Content-Length describes the original
+/// response, not its remaining body. The caller already checked that header.
+pub async fn bounded_remaining(
+    mut response: Response,
+    limit: usize,
+) -> Result<Vec<u8>, ProviderError> {
     let mut bytes = Vec::new();
-    response
-        .by_ref()
-        .take(limit as u64 + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|_| ProviderError::Transport)?;
-    if bytes.len() > limit {
-        Err(ProviderError::TooLarge)
-    } else {
-        Ok(bytes)
+    while let Some(chunk) = response.chunk().await.map_err(error)? {
+        if chunk.len() > limit.saturating_sub(bytes.len()) {
+            return Err(ProviderError::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
     }
+    Ok(bytes)
 }
 #[cfg(test)]
 mod tests {

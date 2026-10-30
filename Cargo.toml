@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player", "tools/provider-live-probe"]
+members = [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player", "tools/provider-live-probe", "crates/doremi-commons"]
 default-members = [".", "crates/doremi-core"]
 resolver = "3"
 

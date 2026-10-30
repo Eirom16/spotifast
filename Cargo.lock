@@ -1553,6 +1553,7 @@ name = "doremi-app"
 version = "0.1.0"
 dependencies = [
  "android_logger",
+ "doremi-commons",
  "doremi-core",
  "doremi-library",
  "doremi-player",
@@ -1566,6 +1567,17 @@ dependencies = [
  "rand 0.9.5",
  "serde",
  "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "doremi-commons"
+version = "0.1.0"
+dependencies = [
+ "doremi-core",
+ "reqwest",
+ "serde_json",
+ "sha1",
 ]
 
 [[package]]
@@ -1602,12 +1614,12 @@ dependencies = [
 name = "doremi-provider-live-probe"
 version = "0.1.0"
 dependencies = [
+ "doremi-commons",
  "doremi-core",
  "doremi-player",
- "reqwest",
  "serde_json",
- "sha1",
  "sha2 0.10.9",
+ "tokio",
 ]
 
 [[package]]

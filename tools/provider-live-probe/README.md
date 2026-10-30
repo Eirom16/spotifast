@@ -32,8 +32,9 @@ La salida del subproceso se drena con límites y se mata/espera tras ocho segund
 El extractor se selecciona por su nombre real `wikimedia.org`; su agente propio
 también identifica públicamente yt-dlp, sin aparentar ser un navegador.
 
-Este proceso bloqueante es un laboratorio fuera de la UI, no un adaptador listo
-para incorporarse a la app. La cancelación del experimento debe terminar su grupo
+El transporte Rust se comparte mediante futuros en `doremi-commons`; cargar
+certificados y ejecutar el extractor se mantienen fuera de cualquier UI.
+El CLI es un laboratorio, no una integración lista para la app. La cancelación del experimento debe terminar su grupo
 de procesos; la cancelación por tickets del futuro worker aún requiere integración.
 El contrato descarta respuestas expiradas, pero eso no cancela por sí solo el IO.
 

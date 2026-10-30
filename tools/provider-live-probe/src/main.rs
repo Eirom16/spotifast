@@ -1,20 +1,18 @@
 //! Explicit, bounded live experiment. No app integration or login is advertised.
-mod commons;
 mod extractor;
-mod http;
+use doremi_commons::{self as commons, http};
 use doremi_core::{
     catalog::*,
     media::{MediaId, ProviderId},
     requests::SessionId,
 };
 use serde_json::{Value, json};
-use sha1::{Digest, Sha1};
-use std::{io::Read, path::PathBuf, time::Instant};
+use std::{path::PathBuf, time::Instant};
 
 fn tick(start: Instant) -> Tick {
     Tick(start.elapsed().as_millis() as u64)
 }
-fn experiment(
+async fn experiment(
     query: &str,
     selected: &str,
     extractor: Option<&std::path::Path>,
@@ -45,7 +43,7 @@ fn experiment(
         .ok_or(ProviderError::InvalidRequest)?;
     let at = Instant::now();
     eprintln!("phase=search");
-    let wire = commons::search(&client, &request.query, request.limit)?;
+    let wire = commons::search(&client, &request.query, request.limit).await?;
     let results = Ok(wire.iter().map(|v| v.media.clone()).collect());
     let search_ms = at.elapsed().as_secs_f64() * 1000.0;
     catalog.complete(
@@ -94,7 +92,7 @@ fn experiment(
         let uri = extractor::resolve(executable, &info)?;
         commons::Info { uri, ..info }
     } else {
-        commons::resolve(&client, &request.media)?
+        commons::resolve(&client, &request.media).await?
     };
     let resolve_ms = at.elapsed().as_secs_f64() * 1000.0;
     let resource = TemporaryResource::http(
@@ -125,6 +123,7 @@ fn experiment(
     let mut response = client
         .get(resource.expose_uri())
         .send()
+        .await
         .map_err(http::error)?;
     http::status(&response)?;
     if response
@@ -133,17 +132,19 @@ fn experiment(
     {
         return Err(ProviderError::TooLarge);
     }
-    let mut first = [0; 1];
-    response
-        .read_exact(&mut first)
-        .map_err(|_| ProviderError::InvalidResponse)?;
+    let first = response
+        .chunk()
+        .await
+        .map_err(http::error)?
+        .ok_or(ProviderError::InvalidResponse)?;
     let first_byte_ms = at.elapsed().as_secs_f64() * 1000.0;
-    let mut bytes = http::bounded(response, http::AUDIO_LIMIT)?;
-    bytes.insert(0, first[0]);
-    let download_ms = at.elapsed().as_secs_f64() * 1000.0;
-    if bytes.len() as u64 != info.byte_len || format!("{:x}", Sha1::digest(&bytes)) != info.sha1 {
-        return Err(ProviderError::InvalidResponse);
+    if first.len() > http::AUDIO_LIMIT {
+        return Err(ProviderError::TooLarge);
     }
+    let mut bytes = first.to_vec();
+    bytes.extend(http::bounded_remaining(response, http::AUDIO_LIMIT - bytes.len()).await?);
+    let download_ms = at.elapsed().as_secs_f64() * 1000.0;
+    commons::verify_audio(&info.media.id, &bytes)?;
     let offset = 27 + usize::from(*bytes.get(26).ok_or(ProviderError::InvalidResponse)?);
     if bytes.get(..4) != Some(b"OggS") || bytes.get(offset..offset + 7) != Some(b"\x01vorbis") {
         return Err(ProviderError::UnsupportedFormat);
@@ -188,7 +189,11 @@ fn main() {
             std::process::exit(2);
         }
     };
-    match experiment(query, id, extractor) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("isolated probe runtime");
+    match runtime.block_on(experiment(query, id, extractor)) {
         Ok(value) => println!("{value}"),
         Err(error) => {
             println!(

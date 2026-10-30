@@ -3,7 +3,7 @@ name: Doremi bounded provider experiment
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "crates/doremi-player/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
+    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "crates/doremi-player/**", "crates/doremi-commons/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
   workflow_dispatch:
 
 permissions:
@@ -31,9 +31,9 @@ jobs:
       - name: Offline policy tests and build; no requests to media providers in CI
         run: |
           cargo fmt --all --check
-          cargo test --locked -p doremi-core -p doremi-provider-live-probe
+          cargo test --locked -p doremi-core -p doremi-provider-live-probe -p doremi-commons
           cargo test --locked -p doremi-player --features ogg-vorbis
-          cargo clippy --locked -p doremi-provider-live-probe -p doremi-player --all-targets -- -D warnings
+          cargo clippy --locked -p doremi-provider-live-probe -p doremi-player -p doremi-commons --all-targets -- -D warnings
           cargo build --locked -p doremi-provider-live-probe
       - name: Identify source, executable and audited corpus
         run: |

@@ -111,6 +111,9 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `jni` | `0.21` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `log` | `0.4` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `ndk-context` | `0.1` |
+| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-commons` | `path=../doremi-commons` |
+| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis']; path=../doremi-player` |
+| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `tokio` | `features=['rt', 'time', 'net']; version=1` |
 | `crates/doremi-library: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
@@ -118,16 +121,20 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-player: dependencies` | `symphonia` | `default-features=False; features=['ogg', 'vorbis']; optional=True; version=0.5.5` |
 | `crates/doremi-player/cfg(not(target_os = "linux")): dependencies` | `cpal` | `default-features=False; optional=True; version=0.18.2` |
 | `crates/doremi-player/cfg(target_os = "linux"): dependencies` | `cpal` | `default-features=False; features=['pipewire', 'pulseaudio']; optional=True; version=0.18.2` |
+| `tools/provider-live-probe: dependencies` | `doremi-commons` | `path=../../crates/doremi-commons` |
 | `tools/provider-live-probe: dependencies` | `doremi-core` | `path=../../crates/doremi-core` |
 | `tools/provider-live-probe: dependencies` | `doremi-player` | `features=['ogg-vorbis']; path=../../crates/doremi-player` |
-| `tools/provider-live-probe: dependencies` | `reqwest` | `default-features=False; features=['blocking', 'rustls-tls-native-roots']; version=0.12` |
 | `tools/provider-live-probe: dependencies` | `serde_json` | `1` |
-| `tools/provider-live-probe: dependencies` | `sha1` | `0.10` |
 | `tools/provider-live-probe: dependencies` | `sha2` | `0.10` |
+| `tools/provider-live-probe: dependencies` | `tokio` | `features=['rt', 'time', 'net']; version=1` |
+| `crates/doremi-commons: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-commons: dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-commons: dependencies` | `serde_json` | `1` |
+| `crates/doremi-commons: dependencies` | `sha1` | `0.10` |
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 803 entradas (incluye miembros locales).
+`Cargo.lock`: 804 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -139,7 +146,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
 | 752 | `registry+https://github.com/rust-lang/crates.io-index` |
-| 7 | `workspace` |
+| 8 | `workspace` |
 
 ## Patches
 

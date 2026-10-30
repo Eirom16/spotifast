@@ -1,20 +1,34 @@
-use crate::http;
+//! Explicit-ID, credential-free experiment. Download policy is an allowlist of
+//! two audited CC0 tones, not a general claim of rights over search results.
+pub mod http;
 use doremi_core::{
-    catalog::ProviderError,
+    catalog::{AudioFormat, LeaseBasis, ProviderError, StreamInfo, TemporaryResource, Tick},
     media::{Media, MediaId, ProviderId},
 };
-use reqwest::{Url, blocking::Client};
+use reqwest::{Client, Url};
 use serde_json::Value;
+use sha1::{Digest, Sha1};
 
 pub const PROVIDER: &str = "wikimedia-commons";
 // Only these two author's CC0 sine recordings may be downloaded in this probe.
 // The audited identities/hashes and primary permission links are in corpus.json.
+const AUDITED: [(&str, u64, &str); 2] = [
+    (
+        "21923157",
+        19761,
+        "a126f9b23840b957463cef725bb2ceb4c5f7bcc1",
+    ),
+    (
+        "21923199",
+        23824,
+        "302d5a0ef283ad99b8ca616c0038cbfaf72621dd",
+    ),
+];
 pub fn audited(id: &str) -> Option<(u64, &'static str)> {
-    match id {
-        "21923157" => Some((19761, "a126f9b23840b957463cef725bb2ceb4c5f7bcc1")),
-        "21923199" => Some((23824, "302d5a0ef283ad99b8ca616c0038cbfaf72621dd")),
-        _ => None,
-    }
+    AUDITED.iter().find(|v| v.0 == id).map(|v| (v.1, v.2))
+}
+pub fn audited_ids() -> impl Iterator<Item = &'static str> {
+    AUDITED.iter().map(|v| v.0)
 }
 pub struct Info {
     pub media: Media,
@@ -86,7 +100,12 @@ fn parse(page: &Value) -> Result<Info, ProviderError> {
         byte_len,
     })
 }
-fn query(client: &Client, selector: &str, value: &str, limit: u16) -> Result<Value, ProviderError> {
+async fn query(
+    client: &Client,
+    selector: &str,
+    value: &str,
+    limit: u16,
+) -> Result<Value, ProviderError> {
     let mut params = vec![
         ("action", "query"),
         ("format", "json"),
@@ -109,20 +128,25 @@ fn query(client: &Client, selector: &str, value: &str, limit: u16) -> Result<Val
         .get("https://commons.wikimedia.org/w/api.php")
         .query(&params)
         .send()
+        .await
         .map_err(http::error)?;
-    let json: Value = serde_json::from_slice(&http::bounded(response, http::JSON_LIMIT)?)
+    let json: Value = serde_json::from_slice(&http::bounded(response, http::JSON_LIMIT).await?)
         .map_err(|_| ProviderError::InvalidResponse)?;
     if !json["error"].is_null() {
         return Err(ProviderError::InvalidResponse);
     }
     Ok(json)
 }
-pub fn search(client: &Client, query_text: &str, limit: u16) -> Result<Vec<Info>, ProviderError> {
+pub async fn search(
+    client: &Client,
+    query_text: &str,
+    limit: u16,
+) -> Result<Vec<Info>, ProviderError> {
     if limit == 0 || limit > 10 {
         return Err(ProviderError::InvalidRequest);
     }
     let text = format!("filetype:audio incategory:CC-Zero {query_text}");
-    let json = query(client, "gsrsearch", &text, limit)?;
+    let json = query(client, "gsrsearch", &text, limit).await?;
     let Some(pages) = json["query"]["pages"].as_array() else {
         return Ok(vec![]);
     };
@@ -139,12 +163,12 @@ pub fn search(client: &Client, query_text: &str, limit: u16) -> Result<Vec<Info>
     }
     Ok(found)
 }
-pub fn resolve(client: &Client, id: &MediaId) -> Result<Info, ProviderError> {
+pub async fn resolve(client: &Client, id: &MediaId) -> Result<Info, ProviderError> {
     if id.provider.as_str() != PROVIDER {
         return Err(ProviderError::InvalidRequest);
     }
     let (size, hash) = audited(id.local()).ok_or(ProviderError::AccessDenied)?;
-    let json = query(client, "pageids", id.local(), 1)?;
+    let json = query(client, "pageids", id.local(), 1).await?;
     let page = json["query"]["pages"]
         .as_array()
         .and_then(|v| v.first())
@@ -154,6 +178,65 @@ pub fn resolve(client: &Client, id: &MediaId) -> Result<Info, ProviderError> {
         return Err(ProviderError::Unavailable);
     }
     Ok(info)
+}
+pub fn temporary(info: &Info, now: Tick) -> Result<TemporaryResource, ProviderError> {
+    TemporaryResource::http(
+        info.media.id.clone(),
+        info.uri.clone(),
+        vec![],
+        StreamInfo {
+            format: AudioFormat::OggVorbis,
+            byte_len: Some(info.byte_len),
+            seekable: false,
+            usable_until: Tick(now.0.checked_add(30_000).ok_or(ProviderError::Exhausted)?),
+            lease_basis: LeaseBasis::ConservativeHostLimit,
+        },
+    )
+}
+/// Authorization is independent of transport success and of UI filtering.
+pub fn verify_audio(id: &MediaId, bytes: &[u8]) -> Result<(), ProviderError> {
+    if id.provider.as_str() != PROVIDER {
+        return Err(ProviderError::InvalidRequest);
+    }
+    let (size, hash) = audited(id.local()).ok_or(ProviderError::AccessDenied)?;
+    if bytes.len() as u64 != size || format!("{:x}", Sha1::digest(bytes)) != hash {
+        return Err(ProviderError::InvalidResponse);
+    }
+    Ok(())
+}
+/// Caller must also discard completions superseded/cancelled during this await.
+/// Dropping this future aborts pending HTTP IO; no decoder/output runs here.
+pub async fn download(
+    client: &Client,
+    resource: &TemporaryResource,
+    now: Tick,
+) -> Result<Vec<u8>, ProviderError> {
+    if audited(resource.media().local()).is_none()
+        || resource.media().provider.as_str() != PROVIDER
+        || resource.expose_headers().next().is_some()
+        || !http::allowed(
+            &Url::parse(resource.expose_uri()).map_err(|_| ProviderError::InvalidRequest)?,
+        )
+    {
+        return Err(ProviderError::AccessDenied);
+    }
+    if now.0 >= resource.info().usable_until.0 {
+        return Err(ProviderError::Unavailable);
+    }
+    if resource.info().format != AudioFormat::OggVorbis {
+        return Err(ProviderError::UnsupportedFormat);
+    }
+    if resource.info().byte_len != audited(resource.media().local()).map(|v| v.0) {
+        return Err(ProviderError::InvalidResponse);
+    }
+    let response = client
+        .get(resource.expose_uri())
+        .send()
+        .await
+        .map_err(http::error)?;
+    let bytes = http::bounded(response, http::AUDIO_LIMIT).await?;
+    verify_audio(resource.media(), &bytes)?;
+    Ok(bytes)
 }
 pub fn page_url(info: &Info) -> Result<String, ProviderError> {
     let mut uri = Url::parse("https://commons.wikimedia.org/wiki/")
@@ -178,5 +261,24 @@ mod tests {
         assert!(!licensed(&data));
         assert!(audited("21923157").is_some());
         assert!(audited("anything-else").is_none());
+    }
+    #[test]
+    fn successful_transport_cannot_authorize_unknown_or_modified_content() {
+        let provider = ProviderId::new(PROVIDER).unwrap();
+        let unauthorized = MediaId::new(provider.clone(), "unknown").unwrap();
+        assert_eq!(
+            verify_audio(&unauthorized, b"OggS"),
+            Err(ProviderError::AccessDenied)
+        );
+        let known = MediaId::new(provider, "21923157").unwrap();
+        assert_eq!(
+            verify_audio(&known, &vec![0; 19761]),
+            Err(ProviderError::InvalidResponse)
+        );
+        let foreign = MediaId::new(ProviderId::new("other").unwrap(), "21923157").unwrap();
+        assert_eq!(
+            verify_audio(&foreign, b"OggS"),
+            Err(ProviderError::InvalidRequest)
+        );
     }
 }

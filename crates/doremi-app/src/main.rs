@@ -17,9 +17,20 @@ fn main() -> eframe::Result {
             }
             return Ok(());
         }
+        #[cfg(target_os = "linux")]
+        [argument] if argument == "--online-audio-probe" => {
+            match doremi_app::online_audio_probe() {
+                Ok(report) => println!("{report}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
         [argument] if argument == "--help" => {
             println!(
-                "Doremi Native Dev: --version, --help, --audio-probe. Experimental offline host."
+                "Doremi Native Dev: --version, --help, --audio-probe. Offline UI. Linux: --online-audio-probe (two audited CC0 tones; experimental CLI only)."
             );
             return Ok(());
         }

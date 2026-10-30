@@ -1,4 +1,4 @@
-use crate::{commons, http};
+use doremi_commons::{self as commons, http};
 use doremi_core::catalog::ProviderError;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

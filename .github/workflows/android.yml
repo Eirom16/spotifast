@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real"]
-    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -95,6 +95,8 @@ jobs:
           cp assets/doremi/PROVENANCE.md target/native-dist/licenses/
           cp assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
           cp assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
+          cp crates/doremi-player/licenses/* target/native-dist/licenses/
+          cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           python3 scripts/native-manifest.py target/native-dist/doremi-app target/native-dist/manifest.json
           git rev-parse HEAD > target/native-dist/SOURCE_COMMIT
           (

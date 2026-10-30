@@ -7,13 +7,17 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
+#[cfg(target_os = "linux")]
+mod online_probe;
 use doremi_library as persistence;
-use doremi_player::{Builtin, Engine, EngineError, EngineEvent};
+use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
+#[cfg(target_os = "linux")]
+pub use online_probe::run as online_audio_probe;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 use std::{
     path::PathBuf,
-    sync::Mutex,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -67,6 +71,9 @@ struct Model {
     storage_warning: Option<&'static str>,
     audio: Option<Engine>,
     focus: bool,
+    // Source data, not a second queue. Only the explicit bounded CLI corpus
+    // populates this cache; no arbitrary files or persisted transport URIs.
+    prepared: Vec<(MediaId, Arc<Pcm>)>,
 }
 
 fn songs() -> Vec<Media> {
@@ -111,6 +118,7 @@ impl Model {
             storage_warning: None,
             audio: None,
             focus: !cfg!(target_os = "android"),
+            prepared: Vec::new(),
         }
     }
     fn load(directory: &std::path::Path) -> Self {
@@ -195,9 +203,10 @@ impl Model {
         }
     }
     fn real_audio(&self) -> bool {
-        self.queue
-            .current()
-            .is_some_and(|entry| Builtin::from_media(&entry.media.id).is_some())
+        self.queue.current().is_some_and(|entry| {
+            Builtin::from_media(&entry.media.id).is_some()
+                || self.prepared.iter().any(|(id, _)| *id == entry.media.id)
+        })
     }
     #[cfg(target_os = "android")]
     fn needs_focus(&self) -> bool {
@@ -218,14 +227,26 @@ impl Model {
                     position_ms,
                     ..
                 } => {
-                    if let Some(builtin) = Builtin::from_media(&entry.media.id) {
-                        let result = self
-                            .audio
-                            .as_mut()
-                            .ok_or(EngineError::Closed)
-                            .and_then(|engine| engine.load(request, builtin, position_ms));
+                    let result =
+                        if let Some((_, pcm)) =
+                            self.prepared.iter().find(|(id, _)| *id == entry.media.id)
+                        {
+                            Some(self.audio.as_mut().ok_or(EngineError::Closed).and_then(
+                                |engine| engine.load_pcm(request, pcm.clone(), position_ms),
+                            ))
+                        } else if let Some(builtin) = Builtin::from_media(&entry.media.id) {
+                            Some(
+                                self.audio
+                                    .as_mut()
+                                    .ok_or(EngineError::Closed)
+                                    .and_then(|engine| engine.load(request, builtin, position_ms)),
+                            )
+                        } else {
+                            None
+                        };
+                    if let Some(result) = result {
                         match result {
-                            Ok(()) => self.notice = "Preparando audio local original…".into(),
+                            Ok(()) => self.notice = "Preparando salida de audio…".into(),
                             Err(error) => {
                                 self.notice = format!("No se pudo preparar el audio: {error:?}");
                                 self.event(Event::Failed(request));
@@ -272,7 +293,16 @@ impl Model {
             if self.audio.as_ref().and_then(Engine::current_request) == Some(request) {
                 match event {
                     EngineEvent::Ready(r) => {
-                        self.notice = "Audio local original · CC0 · 8 segundos".into();
+                        self.notice = if self
+                            .queue
+                            .current()
+                            .is_some_and(|entry| Builtin::from_media(&entry.media.id).is_some())
+                        {
+                            "Audio local original · CC0 · 8 segundos"
+                        } else {
+                            "Audio CC0 de Commons · experimento"
+                        }
+                        .into();
                         self.event(Event::Ready(r));
                     }
                     EngineEvent::Ended(r) => self.event(Event::Ended(r)),
@@ -794,6 +824,24 @@ impl DoremiApp {
 /// No profile is read or written and no microphone/loopback recording is used.
 #[cfg(not(target_os = "android"))]
 pub fn audio_probe() -> Result<String, String> {
+    probe_controls(
+        Model::new(Preferences::default()),
+        vec![Builtin::Scale.media(), Builtin::Chord.media()],
+    )
+    .map(|value| value.to_string())
+}
+#[cfg(not(target_os = "android"))]
+fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Value, String> {
+    let original_gain = model.prefs.volume;
+    if rows.len() != 2 {
+        return Err("Probe requires two explicit media identities".into());
+    }
+    let first_id = rows[0].id.clone();
+    let second_id = rows[1].id.clone();
+    let end_seek = rows[0]
+        .duration_ms
+        .ok_or("Probe requires known duration")?
+        .saturating_sub(400);
     fn wait(
         model: &mut Model,
         label: &str,
@@ -820,9 +868,8 @@ pub fn audio_probe() -> Result<String, String> {
             .unwrap_or_default();
         serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
     }
-    let mut model = Model::new(Preferences::default());
     model.enable_audio();
-    model.start_context(vec![Builtin::Scale.media(), Builtin::Chord.media()], 0);
+    model.start_context(rows, 0);
     wait(&mut model, "first output", |m| m.queue.position_ms() > 400)?;
     let first = metrics(&model);
     model.command(Command::Pause);
@@ -847,28 +894,19 @@ pub fn audio_probe() -> Result<String, String> {
         m.queue.position_ms() > 2400
     })?;
     let muted = metrics(&model);
-    model.audio.as_ref().unwrap().set_volume(0.7);
+    model.audio.as_ref().unwrap().set_volume(original_gain);
     model.command(Command::Next);
     wait(&mut model, "next track", |m| {
-        m.queue
-            .current()
-            .is_some_and(|e| e.media.id.local() == "tone-chord")
-            && m.queue.position_ms() > 200
+        m.queue.current().is_some_and(|e| e.media.id == second_id) && m.queue.position_ms() > 200
     })?;
     let next = metrics(&model);
     model.command(Command::Previous);
     wait(&mut model, "previous track", |m| {
-        m.queue
-            .current()
-            .is_some_and(|e| e.media.id.local() == "tone-scale")
-            && m.queue.position_ms() > 200
+        m.queue.current().is_some_and(|e| e.media.id == first_id) && m.queue.position_ms() > 200
     })?;
-    model.command(Command::Seek(7600));
+    model.command(Command::Seek(end_seek));
     wait(&mut model, "end-of-track transition", |m| {
-        m.queue
-            .current()
-            .is_some_and(|e| e.media.id.local() == "tone-chord")
-            && m.queue.position_ms() > 200
+        m.queue.current().is_some_and(|e| e.media.id == second_id) && m.queue.position_ms() > 200
     })?;
     let ended = metrics(&model);
     model.command(Command::Cancel);
@@ -877,7 +915,9 @@ pub fn audio_probe() -> Result<String, String> {
     {
         return Err("Cancellation left live output".into());
     }
-    Ok(serde_json::json!({"result":"pass","output":"native device callback; acoustic output not captured","first":first,"zero_volume":muted,"next":next,"after_end":ended,"checks":["play","pause clock stable","seek paused","zero volume clock advances","next","previous","end advances queue","cancel"]}).to_string())
+    Ok(
+        serde_json::json!({"result":"pass","output":"native device callback; acoustic output not captured","first":first,"zero_volume":muted,"next":next,"after_end":ended,"checks":["play","pause clock stable","seek paused","zero volume clock advances","next","previous","end advances queue","cancel"]}),
+    )
 }
 
 #[cfg(test)]

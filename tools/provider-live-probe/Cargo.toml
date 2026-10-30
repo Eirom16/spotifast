@@ -9,11 +9,10 @@ description = "Bounded, explicit-ID Commons provider experiment, separate from t
 
 [dependencies]
 doremi-core = { path = "../../crates/doremi-core" }
+doremi-commons = { path = "../../crates/doremi-commons" }
 doremi-player = { path = "../../crates/doremi-player", features = ["ogg-vorbis"] }
 serde_json = "1"
-# Existing locked HTTPS transport, used only by this experimental worker tool.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-native-roots"] }
-# Verify the published hash of the two explicitly authorized CC0 test files.
-sha1 = "0.10"
+# Existing locked runtime; this CLI drives the same async adapter as a host worker.
+tokio = { version = "1", features = ["rt", "time", "net"] }
 # Pin verification of the official extractor zipapp, without loading user plugins.
 sha2 = "0.10"
