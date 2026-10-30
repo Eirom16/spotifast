@@ -137,5 +137,5 @@ pub fn run() -> Result<String, String> {
     let (model, rows, network) = runtime.block_on(prepare())?;
     drop(runtime);
     let controls = super::probe_controls(model, rows)?;
-    Ok(json!({"schema":1,"experiment":true,"interface":"Linux CLI; UI remains offline","network":network,"controls":controls,"acoustic_capture":false,"audible_audio_ms":null}).to_string())
+    Ok(json!({"schema":1,"experiment":true,"interface":"Linux CLI; GUI not exercised by this probe","network":network,"controls":controls,"acoustic_capture":false,"audible_audio_ms":null}).to_string())
 }

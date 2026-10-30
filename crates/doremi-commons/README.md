@@ -15,5 +15,8 @@ No declara autorización para descargar todos los resultados CC0 de búsqueda.
 
 El CLI `tools/provider-live-probe` consume este mismo adaptador. El subproceso
 yt-dlp permanece exclusivamente en ese laboratorio y no forma parte de la
-biblioteca. Aún faltan worker/UI y pruebas de su cancelación/lifecycle reales;
-extraer un futuro no acredita por sí solo esas pruebas.
+biblioteca. El host Linux incorpora un worker/UI experimental en validación:
+una búsqueda y una preparación concurrentes, generaciones, deadlines, colas
+acotadas y dos PCM retenidos. La cola sigue en core; el adaptador solo consume
+el ID explícito del efecto Load y nunca sustituye por título. Sus pruebas UI
+y de cancelación reales se registran separadamente del probe CLI.

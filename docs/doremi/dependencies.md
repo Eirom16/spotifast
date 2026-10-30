@@ -113,7 +113,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `ndk-context` | `0.1` |
 | `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-commons` | `path=../doremi-commons` |
 | `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis']; path=../doremi-player` |
-| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `tokio` | `features=['rt', 'time', 'net']; version=1` |
+| `crates/doremi-app/cfg(target_os = "linux"): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-library: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |

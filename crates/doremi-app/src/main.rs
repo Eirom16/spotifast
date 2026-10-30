@@ -30,7 +30,7 @@ fn main() -> eframe::Result {
         }
         [argument] if argument == "--help" => {
             println!(
-                "Doremi Native Dev: --version, --help, --audio-probe. Offline UI. Linux: --online-audio-probe (two audited CC0 tones; experimental CLI only)."
+                "Doremi Native Dev: --version, --help, --audio-probe. Linux: experimental Commons CC0 search in the UI and --online-audio-probe (two audited tones). Android remains offline."
             );
             return Ok(());
         }

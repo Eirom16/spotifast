@@ -8,6 +8,10 @@ use doremi_core::{
 #[cfg(target_os = "android")]
 mod android_native;
 #[cfg(target_os = "linux")]
+mod online;
+#[cfg(target_os = "linux")]
+mod online_model;
+#[cfg(target_os = "linux")]
 mod online_probe;
 use doremi_library as persistence;
 use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
@@ -74,6 +78,8 @@ struct Model {
     // Source data, not a second queue. Only the explicit bounded CLI corpus
     // populates this cache; no arbitrary files or persisted transport URIs.
     prepared: Vec<(MediaId, Arc<Pcm>)>,
+    #[cfg(target_os = "linux")]
+    online: online_model::State,
 }
 
 fn songs() -> Vec<Media> {
@@ -119,6 +125,8 @@ impl Model {
             audio: None,
             focus: !cfg!(target_os = "android"),
             prepared: Vec::new(),
+            #[cfg(target_os = "linux")]
+            online: online_model::State::new(),
         }
     }
     fn load(directory: &std::path::Path) -> Self {
@@ -177,6 +185,7 @@ impl Model {
         model
     }
     fn command(&mut self, command: Command) {
+        let cancelled = matches!(&command, Command::Cancel);
         if let Command::Append(media) = &command
             && self.queue.manual().len().saturating_add(media.len())
                 > doremi_core::queue::checkpoint::ENTRY_LIMIT
@@ -186,7 +195,12 @@ impl Model {
             return;
         }
         match self.queue.command(command) {
-            Ok(effects) => self.effects(effects),
+            Ok(effects) => {
+                self.effects(effects);
+                if cancelled {
+                    self.notice = "Operación cancelada.".into();
+                }
+            }
             Err(error) => self.notice = format!("No se pudo cambiar la cola: {error:?}"),
         }
         self.revision += 1;
@@ -206,6 +220,7 @@ impl Model {
         self.queue.current().is_some_and(|entry| {
             Builtin::from_media(&entry.media.id).is_some()
                 || self.prepared.iter().any(|(id, _)| *id == entry.media.id)
+                || self.online_candidate(&entry.media.id)
         })
     }
     #[cfg(target_os = "android")]
@@ -252,6 +267,8 @@ impl Model {
                                 self.event(Event::Failed(request));
                             }
                         }
+                    } else if self.load_online(request, &entry.media.id, position_ms) {
+                        // The IO worker will prepare PCM; never report simulated Ready.
                     } else if songs().iter().any(|s| s.id == entry.media.id) {
                         if let Some(engine) = self.audio.as_mut() {
                             engine.cancel();
@@ -264,6 +281,7 @@ impl Model {
                     }
                 }
                 Effect::Cancel(request) => {
+                    self.cancel_online(Some(request));
                     if let Some(engine) = self.audio.as_mut()
                         && engine.current_request() == Some(request)
                     {
@@ -276,6 +294,7 @@ impl Model {
                     }
                 }
                 Effect::Stop => {
+                    self.cancel_online(None);
                     if let Some(engine) = self.audio.as_mut() {
                         engine.cancel();
                     }
@@ -337,12 +356,17 @@ impl Model {
         });
     }
     fn search(&mut self) {
+        #[cfg(target_os = "linux")]
+        if self.online.selected {
+            self.schedule_online_search();
+            return;
+        }
         if self.query.trim().is_empty() {
             self.catalog.cancel();
         } else {
             match self
                 .catalog
-                .search(self.query.clone(), 20, Tick(self.revision), 1000)
+                .search(self.query.clone(), 20, self.catalog_now(), 1000)
             {
                 Ok(effects) => {
                     for effect in effects {
@@ -357,7 +381,7 @@ impl Model {
                                     ticket: request.ticket,
                                     result: Ok(results),
                                 },
-                                Tick(self.revision),
+                                self.catalog_now(),
                             );
                         }
                     }
@@ -366,6 +390,85 @@ impl Model {
             }
         }
         self.revision += 1;
+    }
+    fn catalog_now(&self) -> Tick {
+        #[cfg(target_os = "linux")]
+        {
+            Tick(self.online.origin.elapsed().as_millis() as u64)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            Tick(self.revision)
+        }
+    }
+    fn cancel_search(&mut self) {
+        self.query.clear();
+        self.catalog.cancel();
+        #[cfg(target_os = "linux")]
+        self.cancel_online_search();
+        self.revision += 1;
+    }
+    fn online_candidate(&self, _id: &MediaId) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            online_model::candidate(_id)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+    fn load_online(
+        &mut self,
+        _request: doremi_core::queue::RequestId,
+        _id: &MediaId,
+        _position: u64,
+    ) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.begin_online_load(_request, _id, _position)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+    fn cancel_online(&mut self, _request: Option<doremi_core::queue::RequestId>) {
+        #[cfg(target_os = "linux")]
+        self.cancel_online_load(_request);
+    }
+    fn online_search_selected(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        {
+            self.online.selected
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            false
+        }
+    }
+    fn source_diagnostics(&self) -> serde_json::Value {
+        #[cfg(target_os = "linux")]
+        {
+            let mut state = self.online.snapshot();
+            state["search_status"] =
+                serde_json::json!(format!("{:?}", self.catalog.search_status()));
+            state
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            serde_json::json!({"search_source":"demo","phase":"unavailable"})
+        }
+    }
+    fn search_feedback(&self) -> Option<(bool, String)> {
+        #[cfg(target_os = "linux")]
+        {
+            self.online.feedback(self.catalog.search_status())
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            None
+        }
     }
 }
 
@@ -489,6 +592,8 @@ impl DoremiApp {
                 ui.label(egui::RichText::new(&media.title).strong());
                 ui.small(if Builtin::from_media(&media.id).is_some() {
                     "Audio local original · 0:08 · CC0".into()
+                } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
+                    "Tono de prueba online · 0:10 · CC0".into()
                 } else {
                     format!("demo:{} · 0:30 · sin audio", media.id.local())
                 });
@@ -511,7 +616,9 @@ impl DoremiApp {
                             .unwrap()
                             .command(Command::Append(vec![media.clone()]));
                     }
-                    if self.button(ui, &format!("save:{}", media.id.local()), "Guardar", 90.0) {
+                    if media.id.provider.as_str() == "demo"
+                        && self.button(ui, &format!("save:{}", media.id.local()), "Guardar", 90.0)
+                    {
                         let model = self.model.as_mut().unwrap();
                         if !model.prefs.library.iter().any(|id| id == media.id.local()) {
                             model.prefs.library.push(media.id.local().into());
@@ -553,6 +660,7 @@ impl DoremiApp {
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
+            "current_provider":model.queue.current().map(|e|e.media.id.provider.as_str()),"online":model.source_diagnostics(),
             "current_occurrence": model.queue.current().map(|e|e.id.as_u64()),
             "manual_occurrences": model.queue.manual().iter().map(|e|e.id.as_u64()).collect::<Vec<_>>(),
             "position_ms":model.queue.position_ms(),
@@ -623,6 +731,8 @@ impl DoremiApp {
 impl DoremiApp {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_os = "linux")]
+        self.model.as_mut().unwrap().poll_online(&ctx);
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
         if model.queue.playback() == Playback::Loading {
@@ -686,7 +796,7 @@ impl DoremiApp {
                 ui.set_min_width(ui.available_width());
                 match page {
                     Page::Home => {
-                        ui.heading("Tu música, a tu ritmo");ui.label("Catálogo de prueba local. Sin Spotify ni conexión.");
+                        ui.heading("Tu música, a tu ritmo");ui.label(if cfg!(target_os="linux") {"Audio local y demostración. Commons experimental desde Buscar."}else{"Catálogo de prueba local. Sin Spotify ni conexión."});
                         if self.model.as_ref().unwrap().queue.current().is_some() && self.button(ui,"player","Abrir reproductor",220.0) {
                             let model=self.model.as_mut().unwrap();model.page=Page::Player;model.revision+=1;
                         }
@@ -699,14 +809,26 @@ impl DoremiApp {
                     }
                     Page::Search => {
                         ui.heading("Buscar");
-                        let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text("Busca en la demostración").char_limit(128));
+                        #[cfg(target_os="linux")]
+                        {
+                            let width=((ui.available_width()-GAP)/2.0).floor().max(TOUCH);
+                            ui.horizontal_wrapped(|ui| {
+                                if self.button(ui,"source-demo","Demostración",width) {self.model.as_mut().unwrap().set_online_source(false);}
+                                if self.button(ui,"source-commons","Commons · CC0",width) {self.model.as_mut().unwrap().set_online_source(true);}
+                            });
+                            ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Biblioteca online pendiente."}else{"Fuente: demostración offline"});
+                        }
+                        let online=self.model.as_ref().unwrap().online_search_selected();
+                        let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text(if online {"Busca sine, 440 o 880"}else{"Busca en la demostración"}).char_limit(128));
                         self.controls.push(Control { name: "query".into(), rect: [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y] });
                         if response.changed() { self.model.as_mut().unwrap().search(); }
                         if self.button(ui,"cancel-search","Cancelar búsqueda",200.0) {
-                            let model = self.model.as_mut().unwrap(); model.query.clear(); model.catalog.cancel(); model.revision += 1;
+                            self.model.as_mut().unwrap().cancel_search();
                         }
                         let results = self.model.as_ref().unwrap().catalog.results().to_vec();
-                        ui.label(format!("{} resultados de demostración", results.len()));
+                        if let Some((error,message))=self.model.as_ref().unwrap().search_feedback() {
+                            if error {ui.colored_label(ui.visuals().error_fg_color,message);}else {ui.label(message);}
+                        } else {ui.label(format!("{} resultados {}", results.len(),if online {"CC0 de Commons"}else{"de demostración"}));}
                         self.rows(ui, results);
                     }
                     Page::Library => {
@@ -745,11 +867,12 @@ impl DoremiApp {
                                 if self.button(ui,name,label,130.0) { let model = self.model.as_mut().unwrap(); model.prefs.light = value; model.revision += 1; }
                             }
                         });
-                        ui.label("Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales.");
+                        ui.label(if cfg!(target_os="linux") {"Datos propios de Doremi. Commons es opcional y no requiere cuenta."}else{"Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."});
                     }
                     Page::Player => {
                         if self.model.as_ref().unwrap().real_audio() {
-                            ui.heading("Audio local"); ui.label("Muestras originales de Doremi · CC0");
+                            let online=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().online_candidate(&entry.media.id));
+                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos online de prueba · CC0 · experimental"}else{"Muestras originales de Doremi · CC0"});
                             #[cfg(target_os = "android")]
                             ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
                             let model = self.model.as_mut().unwrap();
@@ -925,6 +1048,50 @@ mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
     use doremi_core::queue::Playback;
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn source_picker_uses_equal_touch_boxes_and_fits_narrow_and_landscape_views() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/source-picker-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.model.as_mut().unwrap().page = Page::Search;
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for size in [[384.0, 614.0], [682.0, 336.0], [440.0, 800.0]] {
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                size.into(),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.draw(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let controls = app
+                    .controls
+                    .iter()
+                    .filter(|control| control.name.starts_with("source-"))
+                    .collect::<Vec<_>>();
+                assert_eq!(controls.len(), 2);
+                for control in &controls {
+                    let [x1, y1, x2, y2] = control.rect;
+                    assert!(x1 >= 0.0 && y1 >= 0.0 && x2 <= size[0] && y2 <= size[1]);
+                    assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
+                }
+                assert_eq!(controls[0].rect[1], controls[1].rect[1]);
+                assert!((controls[1].rect[0] - controls[0].rect[2] - GAP).abs() < 0.1);
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn unicode_search_cancel_and_duplicate_occurrences_use_core() {
         let mut model = Model::new(Preferences::default());
