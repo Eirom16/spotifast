@@ -254,3 +254,35 @@ Nueve capturas propias y log sin errores críticos encontrados:
 Android sigue offline/sin permiso INTERNET. Linux ofrece el flujo online solo
 como CLI experimental; el siguiente corte añade worker/UI cancelables. Esto
 no acredita un catálogo YouTube, biblioteca Music ni autenticación.
+
+
+## Flujo online en la interfaz Linux y regresión Android
+
+`b2cfb744a5d6acf01d9e70a9f7bc3f1988f96404`: CI enfocada `40983361715` y
+probe `40983361717` aprobados. Doremi Native Dev instalado con manifiesto y
+checksums verificados; Preview y perfiles anteriores conservados. Buscar →
+Commons CC0 permite consultar y reproducir dos tonos auditados. Worker acotado,
+decodificación cancelable, misma Queue/Catalog y restauración pausada sin red
+automática. Biblioteca online y streaming siguen pendientes.
+
+QA real XTest sobre Xvfb/Mesa software: búsqueda, selección, PCM nativo, pausa,
+Next/Previous, duplicados, cancelación, claro/oscuro, ventana estrecha y
+restauración pasaron. Evidencia: `target/native-online-ui-b2cfb74-final/report.json`.
+Cancelación observada en UI: 176,41 ms; no mide aborto de red. Cierre normal
+49,78 ms; cierre con consulta pendiente 42,05 ms. Muestra de 1100 ms: CPU
+480 ms, RSS 131028 KiB, salida 48 kHz, 60416 frames y cero avisos xrun en ese
+tramo; incluye render software y no representa GPU física ni salida acústica.
+
+El harness corrigió una expectativa que ignoraba la prioridad del historial
+forward sobre la cola manual; el núcleo no cambió. Los intentos fallidos se
+conservan. Destruir externamente la ventana X11 con XDestroyWindow provoca un
+panic en winit fijado; el cierre normal WM_DELETE_WINDOW pasó.
+
+APK del mismo SHA descargada e instalada preservando datos. Suite física
+completa aprobada en SM-J701M/API28/ARMv7: nueve capturas, Unicode, navegación,
+cola, lifecycle, foco y audio local. Evidencia:
+`target/android-qa/b2cfb744a5d6/instrumentation/summary.json`. Muestra 1100 ms:
+CPU 225 ms, PSS 37513 KiB, 96008 frames a 48 kHz. Una notificación CPAL xrun
+en frame 1924 y ninguna adicional hasta 96008; no se afirma ausencia de cortes
+audibles. Android aún offline en esa APK. Siguiente corte: compartir el worker
+online con Android y validarlo físicamente, sin adelantar autenticación.

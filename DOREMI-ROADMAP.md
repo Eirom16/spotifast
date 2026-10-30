@@ -487,10 +487,20 @@ motor nativo, después worker/UI cancelables. APK `075f18f` revalidada físicame
 tras la reconexión, con suite completa y capturas propias; Preview conservada.
 
 
-Primer corte F3 experimental ejecutado en Linux: `ed60553`, flujo CLI real de
+Primer flujo online experimental ejecutado en Linux: `ed60553`, flujo CLI real de
 Commons CC0 hasta callback nativo, con pausa/seek/cambio/EOT/cancelación sobre
 el mismo Model/Queue. Los dos recursos se prebufferizan completos; aún no hay
 UI online ni streaming. `doremi-commons` extrae transporte async compartido,
 con política/tamaños/hashes auditados. CI completa `40976390452` verde sobre
 `cd3a9ad`; CI enfocada y dispositivo físico verdes sobre `ed60553`.
 La siguiente prioridad es worker/UI cancelables; autenticación sigue posterior.
+
+
+Interfaz online Linux validada: `b2cfb74`, CI `40983361715` y `40983361717`
+aprobadas; Doremi Native Dev instalado. Búsqueda real de dos tonos Commons CC0,
+PCM nativo, controles, duplicados, cancelación y restauración pausada sin red
+automática verificados mediante XTest. APK del mismo commit revalidada en el
+SM-J701M con suite completa; un aviso xrun temprano en la muestra física.
+Evidencia y límites en DOREMI-GOAL-REPORT.md. Prioridad activa: portar ese
+worker/UI compartido a Android, añadir únicamente INTERNET y probar en teléfono.
+Autenticación y biblioteca online permanecen posteriores.
