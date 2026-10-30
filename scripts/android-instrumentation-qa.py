@@ -72,6 +72,10 @@ def main():
     assert not critical, "Relevant critical errors retained in own-process.log"
     online_resources = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-online-resources.json"))
     (output / "qa-online-resources.json").write_text(json.dumps(online_resources, indent=2) + "\n")
+    for sample in (resources, online_resources):
+        assert 0.02 < sample["volume"] < 0.15, "Output probe must have positive, low application gain"
+        assert sample["playback"] == "Playing" and sample["audio_metrics"]["frames"] > 0
+    assert online_resources["current_provider"] == "wikimedia-commons"
     summary = dict(source_commit=args.commit, native_source_commit=manifest.get("native_source_commit"),
                    result="pass", captures=len(CAPTURES), resources=resources, online_resources=online_resources,
                    relevant_errors=critical, acoustic_capture=False)

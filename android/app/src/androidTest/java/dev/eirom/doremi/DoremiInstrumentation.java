@@ -118,7 +118,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         float scale=(float)data.getDouble("pixels_per_point");
         // egui's slider rail is the first slider_width logical points, before its label.
         float left=(float)rect.getDouble(0),right=Math.min((float)rect.getDouble(2),left+100f);
-        float x=origin[0]+(left+8f+(right-left-16f)*fraction)*scale;
+        // The pinned egui slider shrinks the rail by its handle radius:
+        // height / 2.5, multiplied by the Rect handle aspect ratio 0.75.
+        float handle=(float)(rect.getDouble(3)-rect.getDouble(1))/2.5f*0.75f;
+        float x=origin[0]+(left+handle+(right-left-2*handle)*fraction)*scale;
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendPointerSync(down);down.recycle();
@@ -153,12 +156,17 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONObject resources=new JSONObject();resources.put("elapsed_ms",wallMs);resources.put("process_cpu_ms",cpuMs);
         resources.put("percent_of_one_cpu",100.0*cpuMs/wallMs);resources.put("total_pss_kib",memory.getTotalPss());
         resources.put("method","Process.getElapsedCpuTime / SystemClock.elapsedRealtime; own process only");
-        resources.put("audio_metrics",state().optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
+        JSONObject sample=state();
+        resources.put("audio_metrics",sample.optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
+        resources.put("volume",sample.optDouble("volume"));resources.put("playback",sample.optString("playback"));
+        resources.put("current_provider",sample.optString("current_provider"));
+        resources.put("condition","native output from fully prepared PCM; no acoustic capture");
         Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void audio() throws Exception {
         tap("home");tap("local-audio");
         until(s -> s.optBoolean("audio") && s.optString("playback").equals("Playing") && s.optLong("position_ms")>300 && s.optJSONObject("audio_metrics")!=null && s.optJSONObject("audio_metrics").optLong("frames")>0);
+        slide("volume",0.08f);until(s -> s.optDouble("volume",0)>0.02 && s.optDouble("volume",1)<0.15);
         capture("qa-audio-playing");
         measureResources("qa-audio-resources");
         tap("pause");until(s -> s.optString("playback").equals("Paused"));SystemClock.sleep(300);
@@ -230,7 +238,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(1200);
         if(!"Paused".equals(state().optString("playback")) || !state().isNull("audio_metrics")) throw new AssertionError("Cancelled online source became active");
         capture("qa-online-cancelled");
-        slide("volume",0.08f);until(s -> s.optDouble("volume",1)<0.15);
+        slide("volume",0.08f);until(s -> s.optDouble("volume",0)>0.02 && s.optDouble("volume",1)<0.15);
         tap("play");until(15000,"online tone delivered to native output",s -> onlinePlaying(s,"21923157"));
         capture("qa-online-playing");
         measureResources("qa-online-resources");
