@@ -1,4 +1,5 @@
 //! Host-owned JSON encoding. No provider resources, requests or credentials.
+pub mod collection;
 use doremi_core::{
     media::{Media, MediaId, ProviderId},
     queue::{Queue, Repeat, checkpoint as core},
@@ -196,6 +197,7 @@ struct Write {
     id: usize,
     prefs: Option<Vec<u8>>,
     queue: Option<Vec<u8>>,
+    library: Option<collection::Collection>,
     state: Vec<u8>,
 }
 impl Write {
@@ -206,6 +208,9 @@ impl Write {
         }
         if newer.queue.is_none() {
             newer.queue = self.queue;
+        }
+        if newer.library.is_none() {
+            newer.library = self.library;
         }
         newer
     }
@@ -227,11 +232,35 @@ impl Writer {
         let output = status.clone();
         let worker = std::thread::spawn(move || {
             let mut previous = std::collections::BTreeMap::new();
+            let mut previous_library: Option<collection::Collection> = None;
             while let Ok(mut write) = receiver.recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     write = write.supersede(newer);
                 }
                 let mut failed = false;
+                if let Some(library) = write.library
+                    && !previous_library
+                        .as_ref()
+                        .is_some_and(|previous| library.same_snapshot(previous))
+                {
+                    // Snapshot cloning on the UI is O(1). Encode only changed
+                    // collections here, and acknowledge only a durable write.
+                    match library.encode() {
+                        Ok(bytes) => {
+                            match atomic_write(&directory, "library-v1.json", &bytes, true) {
+                                Ok(()) => previous_library = Some(library),
+                                Err(error) => {
+                                    failed = true;
+                                    eprintln!("Doremi library persistence: {error}");
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            failed = true;
+                            eprintln!("Doremi library persistence: invalid bounded metadata");
+                        }
+                    }
+                }
                 for (name, bytes) in [
                     ("preferences-v1.json", write.prefs),
                     ("queue-v1.json", write.queue),
@@ -269,6 +298,15 @@ impl Writer {
         queue: Option<Vec<u8>>,
         state: Vec<u8>,
     ) -> Result<usize, SubmitError> {
+        self.submit_collection(prefs, queue, None, state)
+    }
+    pub fn submit_collection(
+        &self,
+        prefs: Option<Vec<u8>>,
+        queue: Option<Vec<u8>>,
+        library: Option<collection::Collection>,
+        state: Vec<u8>,
+    ) -> Result<usize, SubmitError> {
         let id = NEXT_WRITE
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| SubmitError::Closed)?;
@@ -277,6 +315,7 @@ impl Writer {
                 id,
                 prefs,
                 queue,
+                library,
                 state,
             })
             .map_err(|error| match error {
@@ -314,7 +353,10 @@ fn atomic_write(directory: &Path, name: &str, bytes: &[u8], durable: bool) -> st
     Ok(())
 }
 pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
-    if !matches!(name, "preferences-v1.json" | "queue-v1.json") {
+    if !matches!(
+        name,
+        "preferences-v1.json" | "queue-v1.json" | "library-v1.json"
+    ) {
         return Err(Error::Encoding);
     }
     let path = directory.join(name);
@@ -338,28 +380,33 @@ mod storage_tests {
             id: 1,
             prefs: Some(vec![1]),
             queue: Some(vec![2]),
+            library: Some(collection::Collection::default()),
             state: vec![3],
         };
         let diagnostics = Write {
             id: 2,
             prefs: None,
             queue: None,
+            library: None,
             state: vec![4],
         };
         let merged = save.supersede(diagnostics);
         assert_eq!(merged.id, 2);
         assert_eq!(merged.prefs, Some(vec![1]));
         assert_eq!(merged.queue, Some(vec![2]));
+        assert!(merged.library.is_some());
         assert_eq!(merged.state, vec![4]);
         let update = Write {
             id: 3,
             prefs: Some(vec![5]),
             queue: Some(vec![6]),
+            library: None,
             state: vec![7],
         };
         let merged = merged.supersede(update);
         assert_eq!(merged.prefs, Some(vec![5]));
         assert_eq!(merged.queue, Some(vec![6]));
+        assert!(merged.library.is_some());
     }
     fn directory(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -385,6 +432,7 @@ mod storage_tests {
         std::fs::create_dir_all(&directory).unwrap();
         let future = br#"{"schema":99,"future_data":"preserve"}"#;
         std::fs::write(directory.join("queue-v1.json"), future).unwrap();
+        std::fs::write(directory.join("library-v1.json"), future).unwrap();
         let writer = Writer::new(directory.clone());
         let id = writer.submit(None, None, b"{}".to_vec()).unwrap();
         assert!(!wait(&writer, id));
@@ -394,6 +442,10 @@ mod storage_tests {
             future
         );
         assert!(!directory.join("queue-v1.tmp").exists());
+        assert_eq!(
+            read(&directory, "library-v1.json").unwrap().unwrap(),
+            future
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
@@ -406,6 +458,37 @@ mod storage_tests {
         writer.shutdown();
         assert_eq!(std::fs::read(&directory).unwrap(), b"not a directory");
         std::fs::remove_file(directory).unwrap();
+    }
+    #[test]
+    fn accepted_library_snapshot_is_immutable_and_durable_before_acknowledgment() {
+        let directory = directory("storage-library-snapshot");
+        let mut library = collection::Collection::default();
+        let first = Media {
+            id: MediaId::new(ProviderId::new("demo").unwrap(), "saved").unwrap(),
+            title: "Before".into(),
+            duration_ms: None,
+        };
+        library.save(first.clone()).unwrap();
+        let accepted = library.clone();
+        let writer = Writer::new(directory.clone());
+        let id = writer
+            .submit_collection(None, None, Some(accepted.clone()), b"{}".to_vec())
+            .unwrap();
+        let mut updated = first;
+        updated.title = "After".into();
+        library.save(updated).unwrap();
+        assert!(!wait(&writer, id));
+        let bytes = read(&directory, "library-v1.json").unwrap().unwrap();
+        assert_eq!(collection::Collection::decode(&bytes).unwrap(), accepted);
+        let id = writer
+            .submit_collection(None, None, Some(library.clone()), b"{}".to_vec())
+            .unwrap();
+        assert!(!wait(&writer, id));
+        writer.shutdown();
+        let bytes = read(&directory, "library-v1.json").unwrap().unwrap();
+        assert_eq!(collection::Collection::decode(&bytes).unwrap(), library);
+        assert!(!directory.join("library-v1.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }
 

@@ -14,6 +14,7 @@ mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
 use doremi_library as persistence;
+mod saved;
 use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
 #[cfg(target_os = "linux")]
 pub use online_probe::run as online_audio_probe;
@@ -72,6 +73,8 @@ struct Model {
     revision: u64,
     write_prefs: bool,
     write_queue: bool,
+    library: persistence::collection::Collection,
+    write_library: bool,
     storage_warning: Option<&'static str>,
     audio: Option<Engine>,
     focus: bool,
@@ -82,25 +85,34 @@ struct Model {
     online: online_model::State,
 }
 
+const DEMO_TRACKS: [(&str, &str); 4] = [
+    ("dawn", "Amanecer violeta"),
+    ("rain", "Lluvia de cristal"),
+    ("cafe", "Café en órbita"),
+    ("night", "Noche tranquila"),
+];
+
+fn demo_candidate(id: &MediaId) -> bool {
+    id.provider.as_str() == "demo" && DEMO_TRACKS.iter().any(|(local, _)| *local == id.local())
+}
+
 fn songs() -> Vec<Media> {
-    [
-        ("dawn", "Amanecer violeta"),
-        ("rain", "Lluvia de cristal"),
-        ("cafe", "Café en órbita"),
-        ("night", "Noche tranquila"),
-    ]
-    .into_iter()
-    .map(|(id, title)| Media {
-        id: MediaId::new(ProviderId::new("demo").unwrap(), id).unwrap(),
-        title: title.into(),
-        duration_ms: Some(30_000),
-    })
-    .chain([Builtin::Scale.media(), Builtin::Chord.media()])
-    .collect()
+    DEMO_TRACKS
+        .into_iter()
+        .map(|(id, title)| Media {
+            id: MediaId::new(ProviderId::new("demo").unwrap(), id).unwrap(),
+            title: title.into(),
+            duration_ms: Some(30_000),
+        })
+        .chain([Builtin::Scale.media(), Builtin::Chord.media()])
+        .collect()
 }
 
 impl Model {
     fn new(prefs: Preferences) -> Self {
+        let legacy = saved::legacy(&prefs);
+        let write_library = legacy.is_ok();
+        let library = legacy.unwrap_or_default();
         Self {
             queue: Queue::new(SessionId(1)),
             catalog: Catalog::new(
@@ -121,6 +133,8 @@ impl Model {
             revision: 0,
             write_prefs: true,
             write_queue: true,
+            library,
+            write_library,
             storage_warning: None,
             audio: None,
             focus: !cfg!(target_os = "android"),
@@ -158,6 +172,7 @@ impl Model {
                     Some("No se pudieron leer las preferencias. El archivo se conserva.");
             }
         }
+        model.load_library(directory);
         match persistence::read(directory, "queue-v1.json") {
             Ok(Some(bytes)) => match persistence::decode(&bytes).and_then(|checkpoint| {
                 model
@@ -269,7 +284,7 @@ impl Model {
                         }
                     } else if self.load_online(request, &entry.media.id, position_ms) {
                         // The IO worker will prepare PCM; never report simulated Ready.
-                    } else if songs().iter().any(|s| s.id == entry.media.id) {
+                    } else if demo_candidate(&entry.media.id) {
                         if let Some(engine) = self.audio.as_mut() {
                             engine.cancel();
                         }
@@ -585,7 +600,7 @@ impl DoremiApp {
         });
         response.clicked()
     }
-    fn rows(&mut self, ui: &mut egui::Ui, rows: Vec<Media>) {
+    fn rows(&mut self, ui: &mut egui::Ui, rows: &[Media]) {
         for (start, media) in rows.iter().enumerate() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width((ui.available_width() - 4.0).max(0.0));
@@ -594,8 +609,10 @@ impl DoremiApp {
                     "Audio local original · 0:08 · CC0".into()
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
                     "Tono de prueba online · 0:10 · CC0".into()
-                } else {
+                } else if demo_candidate(&media.id) {
                     format!("demo:{} · 0:30 · sin audio", media.id.local())
+                } else {
+                    "Fuente no disponible en esta versión".into()
                 });
                 ui.horizontal_wrapped(|ui| {
                     if self.button(
@@ -607,7 +624,7 @@ impl DoremiApp {
                         self.model
                             .as_mut()
                             .unwrap()
-                            .start_context(rows.clone(), start);
+                            .start_context(rows.to_vec(), start);
                         self.model.as_mut().unwrap().page = Page::Player;
                     }
                     if self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0) {
@@ -616,14 +633,19 @@ impl DoremiApp {
                             .unwrap()
                             .command(Command::Append(vec![media.clone()]));
                     }
-                    if media.id.provider.as_str() == "demo"
-                        && self.button(ui, &format!("save:{}", media.id.local()), "Guardar", 90.0)
+                    let saved = self.model.as_ref().unwrap().library.contains(&media.id);
+                    if self.button(
+                        ui,
+                        &format!("save:{}", media.id.local()),
+                        if saved { "Guardada" } else { "Guardar" },
+                        90.0,
+                    ) {
+                        self.model.as_mut().unwrap().save_media(media.clone());
+                    }
+                    if self.model.as_ref().unwrap().page == Page::Library
+                        && self.button(ui, &format!("forget:{}", media.id.local()), "Quitar", 90.0)
                     {
-                        let model = self.model.as_mut().unwrap();
-                        if !model.prefs.library.iter().any(|id| id == media.id.local()) {
-                            model.prefs.library.push(media.id.local().into());
-                            model.revision += 1;
-                        }
+                        self.model.as_mut().unwrap().remove_saved(&media.id);
                     }
                 });
             });
@@ -668,7 +690,9 @@ impl DoremiApp {
             "upcoming": model.queue.upcoming().map(|e| e.media.id.local()).collect::<Vec<_>>(),
             "playback": format!("{:?}", model.queue.playback()), "audio": model.real_audio(), "audio_metrics": audio_metrics, "volume": model.prefs.volume, "focus":model.focus,
             "repeat": format!("{:?}", model.queue.repeat()), "shuffle": model.queue.shuffled(),
-            "library": model.prefs.library, "controls": self.controls,
+            "library": model.library.items().iter().filter(|media|media.id.provider.as_str()=="demo").map(|media|media.id.local()).collect::<Vec<_>>(),
+            "saved_media":model.library.items().iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>(),
+            "controls": self.controls,
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
         });
         let state = serde_json::to_vec(&state).unwrap();
@@ -696,12 +720,12 @@ impl DoremiApp {
         let prefs = model
             .write_prefs
             .then(|| serde_json::to_vec(&model.prefs).unwrap());
-        match self
-            .writer
-            .as_ref()
-            .unwrap()
-            .submit(prefs, queue, state.clone())
-        {
+        match self.writer.as_ref().unwrap().submit_collection(
+            prefs,
+            queue,
+            model.write_library.then(|| model.library.clone()),
+            state.clone(),
+        ) {
             Ok(id) => {
                 self.pending = false;
                 self.last_persist = Instant::now();
@@ -805,7 +829,7 @@ impl DoremiApp {
                             model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);
                             model.page=Page::Player;
                         }
-                        self.rows(ui,songs());
+                        self.rows(ui,&songs());
                     }
                     Page::Search => {
                         ui.heading("Buscar");
@@ -816,7 +840,7 @@ impl DoremiApp {
                                 if self.button(ui,"source-demo","Demostración",width) {self.model.as_mut().unwrap().set_online_source(false);}
                                 if self.button(ui,"source-commons","Commons · CC0",width) {self.model.as_mut().unwrap().set_online_source(true);}
                             });
-                            ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Biblioteca online pendiente."}else{"Fuente: demostración offline"});
+                            ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Guardar añade un favorito, sin descargar audio."}else{"Fuente: demostración offline"});
                         }
                         let online=self.model.as_ref().unwrap().online_search_selected();
                         let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text(if online {"Busca sine, 440 o 880"}else{"Busca en la demostración"}).char_limit(128));
@@ -829,13 +853,14 @@ impl DoremiApp {
                         if let Some((error,message))=self.model.as_ref().unwrap().search_feedback() {
                             if error {ui.colored_label(ui.visuals().error_fg_color,message);}else {ui.label(message);}
                         } else {ui.label(format!("{} resultados {}", results.len(),if online {"CC0 de Commons"}else{"de demostración"}));}
-                        self.rows(ui, results);
+                        self.rows(ui, &results);
                     }
                     Page::Library => {
                         ui.heading("Biblioteca");
-                        let prefs = &self.model.as_ref().unwrap().prefs;
-                        let rows = songs().into_iter().filter(|s| prefs.library.iter().any(|id| id == s.id.local())).collect();
-                        ui.label("Tus canciones guardadas en este dispositivo."); self.rows(ui, rows);
+                        let library=self.model.as_ref().unwrap().library.clone();
+                        ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
+                        if !self.model.as_ref().unwrap().write_library {ui.small("Solo lectura: el archivo anterior se conserva.");}
+                        self.rows(ui, library.items());
                     }
                     Page::Queue => {
                         ui.heading("Cola");
@@ -885,7 +910,9 @@ impl DoremiApp {
                             let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut model.prefs.volume,0.0..=1.0).text("Volumen").show_value(false));
                             self.controls.push(Control{name:"volume".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
                             if response.changed() { if let Some(engine)=&model.audio {engine.set_volume(model.prefs.volume);} model.revision+=1; }
-                        } else { ui.heading("Reproducción de demostración"); ui.label("Simulación de controles. Esta selección no produce audio."); }
+                        } else if self.model.as_ref().unwrap().queue.current().is_some_and(|entry|demo_candidate(&entry.media.id)) {
+                            ui.heading("Reproducción de demostración"); ui.label("Simulación de controles. Esta selección no produce audio.");
+                        } else { ui.heading("Reproducción no disponible"); ui.label("Esta fuente no puede reproducirse en esta versión."); }
                     }
                 }
                 ui.separator();

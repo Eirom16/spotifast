@@ -29,7 +29,8 @@ import java.util.function.Predicate;
 public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
     private String lastAction="startup";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); start(); }
+    private String mode="full";
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); start(); }
     private JSONObject state() throws Exception {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
@@ -263,6 +264,63 @@ public final class DoremiInstrumentation extends Instrumentation {
         capture("qa-online-background");
         tap("stop");tap("search");tap("source-demo");tap("cancel-search");
     }
+    private int savedCount(JSONObject state,String id) {
+        JSONArray saved=state.optJSONArray("saved_media");int count=0;
+        if(saved!=null) for(int i=0;i<saved.length();i++) {
+            JSONObject item=saved.optJSONObject(i);
+            if("wikimedia-commons".equals(item.optString("provider")) && id.equals(item.optString("id"))) count++;
+        }
+        return count;
+    }
+    private JSONObject privateDocument(String name) throws Exception {
+        return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),name).toPath()),java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private void savedLibrary() throws Exception {
+        JSONObject before=state();String original=before.getJSONArray("saved_media").toString();
+        boolean existed=savedCount(before,"21923157")>0;
+        String legacy=privateDocument("preferences-v1.json").optJSONArray("library").toString();
+        tap("search");tap("source-commons");tap("query");text("sine",true);hideKeyboard();
+        until(12000,"Commons metadata for favorite",s -> "Ready".equals(s.optJSONObject("online").optString("search_status")));
+        tap("save:21923157");tap("save:21923157");
+        until(s -> savedCount(s,"21923157")==1);
+        if(state().getJSONArray("saved_media").length()!=before.getJSONArray("saved_media").length()+(existed?0:1)) throw new AssertionError("Duplicate favorite or unrelated library edit");
+        tap("library");capture("qa-library-saved");
+        if(!existed) {
+            // Remove only the test favorite we just added, never an existing one.
+            tap("forget:21923157");until(s -> savedCount(s,"21923157")==0);
+            if(!original.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("Removing test favorite changed existing favorites");
+        }
+        capture("qa-library-result");
+        if(!existed) {tap("search");tap("save:21923157");until(s -> savedCount(s,"21923157")==1);}
+        long deadline=SystemClock.uptimeMillis()+5000;boolean durable=false;
+        do {
+            JSONObject document=privateDocument("library-v1.json");
+            JSONArray items=document.getJSONArray("items");int found=0;
+            for(int i=0;i<items.length();i++) {
+                JSONObject item=items.getJSONObject(i);
+                if(item.length()!=4) throw new AssertionError("Unexpected library payload fields");
+                if("wikimedia-commons".equals(item.optString("provider")) && "21923157".equals(item.optString("id"))) found++;
+            }
+            if(document.getInt("schema")==1 && found==1) {durable=true;break;}
+            SystemClock.sleep(100);
+        } while(SystemClock.uptimeMillis()<deadline);
+        if(!durable) throw new AssertionError("Favorite did not reach versioned library file");
+        if(!legacy.equals(privateDocument("preferences-v1.json").optJSONArray("library").toString())) throw new AssertionError("Legacy favorite archive was changed");
+        JSONObject checks=new JSONObject();checks.put("duplicate_save_unique",true);checks.put("removed_owned_fixture",!existed);
+        checks.put("preserved_existing_favorite",existed);checks.put("legacy_archive_preserved",true);checks.put("durable_schema",1);
+        Files.write(new File(getTargetContext().getFilesDir(),"qa-library-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        tap("home");
+    }
+    private void restoredLibrary() throws Exception {
+        JSONObject initial=state();
+        if(savedCount(initial,"21923157")!=1 || initial.optJSONObject("online").optBoolean("worker_initialized") || !initial.isNull("audio_metrics") || "Playing".equals(initial.optString("playback"))) throw new AssertionError("Library restore started IO/audio or lost qualified favorite");
+        tap("home");tap("player");slide("volume",0.08f);
+        until(s -> s.optDouble("volume",0)>0.02 && s.optDouble("volume",1)<0.15);
+        tap("library");capture("qa-library-restored");
+        if(!"demo".equals(state().optJSONObject("online").optString("search_source")) || !"Idle".equals(state().optJSONObject("online").optString("search_status"))) throw new AssertionError("Saved playback must not require search results");
+        tap("select:21923157");until(15000,"native output from restored favorite",s -> onlinePlaying(s,"21923157"));
+        capture("qa-library-restored-audio");tap("pause");until(s -> "Paused".equals(s.optString("playback")));
+    }
     private InputConnection connection(View view) {
         if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
         if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result; } }
@@ -290,6 +348,11 @@ public final class DoremiInstrumentation extends Instrumentation {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
+            if("library-restore".equals(mode)) {
+                restoredLibrary();
+                result.putString("stream","PASS: saved-library process restoration without automatic IO, qualified-ID playback without search and positive native output\n");
+                finish(Activity.RESULT_OK,result);return;
+            }
             // Existing development data is retained. Normalize modes through controls.
             tap("search");tap("cancel-search");
             if(state().optBoolean("shuffle")) tap("shuffle");
@@ -328,7 +391,8 @@ public final class DoremiInstrumentation extends Instrumentation {
             backgroundInput();
             audio();
             online();
-            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; real Commons search/load/cancel/PCM/next/previous/paused recreation/background\n");
+            savedLibrary();
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; real Commons search/load/cancel/PCM/next/previous/paused recreation/background; qualified favorites/save/remove/durable metadata/legacy preservation\n");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable error) { result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
     }

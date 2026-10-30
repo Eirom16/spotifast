@@ -33,7 +33,7 @@ out.mkdir(parents=True, exist_ok=True)
 profile = out / "profile"
 assert not profile.exists(), "Use a new evidence directory; preserve earlier results"
 profile.mkdir()
-(profile / "preferences-v1.json").write_text(json.dumps(dict(schema=1, volume=0.08, library=[], green=False, light=False)))
+(profile / "preferences-v1.json").write_text(json.dumps(dict(schema=1, volume=0.08, library=["dawn"], green=False, light=False)))
 env = os.environ.copy()
 env.pop("WAYLAND_DISPLAY", None)
 env.pop("WAYLAND_SOCKET", None)
@@ -158,7 +158,7 @@ try:
     tap("query")
     xdo("type", "--clearmodifiers", "--delay", 15, "sine")
     wait(lambda data: data["online"]["search_status"] == "Ready" and any(control["name"] == "select:21923199" for control in data["controls"]))
-    assert not any(control["name"].startswith("save:219") for control in state()["controls"]), "Online library must not be falsely offered"
+    assert any(control["name"] == "save:21923157" for control in state()["controls"])
     capture("results-dark")
     tap("settings"); tap("light"); tap("search")
     wait(lambda data: data["light"] and data["page"] == "Search")
@@ -212,14 +212,32 @@ try:
         wait(lambda data: playing(data, "21923157") and data["current_occurrence"] == occurrence and len(data["manual"]) == 1 - index, 4)
     tap("next"); wait(lambda data: playing(data, "21923199") and not data["manual"], 4)
     tap("stop"); checkpoint = wait(lambda data: data["playback"] == "Paused" and data["audio_metrics"] is None)
+    tap("search"); tap("save:21923157"); tap("save:21923157")
+    expected_saved = [{"provider":"demo","id":"dawn"},{"provider":"wikimedia-commons","id":"21923157"}]
+    wait(lambda data: data["saved_media"] == expected_saved)
+    assert state()["current_occurrence"] == checkpoint["current_occurrence"]
+    tap("library"); capture("library-dark")
+    tap("settings"); tap("light"); tap("library"); capture("library-light")
+    tap("forget:21923157")
+    wait(lambda data: data["saved_media"] == expected_saved[:1])
+    tap("search"); tap("save:21923157")
+    wait(lambda data: data["saved_media"] == expected_saved)
+    tap("settings"); tap("dark")
     time.sleep(0.3)
+    assert json.loads((profile / "preferences-v1.json").read_text())["library"] == ["dawn"]
+    assert len(json.loads((profile / "library-v1.json").read_text())["items"]) == 2
+    report["library_saved_ids"] = expected_saved
     report["first_close_ms"] = close()
     assert "https://" not in (profile / "queue-v1.json").read_text()
     start()
     restored = wait(lambda data: data["current"] == checkpoint["current"] and data["playback"] == "Paused")
     assert restored["current_occurrence"] == checkpoint["current_occurrence"] and restored["position_ms"] == checkpoint["position_ms"]
     assert not restored["online"]["worker_initialized"] and restored["audio_metrics"] is None
+    assert restored["saved_media"] == expected_saved
     tap("player"); tap("play"); wait(lambda data: playing(data, "21923199")); capture("restored-online")
+    tap("pause"); tap("library"); capture("restored-library")
+    assert state()["online"]["search_source"] == "demo" and state()["online"]["search_status"] == "Idle"
+    tap("select:21923157"); wait(lambda data: playing(data,"21923157")); capture("restored-library-audio")
     # A cached source can resolve/download between two UI observations. Use a
     # fresh metadata operation whose Pending state is published before IO.
     tap("search"); tap("source-commons"); tap("query")
@@ -231,7 +249,7 @@ try:
     for path in out.glob("runtime-*.log"):
         assert not re.search(r"panicked at|FATAL|forgot to call.*destroy|shutdown.*timed out", path.read_text(), re.IGNORECASE), path
     report["result"] = "pass"
-    report["checks"] = ["real search / cancel without late results", "dark/light/narrow picker", "cancel during download without late playback", "native PCM play/pause/next/previous", "two distinct duplicate occurrences", "context continuation", "restore paused without automatic network", "resume by queued neutral ID", "close during IO without orphan process"]
+    report["checks"] = ["real search / cancel without late results", "dark/light/narrow picker", "cancel during download without late playback", "native PCM play/pause/next/previous", "two distinct duplicate occurrences", "context continuation", "restore paused without automatic network", "resume by queued neutral ID", "qualified favorites / duplicate save / remove / restore / direct playback", "close during IO without orphan process"]
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     print(out)
 except BaseException as error:

@@ -18,7 +18,7 @@ CAPTURES = ("qa-unicode", "qa-recreated", "qa-landscape", "qa-portrait",
             "qa-shared-queue-trace", "qa-input-background", "qa-audio-playing",
             "qa-audio-interrupted", "qa-audio-after-end", "qa-online-results-dark",
             "qa-online-results-light", "qa-online-cancelled", "qa-online-playing",
-            "qa-online-recreated", "qa-online-background")
+            "qa-online-recreated", "qa-online-background", "qa-library-saved", "qa-library-result")
 
 
 def adb(*args):
@@ -76,9 +76,12 @@ def main():
         assert 0.02 < sample["volume"] < 0.15, "Output probe must have positive, low application gain"
         assert sample["playback"] == "Playing" and sample["audio_metrics"]["frames"] > 0
     assert online_resources["current_provider"] == "wikimedia-commons"
+    library_checks = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-library-checks.json"))
+    (output / "qa-library-checks.json").write_text(json.dumps(library_checks, indent=2) + "\n")
+    assert library_checks["duplicate_save_unique"] and library_checks["legacy_archive_preserved"]
     summary = dict(source_commit=args.commit, native_source_commit=manifest.get("native_source_commit"),
                    result="pass", captures=len(CAPTURES), resources=resources, online_resources=online_resources,
-                   relevant_errors=critical, acoustic_capture=False)
+                   relevant_errors=critical, library_checks=library_checks, acoustic_capture=False)
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(output)
 
