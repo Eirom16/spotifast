@@ -28,6 +28,7 @@ import java.util.function.Predicate;
 /** Physical IME, lifecycle and the same queue trace as the Linux host. */
 public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
+    private String lastAction="startup";
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); start(); }
     private JSONObject state() throws Exception {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
@@ -89,6 +90,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private void tap(String name) throws Exception { tap(name,500); }
     private void tap(String name,long settle) throws Exception {
+        lastAction="tap:"+name;
         foreground();
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
         for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
@@ -100,10 +102,14 @@ public final class DoremiInstrumentation extends Instrumentation {
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0); sendPointerSync(down); down.recycle();
-        MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
+        // Hold across rendered frames; a future event timestamp alone does not
+        // keep the native pointer down while egui evaluates slider interaction.
+        SystemClock.sleep(80);
+        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
         SystemClock.sleep(settle);
     }
     private void slide(String name,float fraction) throws Exception {
+        lastAction="slide:"+name+":"+fraction;
         foreground();
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
         for(int i=0;i<controls.length();i++) {JSONObject c=controls.getJSONObject(i);if(name.equals(c.getString("name"))) rect=c.getJSONArray("rect");}
@@ -116,7 +122,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendPointerSync(down);down.recycle();
-        MotionEvent up=MotionEvent.obtain(time,time+80,MotionEvent.ACTION_UP,x,y,0);sendPointerSync(up);up.recycle();SystemClock.sleep(500);
+        // Hold across rendered frames; a future event timestamp alone does not
+        // keep the native pointer down while egui evaluates slider interaction.
+        SystemClock.sleep(80);
+        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0);sendPointerSync(up);up.recycle();SystemClock.sleep(500);
     }
     private void backgroundInput() throws Exception {
         tap("search");tap("query");text("Lluvia",true);
@@ -313,6 +322,6 @@ public final class DoremiInstrumentation extends Instrumentation {
             online();
             result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; real Commons search/load/cancel/PCM/next/previous/paused recreation/background\n");
             finish(Activity.RESULT_OK,result);
-        } catch(Throwable error) { result.putString("stream","FAIL: "+error+"\n");finish(Activity.RESULT_CANCELED,result); }
+        } catch(Throwable error) { result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
     }
 }
