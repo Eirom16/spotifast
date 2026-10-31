@@ -17,6 +17,7 @@ parser.add_argument("binary", type=Path)
 parser.add_argument("output", type=Path)
 parser.add_argument("--commit", required=True)
 parser.add_argument("--local-only", action="store_true", help="Exercise long local WAV without provider requests")
+parser.add_argument("--seek-boundary-only", action="store_true", help="Hold a seek gesture across end of track; the next occurrence must not inherit it")
 args = parser.parse_args()
 binary = args.binary.resolve()
 out = args.output.resolve()
@@ -42,6 +43,7 @@ env["DOREMI_DATA_DIR"] = str(profile)
 process = None
 log = None
 window = None
+wait_trace = []
 
 
 def xdo(*arguments):
@@ -55,11 +57,16 @@ def state():
 
 
 def wait(predicate, seconds=14):
+    global wait_trace
+    wait_trace = []
+    began = time.monotonic()
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         assert process.poll() is None, "Doremi exited"
         try:
             data = state()
+            wait_trace.append(dict(at_ms=(time.monotonic()-began)*1000,current=data['current'],playback=data['playback'],position_ms=data['position_ms'],metrics=data['audio_metrics']))
+            if len(wait_trace)>160:wait_trace.pop(0)
             if predicate(data):
                 return data
         except (FileNotFoundError, ValueError):
@@ -143,14 +150,14 @@ def cpu_ticks():
 
 
 report = dict(source_commit=args.commit, platform="Linux X11 / native default audio", software_rendering=env.get("LIBGL_ALWAYS_SOFTWARE") == "1", acoustic_capture=False, render_rate_measured=False)
-def slider(name, fraction):
+def slider(name, fraction, hold=.08):
     data=state();rect=next(control["rect"] for control in data["controls"] if control["name"]==name)
     radius=(rect[3]-rect[1])/2.5*0.75
     x=(rect[0]+radius+(100-2*radius)*fraction)*data["pixels_per_point"]
     y=(rect[1]+rect[3])/2*data["pixels_per_point"]
     assert int(xdo("getwindowfocus"))==int(window)
     xdo("mousemove","--window",window,round(x),round(y),"mousedown",1)
-    time.sleep(.08);xdo("mouseup",1)
+    time.sleep(hold);xdo("mouseup",1)
 
 
 def local_wav_ui():
@@ -183,11 +190,30 @@ def local_wav_ui():
     (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
 
 
+if args.seek_boundary_only:
+    try:
+        start();tap("long-audio")
+        wait(lambda s:s["current"]=="tone-scale-long-v1" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("frames",0)>5000)
+        capture("before-held-seek")
+        slider("seek",1.0,3)
+        capture("after-held-seek")
+        ended=wait(lambda s:s["current"]=="tone-chord" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("frames",0)>5000,4)
+        assert ended["position_ms"]<5000,"The new occurrence inherited the old seek gesture"
+        tap("stop");report["close_ms"]=close();report["result"]="pass"
+        report["checks"]=["a held seek to EOF does not seek/skip the following occurrence"]
+        (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
+    except BaseException as error:
+        (out/"failure.json").write_text(json.dumps(dict(report,result="failed",error=str(error),wait_trace=wait_trace,last_state=state() if process and process.poll() is None else None),indent=2)+"\n")
+        if process and process.poll() is None:process.terminate();process.wait(timeout=8)
+        raise
+    raise SystemExit(0)
+
+
 if args.local_only:
     try:
         local_wav_ui()
     except BaseException as error:
-        (out/"failure.json").write_text(json.dumps(dict(report,result="failed",error=str(error),last_state=state() if process and process.poll() is None else None),indent=2)+"\n")
+        (out/"failure.json").write_text(json.dumps(dict(report,result="failed",error=str(error),wait_trace=wait_trace,last_state=state() if process and process.poll() is None else None),indent=2)+"\n")
         if process and process.poll() is None:process.terminate();process.wait(timeout=8)
         raise
     raise SystemExit(0)

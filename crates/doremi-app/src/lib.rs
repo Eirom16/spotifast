@@ -33,6 +33,25 @@ pub use wav_probe::run as wav_audio_probe;
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
 const GAP: f32 = 8.0;
+
+// A pointer gesture belongs to one occurrence. Reusing the widget's auto ID
+// after EOF would apply a still-held seek to the following song as well.
+fn seek_slider(
+    ui: &mut egui::Ui,
+    identity: egui::Id,
+    position: &mut u64,
+    duration: u64,
+) -> egui::Response {
+    ui.push_id(identity, |ui| {
+        ui.add_sized(
+            [ui.available_width(), TOUCH],
+            egui::Slider::new(position, 0..=duration)
+                .text("Posición")
+                .show_value(false),
+        )
+    })
+    .inner
+}
 static RETAINED: Mutex<Option<Retained>> = Mutex::new(None);
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -959,7 +978,8 @@ impl DoremiApp {
                             let duration = model.queue.current().and_then(|e|e.media.duration_ms).unwrap_or(0);
                             let mut position = model.queue.position_ms();
                             ui.label(format!("{}:{:02} / {}:{:02}",position/60000,position/1000%60,duration/60000,duration/1000%60));
-                            let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut position,0..=duration).text("Posición").show_value(false));
+                            let identity=egui::Id::new(("seek",model.queue.current().map(|entry|(entry.id.as_u64(),&entry.media.id))));
+                            let response=seek_slider(ui,identity,&mut position,duration);
                             self.controls.push(Control{name:"seek".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
                             if response.changed() { model.command(Command::Seek(position)); }
                             let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut model.prefs.volume,0.0..=1.0).text("Volumen").show_value(false));
@@ -1131,6 +1151,57 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn a_held_seek_does_not_transfer_to_the_next_occurrence() {
+        let ctx = egui::Context::default();
+        let render = |events, identity, value: &mut u64, duration| {
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(440.0, 800.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    rect = seek_slider(ui, egui::Id::new(identity), value, duration).rect;
+                },
+            );
+            output.textures_delta.clear();
+            rect
+        };
+        let mut old = 0;
+        let rect = render(vec![], 1_u64, &mut old, 120000);
+        let pointer = egui::pos2(rect.min.x + 80.0, rect.center().y);
+        let button = |pressed| egui::Event::PointerButton {
+            pos: pointer,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::default(),
+        };
+        render(
+            vec![egui::Event::PointerMoved(pointer), button(true)],
+            1,
+            &mut old,
+            120000,
+        );
+        assert!(old > 60000, "The initial seek must really engage");
+        let mut next = 0;
+        render(vec![], 2, &mut next, 8000);
+        assert_eq!(
+            next, 0,
+            "A held gesture from another occurrence changed the new track"
+        );
+        render(vec![button(false)], 2, &mut next, 8000);
+        assert_eq!(next, 0);
+        render(vec![button(true)], 2, &mut next, 8000);
+        assert!(
+            next > 4000,
+            "A fresh press on the new occurrence must still work"
+        );
+    }
     use doremi_core::queue::Playback;
     #[cfg(any(target_os = "linux", target_os = "android"))]
     #[test]
