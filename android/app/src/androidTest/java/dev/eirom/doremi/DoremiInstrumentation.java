@@ -66,10 +66,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         foreground();
         long deadline=SystemClock.uptimeMillis()+4000;int lastStatus=-1;
         do {
-            final Bitmap[] image={null};final int[] status={-1};CountDownLatch copied=new CountDownLatch(1);
+            final Bitmap[] image={null};final int[] status={-1};final int[] surfaceOrigin=new int[2],contentOrigin=new int[2];CountDownLatch copied=new CountDownLatch(1);
             runOnMainSync(() -> {
                 SurfaceView view=surface(activity.getWindow().getDecorView());
                 if(view==null || view.getWidth()==0 || view.getHeight()==0) {copied.countDown();return;}
+                view.getLocationOnScreen(surfaceOrigin);activity.findViewById(android.R.id.content).getLocationOnScreen(contentOrigin);
                 image[0]=Bitmap.createBitmap(view.getWidth(),view.getHeight(),Bitmap.Config.ARGB_8888);
                 // State publication precedes EGL swap. After recreation the first
                 // own surface buffer can legitimately be unavailable briefly.
@@ -80,7 +81,10 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(lastStatus==PixelCopy.SUCCESS) {
                 try(FileOutputStream file=new FileOutputStream(new File(getTargetContext().getFilesDir(),name+".png"))) {image[0].compress(Bitmap.CompressFormat.PNG,100,file);}
                 image[0].recycle();
-                Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),state().toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                JSONObject snapshot=state();
+                snapshot.put("qa_surface_origin",new JSONArray().put(surfaceOrigin[0]).put(surfaceOrigin[1]));
+                snapshot.put("qa_content_origin",new JSONArray().put(contentOrigin[0]).put(contentOrigin[1]));
+                Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),snapshot.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
             if(image[0]!=null) image[0].recycle();
@@ -97,7 +101,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
         if(rect==null) throw new AssertionError("Missing control: "+name);
         final int[] origin=new int[2];
-        runOnMainSync(() -> activity.findViewById(android.R.id.content).getLocationOnScreen(origin));
+        runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
         float x=origin[0]+(float)(rect.getDouble(0)+rect.getDouble(2))*scale/2;
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
@@ -115,7 +119,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONObject data=state(); JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
         for(int i=0;i<controls.length();i++) {JSONObject c=controls.getJSONObject(i);if(name.equals(c.getString("name"))) rect=c.getJSONArray("rect");}
         if(rect==null) throw new AssertionError("Missing slider: "+name);
-        final int[] origin=new int[2];runOnMainSync(() -> activity.findViewById(android.R.id.content).getLocationOnScreen(origin));
+        final int[] origin=new int[2];runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
         // egui's slider rail is the first slider_width logical points, before its label.
         float left=(float)rect.getDouble(0),right=Math.min((float)rect.getDouble(2),left+100f);
@@ -348,6 +352,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
+            // Diagnostics are published before GL finishes painting. PixelCopy
+            // requires a real first swap before injecting the first touch.
+            capture("qa-startup");
             if("library-restore".equals(mode)) {
                 restoredLibrary();
                 result.putString("stream","PASS: saved-library process restoration without automatic IO, qualified-ID playback without search and positive native output\n");

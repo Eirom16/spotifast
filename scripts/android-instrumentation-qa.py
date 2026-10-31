@@ -14,7 +14,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.eirom.doremi.dev"
-CAPTURES = ("qa-unicode", "qa-recreated", "qa-landscape", "qa-portrait",
+CAPTURES = ("qa-startup", "qa-unicode", "qa-recreated", "qa-landscape", "qa-portrait",
             "qa-shared-queue-trace", "qa-input-background", "qa-audio-playing",
             "qa-audio-interrupted", "qa-audio-after-end", "qa-online-results-dark",
             "qa-online-results-light", "qa-online-cancelled", "qa-online-playing",
