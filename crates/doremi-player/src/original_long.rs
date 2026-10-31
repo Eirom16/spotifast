@@ -67,6 +67,40 @@ fn validate(path: &Path, cancelled: &mut impl FnMut() -> bool) -> Result<File, D
     }
     Ok(file)
 }
+fn write_fixture(file: &mut File, cancelled: &mut impl FnMut() -> bool) -> Result<(), DecodeError> {
+    let (header, data) = template()?;
+    file.write_all(&header).map_err(|_| DecodeError::Input)?;
+    for _ in 0..REPEATS {
+        for chunk in data.chunks(8192) {
+            if cancelled() {
+                return Err(DecodeError::Cancelled);
+            }
+            file.write_all(chunk).map_err(|_| DecodeError::Input)?;
+        }
+    }
+    file.sync_all().map_err(|_| DecodeError::Input)
+}
+// Android may deny hard links even within an application's private directory.
+// Use an exclusively created, immediately unlinked regular file. Its descriptor
+// remains seekable; cancellation/drop releases it without a partial named file.
+#[cfg(any(target_os = "android", all(test, unix)))]
+fn anonymous_fixture(
+    path: &Path,
+    cancelled: &mut impl FnMut() -> bool,
+) -> Result<File, DecodeError> {
+    let parent = path.parent().ok_or(DecodeError::Input)?;
+    fs::create_dir_all(parent).map_err(|_| DecodeError::Input)?;
+    let temporary = path.with_extension(format!("{}.partial", std::process::id()));
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(|_| DecodeError::Input)?;
+    fs::remove_file(&temporary).map_err(|_| DecodeError::Input)?;
+    write_fixture(&mut file, cancelled)?;
+    Ok(file)
+}
 /// Return the same validated descriptor that will be streamed, not a reopened path.
 pub fn ensure(path: &Path, mut cancelled: impl FnMut() -> bool) -> Result<File, DecodeError> {
     match fs::symlink_metadata(path) {
@@ -77,42 +111,37 @@ pub fn ensure(path: &Path, mut cancelled: impl FnMut() -> bool) -> Result<File, 
     if cancelled() {
         return Err(DecodeError::Cancelled);
     }
-    let parent = path.parent().ok_or(DecodeError::Input)?;
-    fs::create_dir_all(parent).map_err(|_| DecodeError::Input)?;
-    let temporary = path.with_extension(format!("{}.partial", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)
-        .map_err(|_| DecodeError::Input)?;
-    let result = (|| {
-        let (header, data) = template()?;
-        file.write_all(&header).map_err(|_| DecodeError::Input)?;
-        for _ in 0..REPEATS {
-            for chunk in data.chunks(8192) {
-                if cancelled() {
-                    return Err(DecodeError::Cancelled);
-                }
-                file.write_all(chunk).map_err(|_| DecodeError::Input)?;
-            }
-        }
-        file.sync_all().map_err(|_| DecodeError::Input)?;
-        drop(file);
-        if cancelled() {
-            return Err(DecodeError::Cancelled);
-        }
-        // link fails if another file appeared: never clobber existing data.
-        fs::hard_link(&temporary, path).map_err(|_| DecodeError::Input)?;
-        #[cfg(unix)]
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
+    #[cfg(target_os = "android")]
+    return anonymous_fixture(path, &mut cancelled);
+    #[cfg(not(target_os = "android"))]
+    {
+        let parent = path.parent().ok_or(DecodeError::Input)?;
+        fs::create_dir_all(parent).map_err(|_| DecodeError::Input)?;
+        let temporary = path.with_extension(format!("{}.partial", std::process::id()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
             .map_err(|_| DecodeError::Input)?;
-        Ok(())
-    })();
-    // This temporary was created exclusively by this invocation.
-    let _ = fs::remove_file(&temporary);
-    result?;
-    validate(path, &mut cancelled)
+        let result = (|| {
+            write_fixture(&mut file, &mut cancelled)?;
+            drop(file);
+            if cancelled() {
+                return Err(DecodeError::Cancelled);
+            }
+            // link fails if another file appeared: never clobber existing data.
+            fs::hard_link(&temporary, path).map_err(|_| DecodeError::Input)?;
+            #[cfg(unix)]
+            File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|_| DecodeError::Input)?;
+            Ok(())
+        })();
+        // This temporary was created exclusively by this invocation.
+        let _ = fs::remove_file(&temporary);
+        result?;
+        validate(path, &mut cancelled)
+    }
 }
 
 #[cfg(test)]
@@ -139,6 +168,32 @@ mod tests {
         fs::write(&path, b"preserve unknown user data").unwrap();
         assert!(ensure(&path, || false).is_err());
         assert_eq!(fs::read(&path).unwrap(), b"preserve unknown user data");
+        fs::remove_dir_all(directory).unwrap();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn anonymous_android_fixture_is_seekable_and_cancelled_without_named_residue() {
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("original-anonymous-{}", std::process::id()));
+        let path = path(&directory);
+        let file = anonymous_fixture(&path, &mut || false).unwrap();
+        assert!(!path.exists());
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 0);
+        let mut wav = crate::wav_stream::Wav::open(file).unwrap();
+        assert_eq!(wav.info().duration_ms(), DURATION_MS);
+        wav.seek_frame(90 * 48000).unwrap();
+        assert!(wav.read_frame().unwrap().is_some());
+        drop(wav);
+        let mut calls = 0;
+        assert!(matches!(
+            anonymous_fixture(&path, &mut || {
+                calls += 1;
+                calls > 4
+            }),
+            Err(DecodeError::Cancelled)
+        ));
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 0);
         fs::remove_dir_all(directory).unwrap();
     }
     #[test]
