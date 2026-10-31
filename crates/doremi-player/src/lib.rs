@@ -1,10 +1,12 @@
 //! Small local-audio slice. PCM is fully prepared on a worker and hard-capped;
 //! the native callback only reads immutable samples and atomics. No streaming
 //! or arbitrary local-library support is claimed by these test fixtures.
+pub mod buffer;
 #[cfg(feature = "ogg-vorbis")]
 mod ogg;
 #[cfg(feature = "native-output")]
 mod output;
+pub mod wav_stream;
 use doremi_core::media::{Media, MediaId, ProviderId};
 #[cfg(feature = "ogg-vorbis")]
 pub use ogg::{MAX_OGG_BYTES, decode_ogg, decode_ogg_cancellable};
@@ -63,6 +65,7 @@ pub enum DecodeError {
     Cancelled,
     UnsupportedFormat,
     InvalidOutputRate,
+    Input,
 }
 pub struct Pcm {
     samples: Vec<f32>,
