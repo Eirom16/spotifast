@@ -272,6 +272,32 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[test]
+    fn suspending_an_online_load_does_not_cancel_a_separate_document_intent() {
+        let mut model = Model::new(Preferences::default());
+        let media = Media {
+            id: MediaId::new(
+                ProviderId::new(doremi_commons::PROVIDER).unwrap(),
+                "21923157",
+            )
+            .unwrap(),
+            title: "Owned QA intent".into(),
+            duration_ms: Some(10000),
+        };
+        model.start_context(vec![media], 0);
+        assert!(model.online.snapshot()["loading"].as_bool().unwrap());
+        // No document/online worker, selector, file IO or network is started.
+        // This is the independently issued intent that must survive suspension.
+        model.local_files.pending = Some(7);
+        model.suspend_online();
+        assert_eq!(model.queue.playback(), Playback::Paused);
+        assert!(!model.online.snapshot()["loading"].as_bool().unwrap());
+        assert_eq!(model.local_files.pending, Some(7));
+        // Explicit user cancellation still owns both operations.
+        model.command(Command::Cancel);
+        assert!(!model.local_files.pending());
+    }
     #[test]
     fn an_incompatible_locator_index_is_preserved_and_imports_cannot_replace_it() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

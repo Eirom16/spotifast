@@ -80,7 +80,7 @@ impl Model {
             self.catalog.cancel();
         }
         if self.online.load.is_some() {
-            self.command(Command::Cancel);
+            self.command_with_import_policy(Command::Cancel, false);
         }
         self.revision += 1;
     }
