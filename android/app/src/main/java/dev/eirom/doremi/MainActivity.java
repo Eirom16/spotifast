@@ -34,6 +34,63 @@ public final class MainActivity extends Activity {
     private static native void nativeText(String text,long generation);
     private static native void nativeDestroy();
     private static native void nativeFocus(boolean granted);
+    private static native void nativeDocument(long generation,String uri);
+    private static final int OPEN_WAV=403;
+    private long fileRequest=0;
+    private volatile boolean documentResultReady=false;
+    private volatile long documentResultGeneration=0;
+    private volatile String documentResultUri="";
+
+    // Called exclusively by Rust's document worker, never by the UI/GL thread.
+    public static android.os.ParcelFileDescriptor openDocument(Context context,String value) throws java.io.IOException {
+        android.net.Uri uri=android.net.Uri.parse(value);
+        if(!"content".equals(uri.getScheme())) throw new java.io.IOException("Unsupported document");
+        return context.getContentResolver().openFileDescriptor(uri,"r");
+    }
+    public static String documentTitle(Context context,String value) {
+        try(android.database.Cursor cursor=context.getContentResolver().query(android.net.Uri.parse(value),new String[]{android.provider.OpenableColumns.DISPLAY_NAME},null,null,null)) {
+            if(cursor!=null && cursor.moveToFirst()) {
+                String name=cursor.getString(0);
+                if(name!=null && !name.isEmpty()) return name;
+            }
+        } catch(RuntimeException error) { /* A display name is optional; no URI logs. */ }
+        return "Archivo WAV";
+    }
+    private void requestDocument(long generation) {
+        if(generation==0 || fileRequest!=0) return;
+        fileRequest=generation;
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("audio/*");
+        intent.putExtra(Intent.EXTRA_LOCAL_ONLY,true);
+        // Development QA opens only its own generated directory; never collect
+        // the user's Recents listing when automating the system picker.
+        String folder=getIntent().getStringExtra("dev.eirom.doremi.qa.documentFolder");
+        if(folder!=null && folder.matches("Doremi-QA-[0-9a-f]{7,40}")) {
+            intent.putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,
+                android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents","primary:Download/"+folder));
+        }
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        try { startActivityForResult(intent,OPEN_WAV); }
+        catch(android.content.ActivityNotFoundException error) {
+            deliverDocument("");
+        }
+    }
+    private void deliverDocument(String uri) {
+        documentResultGeneration=fileRequest;
+        documentResultUri=uri;
+        fileRequest=0;
+        documentResultReady=true;
+        if(surface!=null) surface.requestRender();
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data) {
+        super.onActivityResult(request,result,data);
+        if(request==OPEN_WAV) deliverDocument(result==RESULT_OK && data!=null && data.getData()!=null?data.getData().toString():"");
+    }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        state.putLong("doremiFileRequest",fileRequest);
+        super.onSaveInstanceState(state);
+    }
     private AudioManager audioManager;
     private AudioFocusRequest focusRequest;
     private boolean focusHeld=false;
@@ -72,6 +129,7 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if(state!=null) fileRequest=state.getLong("doremiFileRequest",0);
         audioManager=(AudioManager)getSystemService(AUDIO_SERVICE);
         focusRequest=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
@@ -145,9 +203,15 @@ public final class MainActivity extends Activity {
                 ready=nativeInit(getFilesDir().getAbsolutePath(),getApplicationContext(),inputGeneration);
                 if(!ready) { runOnUiThread(() -> Toast.makeText(MainActivity.this,"No se pudo iniciar OpenGL de Doremi",Toast.LENGTH_LONG).show()); return; }
             }
+            if(documentResultReady) {
+                long generation=documentResultGeneration; String uri=documentResultUri;
+                documentResultReady=false; documentResultUri="";
+                nativeDocument(generation,uri);
+            }
             String output=nativeDraw(width,height,scale);
             try {
                 JSONObject data=new JSONObject(output);
+                long requestedDocument=data.optLong("file_request",0);
                 boolean ime=data.optBoolean("ime");
                 boolean needsFocus=data.optBoolean("needs_focus");
                 boolean loadingAudio=data.optBoolean("loading_audio");
@@ -156,6 +220,7 @@ public final class MainActivity extends Activity {
                 long acknowledgedGeneration=data.optLong("input_generation",0);
                 runOnUiThread(() -> {
                     if(!resumed) return;
+                    requestDocument(requestedDocument);
                     updateFocus(needsFocus,loadingAudio);
                     updatingInput=true;
                     if(acknowledgedGeneration==inputGeneration && !input.getText().toString().equals(query)) { input.setText(query); input.setSelection(input.length()); }

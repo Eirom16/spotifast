@@ -1,5 +1,6 @@
 //! Host-owned JSON encoding. No provider resources, requests or credentials.
 pub mod collection;
+pub mod document_copy;
 pub mod local_files;
 use doremi_core::{
     media::{Media, MediaId, ProviderId},

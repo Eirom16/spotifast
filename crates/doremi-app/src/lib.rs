@@ -14,7 +14,7 @@ mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
 use doremi_library as persistence;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
 mod local_media;
 mod saved;
@@ -239,8 +239,11 @@ impl Model {
         model
     }
     fn command(&mut self, command: Command) {
+        self.command_with_import_policy(command, true);
+    }
+    fn command_with_import_policy(&mut self, command: Command, cancel_import: bool) {
         let cancelled = matches!(&command, Command::Cancel);
-        if cancelled {
+        if cancelled && cancel_import {
             self.cancel_local_import();
         }
         if let Command::Append(media) = &command
@@ -872,8 +875,9 @@ impl DoremiApp {
                     model.revision += 1;
                 }
             }
-            self.model.as_mut().unwrap().poll_local(&ctx);
         }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        self.model.as_mut().unwrap().poll_local(&ctx);
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_online(&ctx);
         self.model.as_mut().unwrap().poll_audio();
@@ -982,13 +986,16 @@ impl DoremiApp {
                         let library=self.model.as_ref().unwrap().library.clone();
                         ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
                         if !self.model.as_ref().unwrap().write_library {ui.small("Solo lectura: el archivo anterior se conserva.");}
-                        #[cfg(target_os = "linux")]
+                        #[cfg(any(target_os = "linux", target_os = "android"))]
                         {
                             if self.model.as_ref().unwrap().local_files.pending() {
                                 ui.label("Importación en curso…");
                                 if self.button(ui,"cancel-import","Cancelar importación",220.0) {self.model.as_mut().unwrap().cancel_local_import();}
                             } else if self.button(ui,"import-wav","Importar WAV",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
+                            #[cfg(target_os = "linux")]
                             ui.small("WAV PCM16, mono o estéreo. También puedes arrastrarlo a Doremi.");
+                            #[cfg(target_os = "android")]
+                            ui.small("WAV PCM16 local, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
                         }
                         self.rows(ui, library.items());
                     }
@@ -1086,7 +1093,9 @@ impl Drop for DoremiApp {
         if let Some(mut model) = self.model.take() {
             #[cfg(any(target_os = "linux", target_os = "android"))]
             model.suspend_online();
-            model.command(Command::Cancel);
+            // The Android system picker pauses the Activity. Keep its explicit
+            // import intent while suspending playback and the GL renderer.
+            model.command_with_import_policy(Command::Cancel, !cfg!(target_os = "android"));
             // Retain the owner and its idle writer across Activity lifetimes.
             // Never join disk work from the drawing/lifecycle thread.
             *RETAINED.lock().unwrap() = Some(Retained {

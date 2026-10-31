@@ -3,8 +3,8 @@
 use super::*;
 use egui_glow::{Painter, ShaderVersion, glow};
 use jni::{
-    JNIEnv,
-    objects::{GlobalRef, JClass, JObject, JString},
+    JNIEnv, JavaVM,
+    objects::{GlobalRef, JClass, JObject, JString, JValue},
     sys::{jboolean, jfloat, jint, jlong, jstring},
 };
 use std::{
@@ -28,12 +28,14 @@ struct Renderer {
     text_generation: jlong,
 }
 static APPLICATION: OnceLock<GlobalRef> = OnceLock::new();
+static VM: OnceLock<JavaVM> = OnceLock::new();
+static ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
 thread_local! { static RENDERER: RefCell<Option<Renderer>> = const { RefCell::new(None) }; }
 
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeInit")]
 pub extern "system" fn native_init(
     mut env: JNIEnv<'_>,
-    _: JClass<'_>,
+    class: JClass<'_>,
     directory: JString<'_>,
     context: JObject<'_>,
     input_generation: jlong,
@@ -64,6 +66,10 @@ pub extern "system" fn native_init(
         }
         context
     });
+    VM.get_or_init(|| vm);
+    if let Ok(class) = env.new_global_ref(class) {
+        ACTIVITY_CLASS.get_or_init(|| class);
+    }
     RENDERER.with(|cell| {
         if cell.borrow().is_some() {
             return 1;
@@ -121,7 +127,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -228,6 +234,82 @@ pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jbool
             } else if let Some(engine) = &model.audio {
                 engine.set_playing(model.needs_focus() && model.focus);
             }
+        }
+    });
+}
+
+/// Only the file worker calls these Android APIs. No URI is logged or persisted.
+pub fn open_document(uri: &str) -> Result<(std::fs::File, String), ()> {
+    use std::os::fd::FromRawFd;
+    let mut env = VM
+        .get()
+        .ok_or(())?
+        .attach_current_thread()
+        .map_err(|_| ())?;
+    let class = ACTIVITY_CLASS.get().ok_or(())?;
+    let class: &JClass<'_> = class.as_obj().into();
+    let context = APPLICATION.get().ok_or(())?.as_obj();
+    let result = (|| -> jni::errors::Result<_> {
+        let uri = env.new_string(uri)?;
+        let args = [JValue::Object(context), JValue::Object(uri.as_ref())];
+        let parcel = env
+            .call_static_method(
+                class,
+                "openDocument",
+                "(Landroid/content/Context;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
+                &args,
+            )?
+            .l()?;
+        let fd = env
+            .call_method(&parcel, "detachFd", "()I", &[])
+            .and_then(|v| v.i());
+        // detachFd transfers ownership exactly once to Rust. Close the Java
+        // wrapper regardless of success, clearing an exception before closing.
+        if fd.is_err() {
+            let _ = env.exception_clear();
+        }
+        let _ = env.call_method(&parcel, "close", "()V", &[]);
+        let fd = fd?;
+        if fd < 0 {
+            return Err(jni::errors::Error::NullPtr("document descriptor"));
+        }
+        // SAF supplies a read-only owned descriptor, never a borrowed Java fd.
+        let file = unsafe { std::fs::File::from_raw_fd(fd) };
+        let title = env
+            .call_static_method(
+                class,
+                "documentTitle",
+                "(Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;",
+                &args,
+            )?
+            .l()?;
+        let title = String::from(env.get_string(&JString::from(title))?);
+        Ok((file, title))
+    })();
+    if result.is_err() {
+        let _ = env.exception_clear();
+    }
+    result.map_err(|_| ())
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeDocument")]
+pub extern "system" fn native_document(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    generation: jlong,
+    uri: JString<'_>,
+) {
+    let Ok(uri) = env.get_string(&uri) else {
+        return;
+    };
+    let uri = String::from(uri);
+    RENDERER.with(|cell| {
+        if let Some(renderer) = cell.borrow_mut().as_mut() {
+            renderer.app.model.as_mut().unwrap().selected_document(
+                generation as u64,
+                uri,
+                &renderer.ctx,
+            );
         }
     });
 }

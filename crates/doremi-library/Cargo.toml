@@ -13,3 +13,6 @@ doremi-core = { path = "../doremi-core" }
 # or filesystem operations to the neutral queue reducer.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Content identity for explicitly selected private document copies. MIT/Apache-2.0,
+# crates.io source already present in the workspace lockfile.
+sha2 = "0.10.9"

@@ -1,11 +1,10 @@
-//! Linux file ingress. Only a requested path is inspected; no library scanning.
+//! Explicit file ingress. Only a requested document is inspected; no scanning.
 //! An owned native selector is bounded, cancellable and always reaped here.
 use doremi_player::wav_stream::Wav;
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     path::PathBuf,
-    process::{Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering},
@@ -15,6 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "linux")]
+use std::process::{Command, Stdio};
+
 const LIMIT: usize = doremi_library::local_files::MAX_PATH_BYTES;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Error {
@@ -23,8 +25,11 @@ pub enum Error {
     Input,
     Format,
     Name,
+    #[cfg(target_os = "linux")]
     Picker,
     Busy,
+    #[cfg(target_os = "android")]
+    TooLarge,
 }
 pub struct Metadata {
     pub path: PathBuf,
@@ -32,8 +37,12 @@ pub struct Metadata {
     pub duration_ms: u64,
 }
 pub enum Source {
+    #[cfg(target_os = "linux")]
     Picker(PathBuf),
+    #[cfg(target_os = "linux")]
     Path(PathBuf),
+    #[cfg(target_os = "android")]
+    Document { uri: String, directory: PathBuf },
 }
 struct Job {
     id: u64,
@@ -135,6 +144,7 @@ fn inspect(path: PathBuf, control: &Control, id: u64) -> Result<Metadata, Error>
         duration_ms: info.duration_ms(),
     })
 }
+#[cfg(target_os = "linux")]
 fn select(
     mut command: Command,
     control: &Control,
@@ -213,6 +223,52 @@ fn select(
     let path = String::from_utf8(bytes).map_err(|_| Error::Name)?;
     Ok(PathBuf::from(path))
 }
+#[cfg(target_os = "android")]
+fn import_document(
+    uri: String,
+    directory: PathBuf,
+    control: &Control,
+    id: u64,
+) -> Result<Metadata, Error> {
+    use doremi_library::document_copy::{self, Error as CopyError};
+    let deadline = Instant::now() + Duration::from_secs(120);
+    check(control, id, deadline)?;
+    let (file, title) = crate::android_native::open_document(&uri).map_err(|_| Error::Input)?;
+    check(control, id, deadline)?;
+    if !file.metadata().map_err(|_| Error::Input)?.is_file() {
+        return Err(Error::Input);
+    }
+    // Reject unsupported audio before allocating a private copy. The copied
+    // snapshot is validated again in case the selected original changed.
+    Wav::open(file.try_clone().map_err(|_| Error::Input)?).map_err(|_| Error::Format)?;
+    let path = document_copy::store(file, &directory, || {
+        check(control, id, deadline).map_err(|e| match e {
+            Error::Cancelled => CopyError::Cancelled,
+            _ => CopyError::Deadline,
+        })
+    })
+    .map_err(|e| match e {
+        CopyError::Cancelled => Error::Cancelled,
+        CopyError::Deadline => Error::Deadline,
+        CopyError::TooLarge => Error::TooLarge,
+        _ => Error::Input,
+    })?;
+    check(control, id, deadline)?;
+    let mut metadata = inspect(path, control, id)?;
+    let title = std::path::Path::new(&title)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Archivo WAV")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(256)
+        .collect::<String>();
+    if !title.is_empty() {
+        metadata.title = title;
+    }
+    Ok(metadata)
+}
+
 impl Worker {
     pub fn new() -> Result<Self, Error> {
         let (sender, receiver) = mpsc::sync_channel::<Job>(1);
@@ -226,7 +282,9 @@ impl Worker {
                 while let Ok(job) = receiver.recv() {
                     state.active.store(job.id, Ordering::Release);
                     let result = (|| {
+                        #[cfg(target_os = "linux")]
                         let path = match job.source {
+                            #[cfg(target_os = "linux")]
                             Source::Picker(directory) => {
                                 state.phase.store(1, Ordering::Release);
                                 job.ctx.request_repaint();
@@ -246,11 +304,23 @@ impl Worker {
                                     .env("GTK_USE_PORTAL", "0");
                                 select(command, &state, job.id, |_| job.ctx.request_repaint())?
                             }
+                            #[cfg(target_os = "linux")]
                             Source::Path(path) => path,
                         };
                         state.phase.store(2, Ordering::Release);
                         job.ctx.request_repaint();
-                        inspect(path, &state, job.id)
+                        #[cfg(target_os = "linux")]
+                        {
+                            inspect(path, &state, job.id)
+                        }
+                        #[cfg(target_os = "android")]
+                        {
+                            match job.source {
+                                Source::Document { uri, directory } => {
+                                    import_document(uri, directory, &state, job.id)
+                                }
+                            }
+                        }
                     })();
                     state.phase.store(0, Ordering::Release);
                     if state.generation.load(Ordering::Acquire) == job.id {
@@ -341,6 +411,7 @@ mod tests {
         assert_eq!(meta.title, "scale");
         assert!(meta.path.is_absolute());
     }
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_cancelled_native_child_is_reaped_with_its_bounded_reader() {
         let control = Arc::new(Control::default());

@@ -1,16 +1,20 @@
 //! The model owns file identities and saved metadata. Workers return only facts.
 use super::*;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 use crate::file_input::{Error, Metadata, Source, Worker};
 use persistence::local_files::Index;
 pub struct State {
     pub index: Index,
     pub writable: bool,
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "android")]
+    pub selector: Option<u64>,
+    #[cfg(target_os = "android")]
+    generation: u64,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     worker: Option<Worker>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pending: Option<u64>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     directory: PathBuf,
 }
 impl State {
@@ -18,40 +22,66 @@ impl State {
         Self {
             index: Index::default(),
             writable: true,
-            #[cfg(target_os = "linux")]
+            #[cfg(target_os = "android")]
+            selector: None,
+            #[cfg(target_os = "android")]
+            generation: 0,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             worker: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             pending: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "android"))]
             directory: PathBuf::new(),
         }
     }
     pub fn pending(&self) -> bool {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            self.pending.is_some()
+            self.pending.is_some() || {
+                #[cfg(target_os = "android")]
+                {
+                    self.selector.is_some()
+                }
+                #[cfg(not(target_os = "android"))]
+                {
+                    false
+                }
+            }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         {
             false
         }
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let (phase, pid) = self
             .pending
             .and_then(|id| self.worker.as_ref().map(|worker| worker.phase(id)))
             .unwrap_or(("idle", 0));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "android")))]
         let (phase, pid) = ("idle", 0);
+        #[cfg(target_os = "android")]
+        let phase = if self.selector.is_some() {
+            "selector"
+        } else {
+            phase
+        };
         serde_json::json!({"files":self.index.len(),"writable":self.writable,"pending":self.pending(),"phase":phase,"picker_pid":pid})
     }
 }
 impl Model {
     pub fn load_local_files(&mut self, directory: &std::path::Path) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            self.local_files.directory = directory.join("samples");
+            #[cfg(target_os = "linux")]
+            {
+                self.local_files.directory = directory.join("samples");
+            }
+            #[cfg(target_os = "android")]
+            {
+                self.local_files.directory = directory.join("imported-documents");
+            }
         }
         match persistence::read(directory, "local-files-v1.json") {
             Ok(Some(bytes)) => match Index::decode(&bytes) {
@@ -71,7 +101,12 @@ impl Model {
         }
     }
     pub fn cancel_local_import(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(target_os = "android")]
+        if self.local_files.selector.take().is_some() {
+            self.notice = "Importación cancelada.".into();
+            self.revision += 1;
+        }
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         if self.local_files.pending.take().is_some() {
             if let Some(worker) = &self.local_files.worker {
                 worker.cancel();
@@ -110,7 +145,59 @@ impl Model {
         }
         self.revision += 1;
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(target_os = "android")]
+    pub fn open_local(&mut self, _: Option<PathBuf>, _: &egui::Context) {
+        if !self.local_files.writable || !self.write_library {
+            self.notice =
+                "Importación no disponible: los datos existentes son de solo lectura.".into();
+            self.revision += 1;
+            return;
+        }
+        self.cancel_local_import();
+        self.local_files.generation = self.local_files.generation.saturating_add(1);
+        self.local_files.selector = Some(self.local_files.generation);
+        self.notice = "Selecciona un WAV local. Se guardará una copia privada.".into();
+        self.revision += 1;
+    }
+    #[cfg(target_os = "android")]
+    pub fn selected_document(&mut self, generation: u64, uri: String, ctx: &egui::Context) {
+        if self.local_files.selector != Some(generation) {
+            return;
+        }
+        self.local_files.selector = None;
+        if uri.is_empty() {
+            self.notice = "Importación cancelada.".into();
+            self.revision += 1;
+            return;
+        }
+        if !uri.starts_with("content://") || uri.len() > 4096 || uri.chars().any(char::is_control) {
+            self.notice = "El selector no devolvió un documento compatible.".into();
+            self.revision += 1;
+            return;
+        }
+        if self.local_files.worker.is_none() {
+            self.local_files.worker = Worker::new().ok();
+        }
+        let source = Source::Document {
+            uri,
+            directory: self.local_files.directory.clone(),
+        };
+        match self
+            .local_files
+            .worker
+            .as_ref()
+            .ok_or(Error::Busy)
+            .and_then(|w| w.start(source, ctx))
+        {
+            Ok(id) => {
+                self.local_files.pending = Some(id);
+                self.notice = "Importando WAV…".into();
+            }
+            Err(_) => self.notice = "No se pudo iniciar la importación.".into(),
+        }
+        self.revision += 1;
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub fn poll_local(&mut self, ctx: &egui::Context) {
         let event = self
             .local_files
@@ -118,6 +205,10 @@ impl Model {
             .as_ref()
             .and_then(|worker| worker.poll(ctx));
         let Some(event) = event else {
+            #[cfg(target_os = "android")]
+            if self.local_files.pending.is_some() {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
             return;
         };
         if self.local_files.pending != Some(event.id) {
@@ -133,15 +224,18 @@ impl Model {
                     Error::Format => "Este archivo no es WAV PCM16 mono o estéreo compatible.",
                     Error::Name => "La ruta del archivo no se puede guardar de forma segura.",
                     Error::Input => "No se pudo leer el archivo seleccionado.",
+                    #[cfg(target_os = "linux")]
                     Error::Picker => "Selector no disponible. Puedes arrastrar un WAV a Doremi.",
                     Error::Busy => "La importación está ocupada. Inténtalo de nuevo.",
+                    #[cfg(target_os = "android")]
+                    Error::TooLarge => "El archivo supera el límite de importación de 256 MiB.",
                 }
                 .into();
                 self.revision += 1;
             }
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     fn accept_local(&mut self, meta: Metadata) {
         let id = self
             .local_files
@@ -166,6 +260,7 @@ impl Model {
         }
         self.local_files.index = files;
         self.library = library;
+        #[cfg(target_os = "linux")]
         if let Some(parent) = meta.path.parent() {
             self.local_files.directory = parent.to_path_buf();
         }
@@ -188,7 +283,7 @@ mod tests {
         let mut model = Model::load(&dir);
         assert!(!model.local_files.writable);
         model.cancel_local_import();
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         model.open_local(None, &egui::Context::default());
         assert!(!model.local_files.pending());
         assert_eq!(

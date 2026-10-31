@@ -117,6 +117,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-library: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-library: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
+| `crates/doremi-library: dependencies` | `sha2` | `0.10.9` |
 | `crates/doremi-player: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-player: dependencies` | `symphonia` | `default-features=False; features=['ogg', 'vorbis']; optional=True; version=0.5.5` |
 | `crates/doremi-player/cfg(not(target_os = "linux")): dependencies` | `cpal` | `default-features=False; optional=True; version=0.18.2` |
