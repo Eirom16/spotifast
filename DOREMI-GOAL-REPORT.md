@@ -405,3 +405,13 @@ relevantes encontrados en logs propios. No hay captura acústica, FPS medidos
 ni soporte MediaSession/background todavía. El catálogo online continúa
 limitado a los dos tonos CC0 auditados. Próximo corte viable: audio local
 de mayor duración con buffering continuo acotado antes de ampliar proveedores.
+
+## WAV largo: Linux comprobado, corrección Android en validación
+
+Código `16e304a`, CI enfocada [41154415161](https://github.com/Eirom16/spotifast/actions/runs/41154415161) y harness offline `41154415185` aprobados. Linux descargado/verificado: reproducción continua >23 s de WAV PCM16 de 120 s, buffer PCM de 65536 bytes/8192 frames, cero vaciados propios y cero notificaciones xrun en esa muestra. Pausa, seek a ~90 s, Next/Previous, EOF y cierre con decoder activo aprobados; cierre 67,24 ms. Xvfb/Mesa software, salida nativa, sin captura acústica. Muestra puntual: RSS 124744 KiB y CPU 520 ms/1100,14 ms. Evidencia: `target/native-long-ui-16e304a/`.
+
+El lector general también pasó `--wav-audio-probe` con un archivo estéreo original CC0 de 120 s/16 kHz, convertido a salida de 48 kHz, controles y cancelación; muestras positivas con ganancia 0,08 y cero muestras no nulas al silenciar. Pico RSS del proceso CLI 16404 KiB. Evidencia y procedencia: `target/wav-stream-fixtures/`. Instalado como Doremi Native Dev (`target/native-installed-16e304a.json`), SHA-256 `062b876b0f3d50016b5fd735aa9b4b1a050f9d8d114a918333b086abc2e845a3`. Sigue pendiente el selector/importación de archivos del usuario; el CLI es un probe, no una biblioteca general.
+
+Android `16e304a`: APK descargado y actualizado conservando datos, SHA-256 `db109761c24bf906d4284b9eecb23061e2c7f9b0b381544d83adc7bd15d1c759`. La suite física falló en el nuevo WAV largo con `Decode(Input)`, tras los controles de audio corto. Una prueba mínima confinada a un directorio de QA propio confirmó `ln: Permission denied`; los favoritos permanecen idénticos al snapshot anterior. No se declara aprobado este corte Android. Evidencia de fallo: `target/android-qa/16e304a1cc77/`.
+
+Corrección `a39ce24`: Android crea un archivo regular exclusivo y lo desvincula inmediatamente; el descriptor seekable se conserva hasta cancelar/cerrar y no deja un archivo parcial nombrado. No cambia políticas del teléfono ni depende de enlaces duros. Test Linux de esta ruta anónima, cancelación, 11 tests player y Clippy ligero aprobados. CI enfocada `41155541994` en curso; falta instalar y repetir la suite física antes de aceptar la corrección. El canal PCM y la lectura/resampling siguen compartidos; no se anuncia reproducción acústica medida, importación general, streaming remoto ni MediaSession.
