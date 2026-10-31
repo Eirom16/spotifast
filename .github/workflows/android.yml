@@ -80,6 +80,8 @@ jobs:
       - name: Host tests and lint, without the Spotifast dependency tree
         run: |
           cargo fmt --all --check
+          cargo test --locked -p doremi-library --all-targets
+          cargo clippy --locked -p doremi-library --all-targets -- -D warnings
           cargo test --locked -p doremi-app --all-targets
           cargo test --locked -p doremi-player --features native-output --all-targets
           cargo clippy --locked -p doremi-player --features native-output --all-targets -- -D warnings
