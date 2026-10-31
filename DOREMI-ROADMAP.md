@@ -8,6 +8,8 @@ y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
 Hay APK de desarrollo instalada y validada en Android real, audio PCM local
 y un flujo online experimental de dos tonos Commons CC0 en Android/Linux.
+Los hosts también leen un WAV original de 120 s con buffer PCM de 64 KiB,
+comprobado en Linux y Android físico; el selector/importación general está pendiente.
 La biblioteca propia ya guarda IDs neutrales y restaura favoritos en ambos hosts
 (ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo definitivo.
 Preview 0.1 añade un ejecutable
@@ -528,3 +530,6 @@ con reproducción desde Biblioteca sin búsqueda y volumen positivo. Evidencia,
 fallo inicial del harness y límites en DOREMI-GOAL-REPORT.md. Próximo corte:
 fuentes locales más largas y buffer PCM continuo acotado. Siguen pendientes
 MediaSession, catálogo general y autenticación; ninguna release publicada.
+
+
+Avance de WAV largo (`a39ce24`): CI enfocada `41155541994`, suite física completa (22 capturas) y restauración en proceso nuevo aprobadas. Linux del mismo SHA instalado y probado; ambos hosts entregan >23 s con buffer PCM de 64 KiB, seek/EOF/cancelación. Android usa un descriptor temporal sin nombre porque el sandbox deniega enlaces duros, sin cambiar seguridad ni permisos. Siguiente corte: medir/reducir el coste de CPU del buffer en ARMv7 y después selección/importación real de archivos. No se anuncian aún streaming remoto continuo, MediaSession, biblioteca de archivos generales ni autenticación. Detalles, fallos y métricas en DOREMI-GOAL-REPORT.md.
