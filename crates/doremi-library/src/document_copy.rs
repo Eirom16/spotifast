@@ -1,5 +1,7 @@
 //! Worker-only persistence of an explicitly selected, regular document.
 //! Does not discover files, interpret audio, store URIs or alter the source.
+//! The historical private basename source.wav is opaque: consumers detect the
+//! format from content. Existing indexed copies keep their paths and identities.
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},

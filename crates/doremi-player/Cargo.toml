@@ -11,6 +11,7 @@ description = "Bounded local PCM decoding and native output for Doremi"
 default = []
 native-output = ["dep:cpal"]
 ogg-vorbis = ["dep:symphonia"]
+local-flac = ["dep:symphonia", "symphonia/flac"]
 
 [dependencies]
 doremi-core = { path = "../doremi-core" }

@@ -151,7 +151,7 @@ impl Model {
         {
             Ok(id) => {
                 self.local_files.pending = Some(id);
-                self.notice = "Selecciona un WAV para importarlo a tu biblioteca.".into();
+                self.notice = "Selecciona un WAV o FLAC para importarlo a tu biblioteca.".into();
             }
             Err(_) => self.local_feedback(
                 true,
@@ -174,7 +174,7 @@ impl Model {
         self.local_files.feedback = None;
         self.local_files.generation = self.local_files.generation.saturating_add(1);
         self.local_files.selector = Some(self.local_files.generation);
-        self.notice = "Selecciona un WAV local. Se guardará una copia privada.".into();
+        self.notice = "Selecciona un WAV o FLAC local. Se guardará una copia privada.".into();
         self.revision += 1;
     }
     #[cfg(target_os = "android")]
@@ -209,7 +209,7 @@ impl Model {
         {
             Ok(id) => {
                 self.local_files.pending = Some(id);
-                self.notice = "Importando WAV…".into();
+                self.notice = "Importando audio…".into();
             }
             Err(_) => self.local_feedback(true, "No se pudo iniciar la importación."),
         }
@@ -239,11 +239,15 @@ impl Model {
                 let message = match error {
                     Error::Cancelled => "Importación cancelada.",
                     Error::Deadline => "La importación agotó su tiempo de espera.",
-                    Error::Format => "Este archivo no es WAV PCM16 mono o estéreo compatible.",
+                    Error::Format => {
+                        "Este archivo no es WAV PCM16 o FLAC mono o estéreo compatible."
+                    }
                     Error::Name => "La ruta del archivo no se puede guardar de forma segura.",
                     Error::Input => "No se pudo leer el archivo seleccionado.",
                     #[cfg(target_os = "linux")]
-                    Error::Picker => "Selector no disponible. Puedes arrastrar un WAV a Doremi.",
+                    Error::Picker => {
+                        "Selector no disponible. Puedes arrastrar un archivo WAV o FLAC a Doremi."
+                    }
                     Error::Busy => "La importación está ocupada. Inténtalo de nuevo.",
                     #[cfg(target_os = "android")]
                     Error::TooLarge => "El archivo supera el límite de importación de 256 MiB.",
@@ -278,7 +282,7 @@ impl Model {
         }
         self.local_files.index = files;
         self.library = library;
-        self.local_files.feedback = Some((false, "WAV añadido a tu biblioteca."));
+        self.local_files.feedback = Some((false, "Audio añadido a tu biblioteca."));
         #[cfg(target_os = "linux")]
         if let Some(parent) = meta.path.parent() {
             self.local_files.directory = parent.to_path_buf();

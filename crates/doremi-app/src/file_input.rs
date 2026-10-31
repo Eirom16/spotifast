@@ -1,6 +1,9 @@
 //! Explicit file ingress. Only a requested document is inspected; no scanning.
 //! An owned native selector is bounded, cancellable and always reaped here.
-use doremi_player::wav_stream::Wav;
+use doremi_player::{
+    local_file::LocalFile,
+    wav_stream::{FrameReader, Wav},
+};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
@@ -118,18 +121,26 @@ fn inspect(path: PathBuf, control: &Control, id: u64) -> Result<Metadata, Error>
     {
         return Err(Error::Input);
     }
-    let file = File::open(&path).map_err(|_| Error::Input)?;
+    let mut file = File::open(&path).map_err(|_| Error::Input)?;
     if !file.metadata().map_err(|_| Error::Input)?.is_file() {
         return Err(Error::Input);
     }
-    let wav = Wav::open(Guarded {
-        file,
-        control,
-        id,
-        deadline,
-    });
+    let mut signature = [0; 4];
+    file.read_exact(&mut signature).map_err(|_| Error::Format)?;
+    file.seek(SeekFrom::Start(0)).map_err(|_| Error::Input)?;
+    let decoded = if &signature == b"fLaC" {
+        LocalFile::open(file).map(|source| source.info())
+    } else {
+        Wav::open(Guarded {
+            file,
+            control,
+            id,
+            deadline,
+        })
+        .map(|source| source.info())
+    };
     check(control, id, deadline)?;
-    let info = wav.map_err(|_| Error::Format)?.info();
+    let info = decoded.map_err(|_| Error::Format)?;
     let title = path
         .file_stem()
         .and_then(|name| name.to_str())
@@ -240,7 +251,7 @@ fn import_document(
     }
     // Reject unsupported audio before allocating a private copy. The copied
     // snapshot is validated again in case the selected original changed.
-    Wav::open(file.try_clone().map_err(|_| Error::Input)?).map_err(|_| Error::Format)?;
+    LocalFile::open(file.try_clone().map_err(|_| Error::Input)?).map_err(|_| Error::Format)?;
     let path = document_copy::store(file, &directory, || {
         check(control, id, deadline).map_err(|e| match e {
             Error::Cancelled => CopyError::Cancelled,
@@ -296,8 +307,8 @@ impl Worker {
                                 command
                                     .args([
                                         "--file-selection",
-                                        "--title=Doremi: importar WAV",
-                                        "--file-filter=WAV PCM16 | *.wav *.WAV",
+                                        "--title=Doremi: importar audio",
+                                        "--file-filter=Audio WAV PCM16 y FLAC | *.wav *.WAV *.flac *.FLAC",
                                         "--filename",
                                     ])
                                     .arg(initial)

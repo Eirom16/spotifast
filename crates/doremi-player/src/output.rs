@@ -2,7 +2,11 @@
 //! The callback reads a predecoded buffer (at most MAX_SAMPLES floats), atomics
 //! and its own cursor. It performs no allocation, I/O, locks or event delivery.
 mod feed;
-use super::{Builtin, Cursor, DecodeError, Pcm, buffer, decode_wav, wav_stream::Wav};
+use super::{
+    Builtin, Cursor, DecodeError, Pcm, buffer, decode_wav,
+    local_file::LocalFile,
+    wav_stream::{FrameReader, Wav},
+};
 use cpal::{
     FromSample, SizedSample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
@@ -90,9 +94,9 @@ struct Load {
 enum Source {
     Builtin(Builtin),
     Prepared(Arc<Pcm>),
-    WavFile(PathBuf),
+    File { path: PathBuf, wav_only: bool },
     OriginalLong(PathBuf),
-    OpenedWav(File),
+    Opened { file: File, wav_only: bool },
 }
 enum Command {
     Load(Load),
@@ -174,7 +178,31 @@ impl Engine {
         path: PathBuf,
         position: u64,
     ) -> Result<(), EngineError> {
-        self.enqueue(request, Source::WavFile(path), position)
+        self.enqueue(
+            request,
+            Source::File {
+                path,
+                wav_only: true,
+            },
+            position,
+        )
+    }
+    /// Content-detected local audio. Parsing and decoding remain on workers;
+    /// the caller supplies only the explicitly selected private/canonical path.
+    pub fn load_file(
+        &mut self,
+        request: RequestId,
+        path: PathBuf,
+        position: u64,
+    ) -> Result<(), EngineError> {
+        self.enqueue(
+            request,
+            Source::File {
+                path,
+                wav_only: false,
+            },
+            position,
+        )
     }
     pub fn load_original_long(
         &mut self,
@@ -497,21 +525,25 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         Source::Builtin(builtin) => Source::Prepared(Arc::new(
             decode_wav(builtin.bytes()).map_err(EngineError::Decode)?,
         )),
-        Source::WavFile(path) => {
+        Source::File { path, wav_only } => {
             if !std::fs::symlink_metadata(&path)
                 .map_err(|_| EngineError::Input)?
                 .is_file()
             {
                 return Err(EngineError::Input);
             }
-            Source::OpenedWav(File::open(path).map_err(|_| EngineError::Input)?)
+            Source::Opened {
+                file: File::open(path).map_err(|_| EngineError::Input)?,
+                wav_only,
+            }
         }
-        Source::OriginalLong(path) => Source::OpenedWav(
-            crate::original_long::ensure(&path, || {
+        Source::OriginalLong(path) => Source::Opened {
+            file: crate::original_long::ensure(&path, || {
                 control.epoch.load(Ordering::Acquire) != load.epoch
             })
             .map_err(EngineError::Decode)?,
-        ),
+            wav_only: true,
+        },
         source => source,
     };
     if let Source::Prepared(pcm) = &source {
@@ -539,12 +571,16 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         started: load.started,
     };
     let (input, feed) = match source {
-        Source::OpenedWav(file) => {
-            let wav = Wav::open(file).map_err(EngineError::Decode)?;
-            let duration = wav.info().duration_ms();
+        Source::Opened { file, wav_only } => {
+            let source = if wav_only {
+                LocalFile::Wav(Box::new(Wav::open(file).map_err(EngineError::Decode)?))
+            } else {
+                LocalFile::open(file).map_err(EngineError::Decode)?
+            };
+            let duration = source.info().duration_ms();
             load.stats.streaming.store(true, Ordering::Release);
             let (feed, consumer) =
-                feed::Feed::start(wav, config.sample_rate, load.position, &state)?;
+                feed::Feed::start(source, config.sample_rate, load.position, &state)?;
             load.stats.bytes.store(
                 (feed::CAPACITY * 2 * std::mem::size_of::<f32>()) as u64,
                 Ordering::Release,

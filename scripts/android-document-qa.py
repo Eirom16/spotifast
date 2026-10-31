@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Test Android's real document selector using only Doremi's original CC0 WAV.
+"""Test Android's real document selector using only Doremi's original CC0 audio.
 
 No storage permission, personal files, global log or system-picker screenshots.
 The APK is verified and updated in place; existing Doremi data is preserved.
@@ -27,11 +27,12 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact",type=Path)
     parser.add_argument("--commit",required=True)
+    parser.add_argument("--format",choices=("wav","flac"),default="wav")
     parser.add_argument("--attempt",default="",help="New evidence suffix after a diagnosed terminal failure")
     args=parser.parse_args()
     apk=runpy.run_path(str(ROOT/"scripts/android-qa.py"))["verify_payload"](args.artifact,args.commit)
     assert re.fullmatch(r"[a-z0-9-]{0,32}",args.attempt)
-    out=ROOT/"target/android-qa"/args.commit[:12]/("documents"+("-"+args.attempt if args.attempt else ""))
+    out=ROOT/"target/android-qa"/args.commit[:12]/("documents"+("-flac" if args.format=="flac" else "")+("-"+args.attempt if args.attempt else ""))
     out.mkdir(parents=True,exist_ok=False)
     source=ROOT/"assets/audio/scale.wav"
     manifest=json.loads((source.parent/"manifest.json").read_text())
@@ -44,6 +45,10 @@ def main():
     with wave.open(str(fixture),"wb") as wav:
         wav.setnchannels(2);wav.setsampwidth(2);wav.setframerate(16000)
         wav.writeframes(b"".join(original[i:i+2]*2 for i in range(0,len(original),6))*15)
+    if args.format=="flac":
+        encoded=out/"Original Café FLAC estéreo.flac"
+        subprocess.run(["ffmpeg","-nostdin","-v","error","-n","-i",str(fixture),"-map_metadata","-1","-c:a","flac","-compression_level","5","-fflags","+bitexact","-flags:a","+bitexact",str(encoded)],check=True,timeout=60)
+        fixture=encoded
     # A well-formed 24-bit container remains visible under Android's audio MIME
     # filter but is explicitly unsupported by the first PCM16 import slice.
     invalid=out/"Invalid.wav"
@@ -60,7 +65,7 @@ def main():
         actual=adb("shell","sha256sum",shlex.quote(remote+"/"+fixture.name)).decode().split()[0]
         assert actual==expected_digest,"Owned original changed"
     original_intact()
-    (out/"fixture.json").write_text(json.dumps(dict(source="assets/audio/scale.wav",license="CC0-1.0",source_sha256=expected["sha256"],fixture_sha256=expected_digest,device_directory=remote),indent=2)+"\n")
+    (out/"fixture.json").write_text(json.dumps(dict(source="assets/audio/scale.wav",license="CC0-1.0",source_sha256=expected["sha256"],fixture_sha256=expected_digest,format=args.format,device_directory=remote),indent=2)+"\n")
     adb("install","-r","-t",str(apk))
     installed=adb("shell","pm","path",PACKAGE).decode().strip()
     assert installed.startswith("package:") and "\n" not in installed
@@ -71,7 +76,7 @@ def main():
     def run(mode,captures):
         evidence=out/mode;evidence.mkdir()
         adb("shell","am","force-stop",PACKAGE)
-        log=adb("shell","am","instrument","-w","-e","mode",mode,"-e","documentFolder",folder,f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
+        log=adb("shell","am","instrument","-w","-e","mode",mode,"-e","documentFolder",folder,"-e","documentFormat",args.format,f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
         (evidence/"instrumentation.log").write_bytes(log)
         latest=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa-state.json"))
         (evidence/"latest-state.json").write_text(json.dumps(latest,indent=2)+"\n")
@@ -101,7 +106,7 @@ def main():
     path=next(item["path"] for item in index["files"] if item["id"]==imported["id"])
     assert re.fullmatch(r"/data/(?:user/0|data)/dev\.eirom\.doremi\.dev/files/imported-documents/[0-9a-f]{64}/source\.wav",path)
     assert adb("exec-out","run-as",PACKAGE,"sha256sum",path).decode().split()[0]==expected_digest
-    (out/"summary.json").write_text(json.dumps(dict(result="pass",source_commit=args.commit,physical_device=True,device=device,captures=7,fresh_process=True,original_preserved=True,private_copy_sha256=expected_digest,resources=resources,imported=imported,restored=restored,acoustic_capture=False),indent=2)+"\n")
+    (out/"summary.json").write_text(json.dumps(dict(result="pass",source_commit=args.commit,physical_device=True,format=args.format,device=device,captures=7,fresh_process=True,original_preserved=True,private_copy_sha256=expected_digest,resources=resources,imported=imported,restored=restored,acoustic_capture=False),indent=2)+"\n")
     print(out)
 
 if __name__=="__main__":main()

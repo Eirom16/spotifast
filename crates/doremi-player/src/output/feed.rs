@@ -2,10 +2,9 @@
 use super::{CallbackState, EngineError};
 use crate::{
     buffer,
-    wav_stream::{Resampler, Wav},
+    wav_stream::{FrameReader, LinearResampler},
 };
 use std::{
-    fs::File,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -20,8 +19,8 @@ pub(super) struct Feed {
     worker: Option<JoinHandle<()>>,
 }
 impl Feed {
-    pub fn start(
-        wav: Wav<File>,
+    pub fn start<S: FrameReader + Send + 'static>(
+        input: S,
         rate: u32,
         position: u64,
         state: &CallbackState,
@@ -36,7 +35,7 @@ impl Feed {
         let worker = thread::Builder::new()
             .name("doremi-decode".into())
             .spawn(move || {
-                let mut source = match Resampler::new(wav, rate, position) {
+                let mut source = match LinearResampler::new(input, rate, position) {
                     Ok(source) => source,
                     Err(_) => {
                         sender.fail();

@@ -341,7 +341,7 @@ impl Model {
                             )
                         } else if let Some(path) = self.local_files.index.get(&entry.media.id) {
                             Some(self.audio.as_mut().ok_or(EngineError::Closed).and_then(
-                                |engine| engine.load_wav(request, path.to_path_buf(), position_ms),
+                                |engine| engine.load_file(request, path.to_path_buf(), position_ms),
                             ))
                         } else if let Some((_, path)) = self
                             .wav_input
@@ -419,7 +419,7 @@ impl Model {
                         }) {
                             "Audio local original · CC0"
                         } else {
-                            "Archivo WAV local seleccionado"
+                            "Archivo de audio local seleccionado"
                         }
                         .into();
                         self.event(Event::Ready(r));
@@ -704,7 +704,7 @@ impl DoremiApp {
                     .get(&media.id)
                     .is_some()
                 {
-                    "Archivo WAV local".into()
+                    "Archivo de audio local".into()
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
                     "Tono de prueba online · 0:10 · CC0".into()
                 } else if demo_candidate(&media.id) {
@@ -871,7 +871,7 @@ impl DoremiApp {
                     self.model.as_mut().unwrap().open_local(Some(path), &ctx);
                 } else {
                     let model = self.model.as_mut().unwrap();
-                    model.notice = "Importa un archivo WAV cada vez.".into();
+                    model.notice = "Importa un archivo de audio cada vez.".into();
                     model.revision += 1;
                 }
             }
@@ -991,15 +991,15 @@ impl DoremiApp {
                             if self.model.as_ref().unwrap().local_files.pending() {
                                 ui.label("Importación en curso…");
                                 if self.button(ui,"cancel-import","Cancelar importación",220.0) {self.model.as_mut().unwrap().cancel_local_import();}
-                            } else if self.button(ui,"import-wav","Importar WAV",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
+                            } else if self.button(ui,"import-wav","Importar audio",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
                             if !self.model.as_ref().unwrap().local_files.pending() && let Some((error,message))=self.model.as_ref().unwrap().local_files.feedback {
                                 let response=if error {ui.colored_label(ui.visuals().error_fg_color,message)} else {ui.label(message)};
                                 self.controls.push(Control{name:"import-feedback".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
                             }
                             #[cfg(target_os = "linux")]
-                            ui.small("WAV PCM16, mono o estéreo. También puedes arrastrarlo a Doremi.");
+                            ui.small("WAV PCM16 y FLAC mono o estéreo. También puedes arrastrarlos a Doremi.");
                             #[cfg(target_os = "android")]
-                            ui.small("WAV PCM16 local, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
+                            ui.small("WAV PCM16 y FLAC locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
                         }
                         self.rows(ui, library.items());
                     }
@@ -1039,7 +1039,7 @@ impl DoremiApp {
                         if self.model.as_ref().unwrap().real_audio() {
                             let online=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().online_candidate(&entry.media.id));
                             let file=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().local_files.index.get(&entry.media.id).is_some());
-                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else if file {"Archivo WAV de tu biblioteca"}else{"Muestras originales de Doremi · CC0"});
+                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else if file {"Audio local de tu biblioteca"}else{"Muestras originales de Doremi · CC0"});
                             #[cfg(target_os = "android")]
                             ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
                             let model = self.model.as_mut().unwrap();

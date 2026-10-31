@@ -31,7 +31,8 @@ public final class DoremiInstrumentation extends Instrumentation {
     private String lastAction="startup";
     private String mode="full";
     private String documentFolder="";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); start(); }
+    private String documentTitle="Original Café estéreo",documentFilename="Original Café estéreo.wav";
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} start(); }
     private JSONObject state() throws Exception {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
@@ -443,7 +444,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONArray items=privateDocument("library-v1.json").getJSONArray("items");
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.getJSONObject(i);
-            if("local-files".equals(item.optString("provider")) && "Original Café estéreo".equals(item.optString("title"))) {
+            if("local-files".equals(item.optString("provider")) && documentTitle.equals(item.optString("title"))) {
                 JSONArray saved=data.getJSONArray("saved_media");
                 for(int j=0;j<saved.length();j++) if(item.getString("id").equals(saved.getJSONObject(j).optString("id")) && "local-files".equals(saved.getJSONObject(j).optString("provider"))) return item.getString("id");
             }
@@ -468,7 +469,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             }
             if(!visibleError) throw new AssertionError("Import error is outside the visible library content");
             capture("qa-document-invalid");
-            chooseOwnDocument("Original Café estéreo.wav");
+            chooseOwnDocument(documentFilename);
             until(15000,"private document output",data -> "local-files".equals(data.optString("current_provider")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
         } else {
             capture("qa-document-restored");documentControl("select:"+savedDocument(initial));
@@ -494,7 +495,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         slide("seek",0.5f);until(data -> data.optLong("position_ms")>55000 && data.optLong("position_ms")<65000);
         if(!restore) {
             tap("library");String saved=state().getJSONArray("saved_media").toString();int files=state().getJSONObject("local_import").getInt("files");
-            chooseOwnDocument("Original Café estéreo.wav");
+            chooseOwnDocument(documentFilename);
             until(data -> id.equals(data.optString("current")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
             if(!saved.equals(state().getJSONArray("saved_media").toString()) || state().getJSONObject("local_import").getInt("files")!=files) throw new AssertionError("Repeated document created another identity/favorite");
             tap("settings");tap("light");tap("library");capture("qa-document-library-light");
@@ -542,7 +543,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-startup");
             if("document-import".equals(mode) || "document-restore".equals(mode)) {
                 documentImport("document-restore".equals(mode));
-                result.putString("stream","PASS: explicitly selected private WAV / real bounded native output / controls / identity / original favorites preserved\n");
+                result.putString("stream","PASS: explicitly selected private audio / real bounded native output / controls / identity / original favorites preserved\n");
                 finish(Activity.RESULT_OK,result);return;
             }
             if("library-restore".equals(mode)) {

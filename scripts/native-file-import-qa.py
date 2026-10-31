@@ -18,6 +18,7 @@ parser=argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary',type=Path)
 parser.add_argument('output',type=Path)
 parser.add_argument('--commit',required=True)
+parser.add_argument('--format',choices=('wav','flac'),default='wav')
 args=parser.parse_args()
 out=args.output.resolve()
 assert out.is_relative_to(ROOT/'target') and not out.exists(),'Use a new target evidence directory'
@@ -34,7 +35,11 @@ frames=b''.join(original[i:i+2]*2 for i in range(0,len(original),6))*15
 fixture=out/'original-stereo-16k-120s.wav'
 with wave.open(str(fixture),'wb') as audio:
     audio.setnchannels(2);audio.setsampwidth(2);audio.setframerate(16000);audio.writeframes(frames)
-(out/'fixture-provenance.json').write_text(json.dumps(dict(source='assets/audio/scale.wav',source_sha256=expected['sha256'],license='CC0-1.0',derived_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),channels=2,sample_rate=16000,duration_ms=120000),indent=2)+'\n')
+if args.format=='flac':
+    encoded=out/'original-stereo-16k-120s.flac'
+    subprocess.run(['ffmpeg','-nostdin','-v','error','-n','-i',str(fixture),'-map_metadata','-1','-c:a','flac','-compression_level','5','-fflags','+bitexact','-flags:a','+bitexact',str(encoded)],check=True,timeout=60)
+    fixture=encoded
+(out/'fixture-provenance.json').write_text(json.dumps(dict(source='assets/audio/scale.wav',source_sha256=expected['sha256'],license='CC0-1.0',format=args.format,derived_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest(),channels=2,sample_rate=16000,duration_ms=120000),indent=2)+'\n')
 bus=out/'session-bus.conf'
 bus.write_text('''<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen><auth>EXTERNAL</auth>

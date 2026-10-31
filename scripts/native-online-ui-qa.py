@@ -222,7 +222,7 @@ def local_import_ui():
     samples=profile/"samples";samples.mkdir()
     source=args.import_fixture or ROOT/"target/wav-stream-fixtures/original-scale-stereo-16k-120s.wav"
     assert source.exists(),"Prepare only the original CC0 stereo fixture first"
-    selected=samples/"Original Café estéreo.wav";shutil.copyfile(source,selected)
+    selected=samples/("Original Café estéreo"+source.suffix);shutil.copyfile(source,selected)
     bad=samples/"Invalid.wav";bad.write_bytes(b"own invalid WAV fixture")
     digest=hashlib.sha256(selected.read_bytes()).hexdigest()
     start();tap("library");capture("library-before-import")

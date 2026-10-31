@@ -163,9 +163,31 @@ impl<R: Read + Seek> Wav<R> {
         Ok(Some([left, right]))
     }
 }
+/// Worker-owned, seekable stereo frame input. No implementation is used by
+/// the audio callback; it consumes only the fixed PCM channel.
+pub trait FrameReader {
+    fn info(&self) -> Info;
+    fn seek_frame(&mut self, frame: u64) -> Result<(), DecodeError>;
+    fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError>;
+}
+impl<R: Read + Seek> FrameReader for Wav<R> {
+    fn info(&self) -> Info {
+        Wav::info(self)
+    }
+    fn seek_frame(&mut self, frame: u64) -> Result<(), DecodeError> {
+        Wav::seek_frame(self, frame)
+    }
+    fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
+        Wav::read_frame(self)
+    }
+}
+/// Preserve the existing WAV API while sharing exactly the same interpolation
+/// and seek rules with other worker-owned file decoders.
+pub type Resampler<R> = LinearResampler<Wav<R>>;
 /// Linear interpolation stays on the decode worker, outside the output callback.
-pub struct Resampler<R> {
-    wav: Wav<R>,
+pub struct LinearResampler<S> {
+    input: S,
+    info: Info,
     output_rate: u32,
     start: f64,
     output_frame: u64,
@@ -173,19 +195,27 @@ pub struct Resampler<R> {
     left: [f32; 2],
     right: [f32; 2],
 }
-impl<R: Read + Seek> Resampler<R> {
-    pub fn new(mut wav: Wav<R>, output_rate: u32, position_ms: u64) -> Result<Self, DecodeError> {
+impl<S: FrameReader> LinearResampler<S> {
+    pub fn new(mut input: S, output_rate: u32, position_ms: u64) -> Result<Self, DecodeError> {
         if !(8000..=192000).contains(&output_rate) {
             return Err(DecodeError::InvalidOutputRate);
         }
-        let start =
-            (position_ms as f64 * wav.info.rate as f64 / 1000.0).min(wav.info.frames as f64);
+        let info = input.info();
+        if !(8000..=192000).contains(&info.rate)
+            || !(1..=2).contains(&info.channels)
+            || info.frames == 0
+            || info.frames.checked_mul(1000).is_none()
+        {
+            return Err(DecodeError::UnsupportedFormat);
+        }
+        let start = (position_ms as f64 * info.rate as f64 / 1000.0).min(info.frames as f64);
         let source_frame = start.floor() as u64;
-        wav.seek_frame(source_frame)?;
-        let left = wav.read_frame()?.unwrap_or([0.0; 2]);
-        let right = wav.read_frame()?.unwrap_or(left);
+        input.seek_frame(source_frame)?;
+        let left = input.read_frame()?.unwrap_or([0.0; 2]);
+        let right = input.read_frame()?.unwrap_or(left);
         Ok(Self {
-            wav,
+            input,
+            info,
             output_rate,
             start,
             output_frame: 0,
@@ -195,15 +225,15 @@ impl<R: Read + Seek> Resampler<R> {
         })
     }
     pub fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
-        let position = self.start
-            + self.output_frame as f64 * self.wav.info.rate as f64 / self.output_rate as f64;
-        if position >= self.wav.info.frames as f64 {
+        let position =
+            self.start + self.output_frame as f64 * self.info.rate as f64 / self.output_rate as f64;
+        if position >= self.info.frames as f64 {
             return Ok(None);
         }
         let index = position.floor() as u64;
         while self.source_frame < index {
             self.left = self.right;
-            self.right = self.wav.read_frame()?.unwrap_or(self.left);
+            self.right = self.input.read_frame()?.unwrap_or(self.left);
             self.source_frame += 1;
         }
         let fraction = (position - position.floor()) as f32;

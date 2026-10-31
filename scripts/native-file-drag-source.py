@@ -22,13 +22,13 @@ parser.add_argument("fixture", type=Path)
 args = parser.parse_args()
 fixture = args.fixture.resolve(strict=True)
 assert fixture.is_relative_to(ROOT / "target") and fixture.is_file()
-assert fixture.name == "Original Café estéreo.wav", "Only the owned QA fixture"
+assert fixture.name in ("Original Café estéreo.wav", "Original Café estéreo.flac"), "Only the owned QA fixture"
 assert os.environ.get("DOREMI_DATA_DIR"), "Private QA environment required"
 window = Gtk.Window(title="Doremi QA — own CC0 drag source")
 window.set_default_size(280, 120)
 window.move(700, 150)
 source = Gtk.EventBox()
-source.add(Gtk.Label(label="Original CC0 WAV\nDrag to Doremi"))
+source.add(Gtk.Label(label="Original CC0 audio\nDrag to Doremi"))
 source.drag_source_set(Gdk.ModifierType.BUTTON1_MASK,
                        [Gtk.TargetEntry.new("text/uri-list", 0, 0)],
                        Gdk.DragAction.COPY)
