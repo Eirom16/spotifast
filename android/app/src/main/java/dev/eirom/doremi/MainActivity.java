@@ -89,6 +89,9 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putLong("doremiFileRequest",fileRequest);
+        state.putBoolean("doremiDocumentReady",documentResultReady);
+        state.putLong("doremiDocumentGeneration",documentResultGeneration);
+        state.putString("doremiDocumentResult",documentResultUri);
         super.onSaveInstanceState(state);
     }
     private AudioManager audioManager;
@@ -129,7 +132,12 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        if(state!=null) fileRequest=state.getLong("doremiFileRequest",0);
+        if(state!=null) {
+            fileRequest=state.getLong("doremiFileRequest",0);
+            documentResultGeneration=state.getLong("doremiDocumentGeneration",0);
+            documentResultUri=state.getString("doremiDocumentResult","");
+            documentResultReady=state.getBoolean("doremiDocumentReady",false);
+        }
         audioManager=(AudioManager)getSystemService(AUDIO_SERVICE);
         focusRequest=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())

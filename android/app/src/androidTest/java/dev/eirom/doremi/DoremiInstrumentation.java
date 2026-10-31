@@ -30,7 +30,8 @@ public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
     private String lastAction="startup";
     private String mode="full";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); start(); }
+    private String documentFolder="";
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); start(); }
     private JSONObject state() throws Exception {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
@@ -350,6 +351,127 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("select:21923157");until(15000,"native output from restored favorite",s -> onlinePlaying(s,"21923157"));
         capture("qa-library-restored-audio");tap("pause");until(s -> "Paused".equals(s.optString("playback")));
     }
+    private android.app.UiAutomation automation() {
+        return getUiAutomation(android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
+    }
+    private android.view.accessibility.AccessibilityNodeInfo ownPickerNode(String text) throws Exception {
+        long deadline=SystemClock.uptimeMillis()+8000;
+        do {
+            android.view.accessibility.AccessibilityNodeInfo root=automation().getRootInActiveWindow();
+            if(root!=null && "com.android.documentsui".equals(String.valueOf(root.getPackageName()))) {
+                // Query only our exact folder/file names; never dump Recents,
+                // screen contents or names belonging to the device's owner.
+                boolean ownFolder=false;
+                for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(documentFolder)) {
+                    if(documentFolder.contentEquals(node.getText())) ownFolder=true;
+                }
+                if(ownFolder) for(android.view.accessibility.AccessibilityNodeInfo node:root.findAccessibilityNodeInfosByText(text)) {
+                    if(text.contentEquals(node.getText())) return node;
+                }
+            }
+            SystemClock.sleep(100);
+        } while(SystemClock.uptimeMillis()<deadline);
+        throw new AssertionError("Owned QA folder/file not visible; no other file selected or captured");
+    }
+    private void documentControl(String name) throws Exception {
+        for(int attempt=0;attempt<8;attempt++) {
+            JSONObject data=state();JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
+            for(int i=0;i<controls.length();i++) if(name.equals(controls.getJSONObject(i).optString("name"))) rect=controls.getJSONObject(i).getJSONArray("rect");
+            if(rect==null) throw new AssertionError("Missing document control");
+            float height=(float)data.getJSONArray("viewport").getDouble(1);
+            if(rect.getDouble(1)>=60 && rect.getDouble(3)<height-60) {tap(name);return;}
+            foreground();
+            final int[] origin=new int[2];runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
+            float scale=(float)data.getDouble("pixels_per_point");
+            float x=origin[0]+(float)data.getJSONArray("viewport").getDouble(0)*0.9f*scale;
+            float from=height*(rect.getDouble(1)<60?0.35f:0.7f),to=height*(rect.getDouble(1)<60?0.7f:0.35f);
+            long time=SystemClock.uptimeMillis();
+            MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,origin[1]+from*scale,0);sendPointerSync(down);down.recycle();
+            for(int step=1;step<=12;step++) {
+                SystemClock.sleep(25);MotionEvent move=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,x,origin[1]+(from+(to-from)*step/12)*scale,0);sendPointerSync(move);move.recycle();
+            }
+            MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,origin[1]+to*scale,0);sendPointerSync(up);up.recycle();SystemClock.sleep(250);
+        }
+        throw new AssertionError("Document control remained outside the visible content");
+    }
+    private void chooseOwnDocument(String filename) throws Exception {
+        lastAction="select-owned-document";
+        documentControl("import-wav");
+        android.view.accessibility.AccessibilityNodeInfo node=ownPickerNode(filename);
+        android.graphics.Rect bounds=new android.graphics.Rect();node.getBoundsInScreen(bounds);
+        if(bounds.isEmpty()) throw new AssertionError("Owned file has no touch bounds");
+        long time=SystemClock.uptimeMillis();
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,bounds.centerX(),bounds.centerY(),0);
+        if(!automation().injectInputEvent(down,true)) throw new AssertionError("Owned picker touch rejected");down.recycle();
+        SystemClock.sleep(80);
+        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,bounds.centerX(),bounds.centerY(),0);
+        if(!automation().injectInputEvent(up,true)) throw new AssertionError("Owned picker release rejected");up.recycle();
+        foreground();
+        until(15000,"selected document completion",data -> !data.optJSONObject("local_import").optBoolean("pending"));
+    }
+    private String savedDocument(JSONObject data) throws Exception {
+        JSONArray items=data.getJSONArray("saved_media");
+        for(int i=0;i<items.length();i++) {
+            JSONObject item=items.getJSONObject(i);
+            if("local-files".equals(item.optString("provider")) && "Original Café estéreo".equals(item.optString("title"))) return item.getString("id");
+        }
+        return "";
+    }
+    private void documentImport(boolean restore) throws Exception {
+        if(!restore && !documentFolder.matches("Doremi-QA-[0-9a-f]{7,40}")) throw new AssertionError("A private QA folder is required");
+        JSONObject initial=state();String originalLibrary=initial.getJSONArray("saved_media").toString();
+        if(restore && (savedDocument(initial).isEmpty() || !initial.isNull("audio_metrics") || initial.getJSONObject("online").optBoolean("worker_initialized") || "Playing".equals(initial.optString("playback")))) throw new AssertionError("Restoration lost the document or started automatic IO");
+        tap("home");tap("player");slide("volume",0.08f);tap("library");
+        if(!restore) {
+            documentControl("import-wav");ownPickerNode("Invalid.wav");
+            automation().injectInputEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_BACK),true);
+            automation().injectInputEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_BACK),true);
+            foreground();until(data -> !data.optJSONObject("local_import").optBoolean("pending"));
+            if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("Selector cancellation changed existing favorites");
+            chooseOwnDocument("Invalid.wav");until(data -> data.optString("notice").contains("no es WAV"));
+            if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("An invalid document changed existing favorites");
+            capture("qa-document-invalid");
+            chooseOwnDocument("Original Café estéreo.wav");
+            until(15000,"private document output",data -> "local-files".equals(data.optString("current_provider")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
+        } else {
+            capture("qa-document-restored");documentControl("select:"+savedDocument(initial));
+            until(15000,"restored private document output",data -> "local-files".equals(data.optString("current_provider")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
+        }
+        String id=state().getString("current");
+        capture(restore?"qa-document-restored-audio":"qa-document-playing");
+        if(state().getJSONObject("audio_metrics").getLong("pcm_bytes")!=65536) throw new AssertionError("Document PCM is not bounded");
+        if(!restore) {
+            measureResources("qa-document-resources");
+            long instance=state().getLong("instance"),occurrence=state().getLong("current_occurrence");
+            ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+            runOnMainSync(() -> activity.recreate());
+            Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
+            if(recreated==null) throw new AssertionError("Document recreation did not return an Activity");activity=recreated;
+            until(data -> data.optLong("instance")!=instance && data.optLong("current_occurrence")==occurrence && "Paused".equals(data.optString("playback")));
+            capture("qa-document-recreated");tap("home");tap("player");tap("play");
+            until(data -> "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
+        }
+        tap("pause");until(data -> "Paused".equals(data.optString("playback")));
+        long position=state().getLong("position_ms");SystemClock.sleep(400);
+        if(state().getLong("position_ms")!=position) throw new AssertionError("Paused document clock advances");
+        slide("seek",0.5f);until(data -> data.optLong("position_ms")>55000 && data.optLong("position_ms")<65000);
+        if(!restore) {
+            tap("library");String saved=state().getJSONArray("saved_media").toString();int files=state().getJSONObject("local_import").getInt("files");
+            chooseOwnDocument("Original Café estéreo.wav");
+            until(data -> id.equals(data.optString("current")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
+            if(!saved.equals(state().getJSONArray("saved_media").toString()) || state().getJSONObject("local_import").getInt("files")!=files) throw new AssertionError("Repeated document created another identity/favorite");
+            tap("settings");tap("light");tap("library");capture("qa-document-library-light");
+            tap("settings");tap("dark");tap("library");capture("qa-document-library-dark");
+            tap("home");tap("player");tap("pause");
+        }
+        JSONObject index=privateDocument("local-files-v1.json");
+        for(int i=0;i<index.getJSONArray("files").length();i++) {
+            String path=index.getJSONArray("files").getJSONObject(i).getString("path");
+            if(!new File(path).getCanonicalPath().startsWith(new File(getTargetContext().getFilesDir(),"imported-documents").getCanonicalPath()+"/")) throw new AssertionError("Document locator escaped private storage");
+        }
+        JSONObject checks=new JSONObject();checks.put("result","pass");checks.put("restored_process",restore);checks.put("id",id);checks.put("acoustic_capture",false);checks.put("state",state());
+        Files.write(new File(getTargetContext().getFilesDir(),restore?"qa-document-restore-checks.json":"qa-document-import-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private InputConnection connection(View view) {
         if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
         if(view instanceof ViewGroup) { ViewGroup group=(ViewGroup)view; for(int i=0;i<group.getChildCount();i++) { InputConnection result=connection(group.getChildAt(i)); if(result!=null) return result; } }
@@ -375,11 +497,17 @@ public final class DoremiInstrumentation extends Instrumentation {
         Bundle result=new Bundle();
         try {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("document-import".equals(mode) || "document-restore".equals(mode)) {
+                documentImport("document-restore".equals(mode));
+                result.putString("stream","PASS: explicitly selected private WAV / real bounded native output / controls / identity / original favorites preserved\n");
+                finish(Activity.RESULT_OK,result);return;
+            }
             if("library-restore".equals(mode)) {
                 restoredLibrary();
                 result.putString("stream","PASS: saved-library process restoration without automatic IO, qualified-ID playback without search and positive native output\n");
