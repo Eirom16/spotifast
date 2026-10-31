@@ -7,7 +7,8 @@ F1A introdujo dominio/cola neutral. F1B-1 integra edición manual/confirmación
 y contratos de proveedor con harness falso, no un nuevo motor.
 La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
 Hay APK de desarrollo instalada y validada en Android real, audio PCM local
-y un flujo online experimental de dos tonos Commons CC0 en Android/Linux
+y un flujo online experimental de dos tonos Commons CC0 en Android/Linux.
+La biblioteca propia ya guarda IDs neutrales y restaura favoritos en ambos hosts
 (ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo definitivo.
 Preview 0.1 añade un ejecutable
 offline independiente que reutiliza las vistas, no un motor musical nuevo.
@@ -516,3 +517,14 @@ artefacto descargado/verificado. Evidencia y correcciones del harness en
 DOREMI-GOAL-REPORT.md. Próximo corte: biblioteca propia con identidades neutrales,
 metadatos persistidos sin URLs efímeras y conservación de favoritos existentes.
 Autenticación, streaming y MediaSession siguen pendientes.
+
+
+Biblioteca neutral verificada: Rust `5a73e9b`, CI enfocada `41146068350` y
+CI completa `41147141363` verdes; Linux Native Dev actualizado. Guardar/quitar
+y restaurar conservan favoritos anteriores y no alteran la cola. APK `0be0625`
+instalada en SM-J701M; CI `41148104353` verde tras reintentar un HTTP 500 de
+Gradle. Suite física completa y restauración en proceso nuevo aprobadas,
+con reproducción desde Biblioteca sin búsqueda y volumen positivo. Evidencia,
+fallo inicial del harness y límites en DOREMI-GOAL-REPORT.md. Próximo corte:
+fuentes locales más largas y buffer PCM continuo acotado. Siguen pendientes
+MediaSession, catálogo general y autenticación; ninguna release publicada.

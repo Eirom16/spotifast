@@ -346,3 +346,62 @@ streaming ni catálogo YouTube ni proveedor definitivo. MediaSession y
 background playback siguen pendientes. Próximo corte: favoritos neutrales
 compartidos para guardar estas identidades reales, conservando el esquema
 y los favoritos anteriores; autenticación continúa separada y posterior.
+
+
+## Biblioteca neutral persistente y reproducción desde favoritos
+
+Rust `5a73e9b4ec4d6dac31d46ed9e72ab77a42a42653`: CI enfocada
+`41146068350` y CI completa `41147141363` aprobadas, nueve jobs del gate
+completo verdes. Preview descargada y hashes internos/externos verificados en
+`target/downloaded-ci/preview-5a73e9b/verified-archive.json`; regresiones
+Windows/macOS siguen siendo del legado, no del host Doremi Native.
+
+La colección compartida guarda hasta 256 identidades calificadas y sus
+metadatos en `library-v1.json`. Save es idempotente por proveedor/ID; quitar
+un favorito no altera las ocurrencias de cola. El worker codifica snapshots
+inmutables y escribe atómicamente; la UI no espera disco. La lista anterior
+de preferencias se importa solo si falta el nuevo archivo y se conserva
+como archivo de rollback, sin reimportar favoritos eliminados. Archivos
+incompatibles quedan de solo lectura. No se guardan recursos de reproducción.
+Ocho tests ligeros de persistencia y Clippy del paquete aprobados localmente;
+tests de migración/namespace y host aprobados en CI.
+
+Linux instalado: Doremi Native Dev `5a73e9b`. QA completa con guardar
+duplicado/quitar/restaurar/reproducir desde Biblioteca, además de la regresión
+online anterior: `target/native-online-ui-5a73e9b/report.json`. Capturas claro,
+oscuro y estrecho revisadas. Render Xvfb/Mesa software; salida nativa.
+
+Android `5a73e9b` pasó regresión ADB y el flujo completo de favoritos mediante
+toques verificados: `target/android-library-smoke-5a73e9b/report.json`. Quitó
+solo el favorito de prueba recién creado, conservó el anterior y comprobó
+restauración en proceso nuevo sin red/audio automáticos, seguida de PCM
+positivo desde Biblioteca con el buscador vacío.
+
+APK instalada final `0be06258b888ea38b577e196c28994f50df3baec`, SHA-256
+`6bb7323d3afda30f10feb86f1bc7f3b1a66a326b533c00d2c68d785baac4df2a`.
+CI `41148104353` verde en intento 2: el primero falló por HTTP 500 al obtener
+Gradle antes de compilar; se reejecutó solo el job fallido. Las bibliotecas
+nativas reutilizadas de `5a73e9b` tienen huella y bytes idénticos comprobados.
+La instrumentación inicial de `5a73e9b` perdió el primer toque de navegación;
+su fallo quedó conservado. `0be0625` espera una captura PixelCopy del primer
+swap y mide coordenadas de la superficie; en este teléfono su origen y el
+del contenedor coinciden en [0,45]. La suite completa pasó con 18 capturas:
+`target/android-qa/0be06258b888/instrumentation/summary.json`. Conservó el
+favorito que ya existía; la retirada física quedó probada por el caso ADB
+anterior, sin borrar otros favoritos.
+
+Una segunda instrumentación después de force-stop pasó con PID nuevo y dos
+capturas: `target/android-qa/0be06258b888/library-restore/summary.json`.
+Mismos favoritos, proveedor sin inicializar y ningún PCM activo al abrir;
+selección por ID guardado produjo frames nativos sin resultados de búsqueda.
+La ausencia de I/O automático se refiere al proveedor/red y audio, no a las
+lecturas locales necesarias para restaurar persistencia.
+
+Ganancia verificada 0,08. Muestra local: CPU 233 ms/1101 ms y PSS 37216 KiB,
+un aviso xrun temprano. Online: CPU 281 ms/1100 ms y PSS 41657 KiB, cero avisos
+en ese tramo. La reproducción desde favoritos tras reiniciar registró un
+aviso en frame 0; no se afirma audio libre de cortes. Sin errores críticos
+relevantes encontrados en logs propios. No hay captura acústica, FPS medidos
+ni soporte MediaSession/background todavía. El catálogo online continúa
+limitado a los dos tonos CC0 auditados. Próximo corte viable: audio local
+de mayor duración con buffering continuo acotado antes de ampliar proveedores.
