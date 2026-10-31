@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import re
+import struct
 import time
 import zipfile
 
@@ -37,10 +39,31 @@ def verify_payload(directory, commit):
         assert Path(name).name==name
         assert hashlib.sha256((directory/name).read_bytes()).hexdigest()==digest
     apk=directory/'app-debug.apk'
+    assert manifest['source_dirty'] is False and manifest['release'] is False
+    assert hashlib.sha256(apk.read_bytes()).hexdigest()==manifest['sha256']
     with zipfile.ZipFile(apk) as archive:
+        assert len(archive.namelist())==len(set(archive.namelist())), 'Duplicate ZIP entries'
         assert archive.read('assets/SOURCE_COMMIT').decode().strip()==commit
         assert 'lib/armeabi-v7a/libdoremi_app.so' in archive.namelist()
         assert 'lib/arm64-v8a/libdoremi_app.so' in archive.namelist()
+        native=json.loads(archive.read('assets/native-source.json'))
+        assert native['source_commit']==manifest['native_source_commit'] and re.fullmatch('[0-9a-f]{40}',native['source_commit'])
+        assert native['rust_inputs_sha256']==manifest['rust_inputs_sha256'] and re.fullmatch('[0-9a-f]{64}',native['rust_inputs_sha256'])
+        actual={name for name in archive.namelist() if name.startswith('lib/') and name.endswith('.so')}
+        assert actual=={'lib/'+name for name in native['libraries']}
+        assert actual=={entry['file'] for entry in manifest['libraries']}
+        for entry in manifest['libraries']:
+            name=entry['file'];data=archive.read(name);is64=data[4]==2
+            # Gradle strips debug symbols after the native input artifact is
+            # fingerprinted. The complete packaged APK is hashed above.
+            assert re.fullmatch('[0-9a-f]{64}',native['libraries'][name.removeprefix('lib/')])
+            assert data[:4]==b'\x7fELF' and data[5]==1
+            assert struct.unpack_from('<H',data,18)[0]==(183 if is64 else 40)
+            assert is64==('arm64-v8a' in name)
+            offset=struct.unpack_from('<Q' if is64 else '<I',data,32 if is64 else 28)[0]
+            size,count=struct.unpack_from('<HH',data,54 if is64 else 42)
+            aligns=[struct.unpack_from('<Q' if is64 else '<I',data,offset+i*size+(48 if is64 else 28))[0] for i in range(count) if struct.unpack_from('<I',data,offset+i*size)[0]==1]
+            assert aligns==entry['load_alignments'] and aligns and min(aligns)>=(16384 if is64 else 4096)
     return apk
 
 def main():
