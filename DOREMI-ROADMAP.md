@@ -544,7 +544,6 @@ PCM16 mono/estéreo, worker cancelable, índice privado atómico y restauración
 sin apertura automática. CI enfocada `41221845085` aprobada; instalado como
 Doremi Native Dev. APK del mismo SHA actualizada en el SM-J701M: suite física
 22 capturas y restauración 2 capturas PASS, favoritos conservados; persisten
-avisos CPAL puntuales. Regresión completa `41223684373` en curso, aún sin gate
-verde atribuido. Siguiente prioridad: selección Android con SAF y los mismos
+avisos CPAL puntuales. Regresión completa `41223684373` aprobada (nueve jobs). Siguiente prioridad: selección Android con SAF y los mismos
 contratos neutrales, antes de más formatos/MediaSession. Autenticación opcional
 y gate estable Linux/Windows/Android permanecen posteriores, sin releases.

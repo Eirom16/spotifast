@@ -10,7 +10,7 @@ Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
 Estado actual (2026-10-31): APK y Doremi Native Dev Linux `d07e76a`, descargados de CI e instalados conservando datos. Linux importa WAV PCM16 mono/estéreo mediante selector nativo o arrastre, reproduce con buffer PCM de 64 KiB y restaura su biblioteca con identidades neutrales. QA real XTest/GTK aprobada, incluida selección Unicode, rechazo de WAV inválido, cancelación, controles y restauración. Android conserva audio local/online experimental: suite física PASS (22 capturas) y restauración en proceso nuevo PASS (2). La importación general de archivos Android sigue pendiente. Las cuatro canciones de demostración siguen siendo metadatos silenciosos.
 
-CI enfocada `41221845085`: ambos hosts aprobados (13 tests library, 22 app, 13 player, Clippy y empaquetado). Regresión completa `41223684373` en curso sobre el mismo `d07e76a`; aún no se declara verde. La última regresión completa aprobada sigue siendo `41155115847` sobre `57a0205`, anterior a las correcciones posteriores. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
+CI enfocada `41221845085`: ambos hosts aprobados (13 tests library, 22 app, 13 player, Clippy y empaquetado). Regresión completa `41223684373` aprobada sobre el mismo `d07e76a`: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
 
 El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
@@ -497,3 +497,25 @@ continúan como gate estático, no ejecutado en este teléfono ARMv7/4 KiB.
 Siguiente corte: importación Android mediante selección explícita del usuario,
 sin permiso de almacenamiento general, sin recorrer archivos personales y
 reutilizando el Model/Index/engine compartidos. Cuenta opcional sigue posterior.
+
+Regresión completa del software instalado: `41223684373`, nueve jobs verdes
+sobre `d07e76a`. Preview del mismo commit descargada con gh y verificada:
+`target/downloaded-ci/preview-d07e76a/verified-archive.json`; archivo externo
+SHA-256 `5f29ff800a05e0305270223d16a6994178e8feb018ab40605d224714b05318d2`,
+binario `c96bd474cc590fd7e8c40088b88f2da98f2910ac23fc92b216bb705c32279b30`.
+Hashes internos, commit, ELF64 x86_64, versión 0.1.0/audio false/release false
+correctos. No se sustituyó la Preview instalada. QA Linux del WAV largo
+`target/native-long-ui-d07e76a-regression/report.json` PASS: >23 s de PCM,
+65536 bytes, pausa/seek/Next/Previous/EOF/cancelación y cierre normal; muestra
+Xvfb/Mesa software, sin medición acústica ni de GPU física.
+
+Candidato Android `e144f20`, aún en CI `41239277138`: selector del sistema,
+lector JNI solo en worker y copia privada de documento regular, no URI
+persistida. Identidad por SHA-256 del contenido, sin sobrescribir copias
+existentes ni originales; límite 256 MiB, scratch 8 KiB y cleanup exclusivo
+del staging propio. `sha2` 0.10.9 MIT/Apache-2.0 ya estaba fijado en Cargo.lock;
+se revisó su origen crates.io y actualizó el inventario al hacerlo dependencia
+directa de library. Quince tests library, Clippy y checks ligeros aprobados.
+La selección y el audio Android de este candidato todavía NO están validados.
+Se prepara QA del selector con carpeta que solo contiene fixtures CC0 propios,
+sin capturas del selector ni enumeración de Recents personales.
