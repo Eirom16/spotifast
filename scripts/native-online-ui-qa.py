@@ -16,6 +16,7 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("binary", type=Path)
 parser.add_argument("output", type=Path)
 parser.add_argument("--commit", required=True)
+parser.add_argument("--local-only", action="store_true", help="Exercise long local WAV without provider requests")
 args = parser.parse_args()
 binary = args.binary.resolve()
 out = args.output.resolve()
@@ -142,6 +143,52 @@ def cpu_ticks():
 
 
 report = dict(source_commit=args.commit, platform="Linux X11 / native default audio", software_rendering=env.get("LIBGL_ALWAYS_SOFTWARE") == "1", acoustic_capture=False, render_rate_measured=False)
+def slider(name, fraction):
+    data=state();rect=next(control["rect"] for control in data["controls"] if control["name"]==name)
+    radius=(rect[3]-rect[1])/2.5*0.75
+    x=(rect[0]+radius+(100-2*radius)*fraction)*data["pixels_per_point"]
+    y=(rect[1]+rect[3])/2*data["pixels_per_point"]
+    assert int(xdo("getwindowfocus"))==int(window)
+    xdo("mousemove","--window",window,round(x),round(y),"mousedown",1)
+    time.sleep(.08);xdo("mouseup",1)
+
+
+def local_wav_ui():
+    start();tap("long-audio")
+    wait(lambda s:s["current"]=="tone-scale-long-v1" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("nonzero_samples",0)>0)
+    wait(lambda s:s["position_ms"]>23000,32)
+    sample=state();metrics=sample["audio_metrics"]
+    assert metrics["streaming"] and metrics["pcm_bytes"]==65536 and metrics["buffer_capacity_frames"]==8192
+    assert metrics["buffer_underruns"]==0 and metrics["nonzero_samples"]>0 and sample["volume"]>0
+    assert not sample["online"]["worker_initialized"]
+    capture("long-playing-dark")
+    before_ticks=cpu_ticks();at=time.monotonic();time.sleep(1.1);elapsed=time.monotonic()-at
+    used=(cpu_ticks()-before_ticks)/os.sysconf("SC_CLK_TCK")
+    memory={line.split(":")[0]:int(line.split()[1]) for line in Path(f"/proc/{process.pid}/status").read_text().splitlines() if line.startswith(("VmRSS:","VmHWM:"))}
+    report["resource_sample"]=dict(elapsed_ms=elapsed*1000,process_cpu_ms=used*1000,percent_of_one_cpu=used/elapsed*100,rss_kib=memory["VmRSS"],peak_rss_kib=memory["VmHWM"],audio_metrics=state()["audio_metrics"])
+    tap("pause");wait(lambda s:s["playback"]=="Paused");time.sleep(.2)
+    paused=state()["position_ms"];time.sleep(.4);assert state()["position_ms"]==paused
+    tap("settings");tap("light");tap("home");tap("player");capture("long-playing-light")
+    slider("seek",.75);wait(lambda s:s["playback"]=="Paused" and 85000<s["position_ms"]<95000)
+    tap("play");wait(lambda s:s["playback"]=="Playing" and s["audio_metrics"]["nonzero_samples"]>0);capture("long-after-seek")
+    tap("next");wait(lambda s:playing(s,"tone-chord"));tap("previous");wait(lambda s:playing(s,"tone-scale-long-v1"))
+    slider("seek",.99);wait(lambda s:playing(s,"tone-chord"),8);capture("long-after-end")
+    tap("stop");wait(lambda s:s["playback"]=="Paused" and s["audio_metrics"] is None)
+    report["close_ms"]=close();report["result"]="pass"
+    report["checks"]=["regular WAV file / bounded 8192-frame channel",">23 seconds delivered without full PCM allocation","positive output samples","no provider initialization","pause / seek / next / previous / EOF / cancel","dark/light UI","decoder shutdown"]
+    (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
+
+
+if args.local_only:
+    try:
+        local_wav_ui()
+    except BaseException as error:
+        (out/"failure.json").write_text(json.dumps(dict(report,result="failed",error=str(error),last_state=state() if process and process.poll() is None else None),indent=2)+"\n")
+        if process and process.poll() is None:process.terminate();process.wait(timeout=8)
+        raise
+    raise SystemExit(0)
+
+
 try:
     start()
     tap("search")

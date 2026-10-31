@@ -1,12 +1,14 @@
 //! Native output actor. Only the worker opens/closes devices or decodes PCM.
 //! The callback reads a predecoded buffer (at most MAX_SAMPLES floats), atomics
 //! and its own cursor. It performs no allocation, I/O, locks or event delivery.
-use super::{Builtin, Cursor, DecodeError, Pcm, decode_wav};
+mod feed;
+use super::{Builtin, Cursor, DecodeError, Pcm, buffer, decode_wav, wav_stream::Wav};
 use cpal::{
     FromSample, SizedSample,
     traits::{DeviceTrait, HostTrait, StreamTrait},
 };
 use doremi_core::queue::RequestId;
+use std::{fs::File, path::PathBuf};
 use std::{
     sync::{
         Arc, Mutex,
@@ -24,6 +26,8 @@ pub enum EngineError {
     Output,
     Busy,
     Closed,
+    Input,
+    Timeout,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum EngineEvent {
@@ -38,6 +42,11 @@ pub struct Metrics {
     pub callbacks: u64,
     pub output_rate: u32,
     pub pcm_bytes: u64,
+    pub buffer_capacity_frames: u64,
+    pub buffer_underruns: u64,
+    /// Nonzero native output samples after application gain/conversion; not acoustic evidence.
+    pub nonzero_samples: u64,
+    pub streaming: bool,
     pub first_pcm_us: Option<u64>,
     pub first_callback_us: Option<u64>,
     /// CPAL notifications, not the hardware's raw cumulative xrun count.
@@ -59,6 +68,11 @@ struct Stats {
     last_xrun_frame: AtomicU64,
     ended: AtomicBool,
     failed: AtomicBool,
+    input_failed: AtomicBool,
+    streaming: AtomicBool,
+    capacity: AtomicU64,
+    underruns: AtomicU64,
+    nonzero: AtomicU64,
 }
 struct Control {
     epoch: AtomicU64,
@@ -76,6 +90,9 @@ struct Load {
 enum Source {
     Builtin(Builtin),
     Prepared(Arc<Pcm>),
+    WavFile(PathBuf),
+    OriginalLong(PathBuf),
+    OpenedWav(File),
 }
 enum Command {
     Load(Load),
@@ -93,6 +110,7 @@ struct CallbackState {
 }
 struct Active {
     stream: cpal::Stream,
+    feed: Option<feed::Feed>,
     epoch: u64,
     request: RequestId,
     stats: Arc<Stats>,
@@ -147,6 +165,24 @@ impl Engine {
         position: u64,
     ) -> Result<(), EngineError> {
         self.enqueue(request, Source::Prepared(pcm), position)
+    }
+    /// The output actor opens the selected regular WAV file; a separate worker
+    /// decodes/resamples into a fixed-capacity buffer. The caller performs no IO.
+    pub fn load_wav(
+        &mut self,
+        request: RequestId,
+        path: PathBuf,
+        position: u64,
+    ) -> Result<(), EngineError> {
+        self.enqueue(request, Source::WavFile(path), position)
+    }
+    pub fn load_original_long(
+        &mut self,
+        request: RequestId,
+        path: PathBuf,
+        position: u64,
+    ) -> Result<(), EngineError> {
+        self.enqueue(request, Source::OriginalLong(path), position)
     }
     fn enqueue(
         &mut self,
@@ -231,6 +267,10 @@ impl Engine {
             callbacks: s.callbacks.load(Ordering::Acquire),
             output_rate: s.rate.load(Ordering::Acquire),
             pcm_bytes: s.bytes.load(Ordering::Acquire),
+            buffer_capacity_frames: s.capacity.load(Ordering::Acquire),
+            buffer_underruns: s.underruns.load(Ordering::Acquire),
+            nonzero_samples: s.nonzero.load(Ordering::Acquire),
+            streaming: s.streaming.load(Ordering::Acquire),
             first_pcm_us: optional(s.first_pcm.load(Ordering::Acquire)),
             first_callback_us: optional(s.first_callback.load(Ordering::Acquire)),
             reported_xruns: xruns,
@@ -313,16 +353,23 @@ fn worker(
             active.take();
         }
         if let Some(current) = active.as_mut() {
-            if current.stats.failed.load(Ordering::Acquire) {
+            if current.stats.failed.load(Ordering::Acquire)
+                || current.stats.input_failed.load(Ordering::Acquire)
+            {
                 let epoch = current.epoch;
                 let request = current.request;
+                let error = if current.stats.input_failed.load(Ordering::Acquire) {
+                    EngineError::Input
+                } else {
+                    EngineError::Output
+                };
                 active.take();
                 control.playing.store(false, Ordering::Release);
                 publish(
                     &events,
                     &control,
                     epoch,
-                    EngineEvent::Failed(request, EngineError::Output),
+                    EngineEvent::Failed(request, error),
                 );
                 continue;
             }
@@ -339,6 +386,9 @@ fn worker(
             let playing = control.playing.load(Ordering::Acquire);
             if playing != current.running {
                 let result = if playing {
+                    if let Some(feed) = &current.feed {
+                        feed.wake();
+                    }
                     current.stream.play()
                 } else {
                     current.stream.pause()
@@ -387,22 +437,94 @@ fn device() -> Result<(cpal::Device, cpal::SupportedStreamConfig), EngineError> 
         Ok((device, config))
     }
 }
-fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
-    let pcm = match load.source {
-        Source::Builtin(builtin) => {
-            Arc::new(decode_wav(builtin.bytes()).map_err(EngineError::Decode)?)
+enum Input {
+    Prepared {
+        pcm: Arc<Pcm>,
+        cursor: Cursor,
+    },
+    Streaming {
+        consumer: buffer::Consumer,
+        frames: u64,
+        rate: u32,
+        position: u64,
+        duration: u64,
+    },
+}
+enum Step {
+    Frame([f32; 2]),
+    Pending,
+    End,
+    Failed,
+}
+impl Input {
+    fn next_frame(&mut self, gain: f32) -> Step {
+        match self {
+            Self::Prepared { pcm, cursor } => {
+                cursor.next_frame(pcm, gain).map_or(Step::End, Step::Frame)
+            }
+            Self::Streaming {
+                consumer, frames, ..
+            } => match consumer.read() {
+                buffer::Read::Frame(frame) => {
+                    *frames += 1;
+                    Step::Frame([frame[0] * gain, frame[1] * gain])
+                }
+                buffer::Read::Pending => Step::Pending,
+                buffer::Read::End => Step::End,
+                buffer::Read::Failed => Step::Failed,
+            },
         }
-        Source::Prepared(pcm) => pcm,
-    };
-    load.stats.first_pcm.store(
-        load.started.elapsed().as_micros().max(1) as u64,
-        Ordering::Release,
-    );
-    load.stats
-        .bytes
-        .store(pcm.byte_len() as u64, Ordering::Release);
+    }
+    fn position_ms(&self) -> u64 {
+        match self {
+            Self::Prepared { pcm, cursor } => cursor.position_ms(pcm),
+            Self::Streaming {
+                frames,
+                rate,
+                position,
+                duration,
+                ..
+            } => (*position + *frames * 1000 / u64::from(*rate)).min(*duration),
+        }
+    }
+}
+fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
     if load.epoch != control.epoch.load(Ordering::Acquire) {
         return Err(EngineError::Closed);
+    }
+    // Keep the prepared-PCM clock's original boundary, before device setup.
+    let source = match load.source {
+        Source::Builtin(builtin) => Source::Prepared(Arc::new(
+            decode_wav(builtin.bytes()).map_err(EngineError::Decode)?,
+        )),
+        Source::WavFile(path) => {
+            if !std::fs::symlink_metadata(&path)
+                .map_err(|_| EngineError::Input)?
+                .is_file()
+            {
+                return Err(EngineError::Input);
+            }
+            Source::OpenedWav(File::open(path).map_err(|_| EngineError::Input)?)
+        }
+        Source::OriginalLong(path) => Source::OpenedWav(
+            crate::original_long::ensure(&path, || {
+                control.epoch.load(Ordering::Acquire) != load.epoch
+            })
+            .map_err(EngineError::Decode)?,
+        ),
+        source => source,
+    };
+    if let Source::Prepared(pcm) = &source {
+        load.stats.first_pcm.store(
+            load.started.elapsed().as_micros().max(1) as u64,
+            Ordering::Release,
+        );
+        load.stats
+            .bytes
+            .store(pcm.byte_len() as u64, Ordering::Release);
+        load.stats
+            .capacity
+            .store(pcm.frames() as u64, Ordering::Release);
     }
     let (device, supported) = device()?;
     let format = supported.sample_format();
@@ -410,23 +532,57 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
     if !(1..=8).contains(&config.channels) {
         return Err(EngineError::UnsupportedFormat);
     }
-    let cursor =
-        Cursor::new(&pcm, config.sample_rate, load.position).map_err(EngineError::Decode)?;
+    let state = CallbackState {
+        control,
+        stats: load.stats.clone(),
+        epoch: load.epoch,
+        started: load.started,
+    };
+    let (input, feed) = match source {
+        Source::OpenedWav(file) => {
+            let wav = Wav::open(file).map_err(EngineError::Decode)?;
+            let duration = wav.info().duration_ms();
+            load.stats.streaming.store(true, Ordering::Release);
+            let (feed, consumer) =
+                feed::Feed::start(wav, config.sample_rate, load.position, &state)?;
+            load.stats.bytes.store(
+                (feed::CAPACITY * 2 * std::mem::size_of::<f32>()) as u64,
+                Ordering::Release,
+            );
+            load.stats
+                .capacity
+                .store(feed::CAPACITY as u64, Ordering::Release);
+            (
+                Input::Streaming {
+                    consumer,
+                    frames: 0,
+                    rate: config.sample_rate,
+                    position: load.position.min(duration),
+                    duration,
+                },
+                Some(feed),
+            )
+        }
+        source => {
+            let pcm = match source {
+                Source::Prepared(pcm) => pcm,
+                _ => unreachable!(),
+            };
+            let cursor = Cursor::new(&pcm, config.sample_rate, load.position)
+                .map_err(EngineError::Decode)?;
+            (Input::Prepared { pcm, cursor }, None)
+        }
+    };
+    if state.control.epoch.load(Ordering::Acquire) != load.epoch {
+        return Err(EngineError::Closed);
+    }
+    load.stats
+        .position
+        .store(input.position_ms(), Ordering::Release);
     load.stats.rate.store(config.sample_rate, Ordering::Release);
     macro_rules! build {
         ($sample:ty) => {
-            stream::<$sample>(
-                &device,
-                config,
-                pcm,
-                cursor,
-                CallbackState {
-                    control,
-                    stats: load.stats.clone(),
-                    epoch: load.epoch,
-                    started: load.started,
-                },
-            )
+            stream::<$sample>(&device, config, input, state)
         };
     }
     let stream = match format {
@@ -440,6 +596,7 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
     }?;
     Ok(Active {
         stream,
+        feed,
         epoch: load.epoch,
         request: load.request,
         stats: load.stats,
@@ -447,11 +604,10 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         ended_sent: false,
     })
 }
-fn stream<T: SizedSample + FromSample<f32>>(
+fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
     device: &cpal::Device,
     config: cpal::StreamConfig,
-    pcm: Arc<Pcm>,
-    mut cursor: Cursor,
+    mut input: Input,
     state: CallbackState,
 ) -> Result<cpal::Stream, EngineError> {
     let CallbackState {
@@ -474,8 +630,32 @@ fn stream<T: SizedSample + FromSample<f32>>(
                 }
                 let gain = f32::from_bits(control.gain.load(Ordering::Acquire));
                 let mut delivered = 0_u64;
+                let mut nonzero = 0_u64;
+                let silence = T::from_sample(0.0);
+                let mut stopped = false;
                 for frame in data.chunks_mut(channels) {
-                    if let Some(sample) = cursor.next_frame(&pcm, gain) {
+                    if stopped {
+                        frame.fill(silence);
+                        continue;
+                    }
+                    if let Step::Frame(sample) = match input.next_frame(gain) {
+                        Step::Pending => {
+                            stats.underruns.fetch_add(1, Ordering::Relaxed);
+                            stopped = true;
+                            Step::Pending
+                        }
+                        Step::End => {
+                            stats.ended.store(true, Ordering::Release);
+                            stopped = true;
+                            Step::End
+                        }
+                        Step::Failed => {
+                            stats.input_failed.store(true, Ordering::Release);
+                            stopped = true;
+                            Step::Failed
+                        }
+                        frame => frame,
+                    } {
                         for (channel, out) in frame.iter_mut().enumerate() {
                             let value = if channels == 1 {
                                 (sample[0] + sample[1]) * 0.5
@@ -486,14 +666,18 @@ fn stream<T: SizedSample + FromSample<f32>>(
                                     _ => 0.0,
                                 }
                             };
-                            *out = T::from_sample(value);
+                            let sample = T::from_sample(value);
+                            if sample != silence {
+                                nonzero += 1;
+                            }
+                            *out = sample;
                         }
                         delivered += 1;
                     } else {
                         frame.fill(T::from_sample(0.0));
-                        stats.ended.store(true, Ordering::Release);
                     }
                 }
+                stats.nonzero.fetch_add(nonzero, Ordering::Relaxed);
                 if delivered > 0 {
                     let _ = stats.first_callback.compare_exchange(
                         0,
@@ -504,9 +688,7 @@ fn stream<T: SizedSample + FromSample<f32>>(
                 }
                 stats.frames.fetch_add(delivered, Ordering::Relaxed);
                 stats.callbacks.fetch_add(1, Ordering::Relaxed);
-                stats
-                    .position
-                    .store(cursor.position_ms(&pcm), Ordering::Release);
+                stats.position.store(input.position_ms(), Ordering::Release);
             },
             move |error: cpal::Error| match error.kind() {
                 cpal::ErrorKind::Xrun => {
@@ -526,4 +708,62 @@ fn stream<T: SizedSample + FromSample<f32>>(
             None,
         )
         .map_err(|_| EngineError::Output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_starved_stream_freezes_its_clock_without_announcing_eof() {
+        let (mut producer, consumer) = buffer::channel(64).unwrap();
+        let mut input = Input::Streaming {
+            consumer,
+            frames: 0,
+            rate: 8000,
+            position: 5000,
+            duration: 120000,
+        };
+        assert!(matches!(input.next_frame(0.08), Step::Pending));
+        assert_eq!(input.position_ms(), 5000);
+        for _ in 0..32 {
+            producer.try_push([0.5, -0.5]).unwrap();
+        }
+        for _ in 0..32 {
+            match input.next_frame(0.08) {
+                Step::Frame(frame) => assert_eq!(frame, [0.04, -0.04]),
+                _ => panic!("Lost PCM"),
+            }
+        }
+        assert_eq!(input.position_ms(), 5004);
+        assert!(matches!(input.next_frame(0.08), Step::Pending));
+        assert_eq!(input.position_ms(), 5004);
+        producer.finish();
+        assert!(matches!(input.next_frame(0.08), Step::End));
+    }
+    #[test]
+    fn cancelling_a_full_paused_file_feed_joins_the_decoder_without_an_audio_device() {
+        let control = Arc::new(Control {
+            epoch: AtomicU64::new(1),
+            playing: AtomicBool::new(false),
+            gain: AtomicU32::new(0.08f32.to_bits()),
+        });
+        let state = CallbackState {
+            control,
+            stats: Arc::new(Stats::default()),
+            epoch: 1,
+            started: Instant::now(),
+        };
+        let file = File::open(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/audio/scale.wav"
+        ))
+        .unwrap();
+        let (feed, consumer) =
+            feed::Feed::start(Wav::open(file).unwrap(), 48000, 0, &state).unwrap();
+        assert!(consumer.buffered() >= feed::CAPACITY / 2 && consumer.buffered() <= feed::CAPACITY);
+        let at = Instant::now();
+        drop(feed);
+        assert!(at.elapsed() < Duration::from_secs(2));
+        assert!(consumer.is_finished());
+    }
 }

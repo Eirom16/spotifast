@@ -1,9 +1,10 @@
-//! Small local-audio slice. PCM is fully prepared on a worker and hard-capped;
-//! the native callback only reads immutable samples and atomics. No streaming
-//! or arbitrary local-library support is claimed by these test fixtures.
+//! Bounded audio preparation and native output. Audited short media uses immutable
+//! PCM; seekable PCM16 WAV files use an independent decode worker and a fixed
+//! atomic PCM channel. No callback performs disk/network IO or takes a lock.
 pub mod buffer;
 #[cfg(feature = "ogg-vorbis")]
 mod ogg;
+pub mod original_long;
 #[cfg(feature = "native-output")]
 mod output;
 pub mod wav_stream;
@@ -15,6 +16,9 @@ pub use output::{Engine, EngineError, EngineEvent, Metrics};
 
 pub const MAX_SAMPLES: usize = 1_000_000;
 pub const DURATION_MS: u64 = 8000;
+fn media_id(local: &str) -> MediaId {
+    MediaId::new(ProviderId::new("demo").unwrap(), local).unwrap()
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Builtin {
     Scale,

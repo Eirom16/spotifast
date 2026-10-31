@@ -89,9 +89,10 @@ impl<R: Read + Seek> Wav<R> {
                     format = Some((rate, channels));
                 }
                 b"data" => {
-                    if data.replace((start, size)).is_some() {
+                    if data.is_some() {
                         return Err(DecodeError::InvalidWav);
                     }
+                    data = Some((start, size));
                 }
                 _ => {}
             }

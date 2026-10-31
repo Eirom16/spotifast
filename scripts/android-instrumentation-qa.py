@@ -18,7 +18,7 @@ CAPTURES = ("qa-startup", "qa-unicode", "qa-recreated", "qa-landscape", "qa-port
             "qa-shared-queue-trace", "qa-input-background", "qa-audio-playing",
             "qa-audio-interrupted", "qa-audio-after-end", "qa-online-results-dark",
             "qa-online-results-light", "qa-online-cancelled", "qa-online-playing",
-            "qa-online-recreated", "qa-online-background", "qa-library-saved", "qa-library-result")
+            "qa-online-recreated", "qa-online-background", "qa-library-saved", "qa-library-result", "qa-long-playing", "qa-long-after-seek", "qa-long-after-end", "qa-long-recreated")
 
 
 def adb(*args):
@@ -79,8 +79,12 @@ def main():
     library_checks = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-library-checks.json"))
     (output / "qa-library-checks.json").write_text(json.dumps(library_checks, indent=2) + "\n")
     assert library_checks["duplicate_save_unique"] and library_checks["legacy_archive_preserved"]
+    long_resources = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-long-resources.json"))
+    (output / "qa-long-resources.json").write_text(json.dumps(long_resources, indent=2) + "\n")
+    assert long_resources["audio_metrics"]["streaming"] and long_resources["audio_metrics"]["pcm_bytes"] == 65536
+    assert long_resources["audio_metrics"]["buffer_underruns"] == 0 and long_resources["audio_metrics"]["nonzero_samples"] > 0
     summary = dict(source_commit=args.commit, native_source_commit=manifest.get("native_source_commit"),
-                   result="pass", captures=len(CAPTURES), resources=resources, online_resources=online_resources,
+                   result="pass", captures=len(CAPTURES), resources=resources, online_resources=online_resources, long_resources=long_resources,
                    relevant_errors=critical, library_checks=library_checks, acoustic_capture=False)
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(output)

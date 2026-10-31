@@ -15,6 +15,8 @@ mod online_model;
 mod online_probe;
 use doremi_library as persistence;
 mod saved;
+#[cfg(not(target_os = "android"))]
+mod wav_probe;
 use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
 #[cfg(target_os = "linux")]
 pub use online_probe::run as online_audio_probe;
@@ -25,6 +27,8 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+#[cfg(not(target_os = "android"))]
+pub use wav_probe::run as wav_audio_probe;
 
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
@@ -78,6 +82,9 @@ struct Model {
     storage_warning: Option<&'static str>,
     audio: Option<Engine>,
     focus: bool,
+    original_path: Option<PathBuf>,
+    // Transient CLI-selected file capability, separate from saved metadata.
+    wav_input: Option<(MediaId, PathBuf)>,
     // Source data, not a second queue. Only the explicit bounded CLI corpus
     // populates this cache; no arbitrary files or persisted transport URIs.
     prepared: Vec<(MediaId, Arc<Pcm>)>,
@@ -104,7 +111,11 @@ fn songs() -> Vec<Media> {
             title: title.into(),
             duration_ms: Some(30_000),
         })
-        .chain([Builtin::Scale.media(), Builtin::Chord.media()])
+        .chain([
+            Builtin::Scale.media(),
+            Builtin::Chord.media(),
+            doremi_player::original_long::media(),
+        ])
         .collect()
 }
 
@@ -138,6 +149,8 @@ impl Model {
             storage_warning: None,
             audio: None,
             focus: !cfg!(target_os = "android"),
+            original_path: None,
+            wav_input: None,
             prepared: Vec::new(),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             online: online_model::State::new(),
@@ -145,6 +158,7 @@ impl Model {
     }
     fn load(directory: &std::path::Path) -> Self {
         let mut model = Self::new(Preferences::default());
+        model.original_path = Some(doremi_player::original_long::path(directory));
         match persistence::read(directory, "preferences-v1.json") {
             Ok(Some(bytes)) => match serde_json::from_slice::<Preferences>(&bytes) {
                 Ok(mut prefs) if prefs.schema <= 1 => {
@@ -234,6 +248,11 @@ impl Model {
     fn real_audio(&self) -> bool {
         self.queue.current().is_some_and(|entry| {
             Builtin::from_media(&entry.media.id).is_some()
+                || doremi_player::original_long::matches(&entry.media.id)
+                || self
+                    .wav_input
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == entry.media.id)
                 || self.prepared.iter().any(|(id, _)| *id == entry.media.id)
                 || self.online_candidate(&entry.media.id)
         })
@@ -271,6 +290,31 @@ impl Model {
                                     .ok_or(EngineError::Closed)
                                     .and_then(|engine| engine.load(request, builtin, position_ms)),
                             )
+                        } else if doremi_player::original_long::matches(&entry.media.id) {
+                            Some(
+                                self.original_path
+                                    .as_ref()
+                                    .ok_or(EngineError::Input)
+                                    .and_then(|path| {
+                                        self.audio.as_mut().ok_or(EngineError::Closed).and_then(
+                                            |engine| {
+                                                engine.load_original_long(
+                                                    request,
+                                                    path.clone(),
+                                                    position_ms,
+                                                )
+                                            },
+                                        )
+                                    }),
+                            )
+                        } else if let Some((_, path)) = self
+                            .wav_input
+                            .as_ref()
+                            .filter(|(id, _)| *id == entry.media.id)
+                        {
+                            Some(self.audio.as_mut().ok_or(EngineError::Closed).and_then(
+                                |engine| engine.load_wav(request, path.clone(), position_ms),
+                            ))
                         } else {
                             None
                         };
@@ -330,11 +374,16 @@ impl Model {
                         self.notice = if self
                             .queue
                             .current()
-                            .is_some_and(|entry| Builtin::from_media(&entry.media.id).is_some())
+                            .is_some_and(|entry| self.online_candidate(&entry.media.id))
                         {
-                            "Audio local original · CC0 · 8 segundos"
-                        } else {
                             "Audio CC0 de Commons · experimento"
+                        } else if self.queue.current().is_some_and(|entry| {
+                            Builtin::from_media(&entry.media.id).is_some()
+                                || doremi_player::original_long::matches(&entry.media.id)
+                        }) {
+                            "Audio local original · CC0"
+                        } else {
+                            "Archivo WAV local seleccionado"
                         }
                         .into();
                         self.event(Event::Ready(r));
@@ -605,7 +654,9 @@ impl DoremiApp {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.set_width((ui.available_width() - 4.0).max(0.0));
                 ui.label(egui::RichText::new(&media.title).strong());
-                ui.small(if Builtin::from_media(&media.id).is_some() {
+                ui.small(if doremi_player::original_long::matches(&media.id) {
+                    "Audio local original · 2:00 · CC0".into()
+                } else if Builtin::from_media(&media.id).is_some() {
                     "Audio local original · 0:08 · CC0".into()
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
                     "Tono de prueba online · 0:10 · CC0".into()
@@ -676,6 +727,7 @@ impl DoremiApp {
         }
         let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
             "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
+            "streaming":m.streaming,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
         let state = serde_json::json!({
@@ -828,6 +880,9 @@ impl DoremiApp {
                             let model=self.model.as_mut().unwrap();
                             model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);
                             model.page=Page::Player;
+                        }
+                        if self.button(ui,"long-audio","Probar WAV de 2 minutos",260.0) {
+                            let model=self.model.as_mut().unwrap();model.start_context(vec![doremi_player::original_long::media(),Builtin::Chord.media()],0);model.page=Page::Player;
                         }
                         self.rows(ui,&songs());
                     }
@@ -1018,7 +1073,7 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
             .as_ref()
             .and_then(Engine::metrics)
             .unwrap_or_default();
-        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
+        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"streaming":m.streaming,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
     }
     model.enable_audio();
     model.start_context(rows, 0);

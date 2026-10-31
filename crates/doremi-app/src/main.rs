@@ -28,9 +28,19 @@ fn main() -> eframe::Result {
             }
             return Ok(());
         }
+        [argument, path] if argument == "--wav-audio-probe" => {
+            match doremi_app::wav_audio_probe(std::path::PathBuf::from(path)) {
+                Ok(report) => println!("{report}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
         [argument] if argument == "--help" => {
             println!(
-                "Doremi Native Dev: --version, --help, --audio-probe. Linux: experimental Commons CC0 search in the UI and --online-audio-probe (two audited tones). Android remains offline."
+                "Doremi Native Dev: --version, --help, --audio-probe. Linux: experimental Commons CC0 search in the UI and --online-audio-probe (two audited tones). Both hosts support the experimental Commons source. --wav-audio-probe PATH tests a selected PCM16 WAV file with bounded buffering."
             );
             return Ok(());
         }

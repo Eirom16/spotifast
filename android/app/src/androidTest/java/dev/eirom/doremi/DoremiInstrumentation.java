@@ -165,7 +165,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         resources.put("audio_metrics",sample.optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
         resources.put("volume",sample.optDouble("volume"));resources.put("playback",sample.optString("playback"));
         resources.put("current_provider",sample.optString("current_provider"));
-        resources.put("condition","native output from fully prepared PCM; no acoustic capture");
+        resources.put("condition",sample.optJSONObject("audio_metrics").optBoolean("streaming")?"native output from bounded WAV decode buffer; no acoustic capture":"native output from fully prepared PCM; no acoustic capture");
         Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void audio() throws Exception {
@@ -216,6 +216,31 @@ public final class DoremiInstrumentation extends Instrumentation {
         until(12000,"natural EOF of eight-second sample",s -> s.optString("current").equals("tone-chord") && s.optLong("position_ms")>100);
         capture("qa-audio-after-end");
         tap("stop");until(s -> s.optString("playback").equals("Paused") && s.isNull("audio_metrics"));
+    }
+    private void longAudio() throws Exception {
+        // The preceding short-audio test leaves its player paused. Set a low
+        // positive application gain before starting the longer original file.
+        slide("volume",0.08f);tap("home");tap("long-audio");
+        until(15000,"first long WAV output",s -> onlinePlaying(s,"tone-scale-long-v1") && s.optJSONObject("audio_metrics").optBoolean("streaming"));
+        until(33000,"continuous WAV delivery beyond the old prepared-PCM limit",s -> s.optString("current").equals("tone-scale-long-v1") && s.optLong("position_ms")>23000);
+        JSONObject metrics=state().getJSONObject("audio_metrics");
+        if(metrics.getLong("pcm_bytes")!=65536 || metrics.getLong("buffer_capacity_frames")!=8192 || metrics.getLong("buffer_underruns")!=0 || metrics.getLong("nonzero_samples")==0) throw new AssertionError("Long WAV output was not bounded/nonzero/continuously fed");
+        capture("qa-long-playing");measureResources("qa-long-resources");
+        tap("pause");until(s -> "Paused".equals(s.optString("playback")));SystemClock.sleep(250);
+        long position=state().getLong("position_ms");SystemClock.sleep(400);
+        if(state().getLong("position_ms")!=position) throw new AssertionError("Paused file clock advanced");
+        long occurrence=state().getLong("current_occurrence"),instance=state().getLong("instance");
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+        runOnMainSync(() -> activity.recreate());
+        Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
+        if(recreated==null) throw new AssertionError("Long WAV recreation did not return");activity=recreated;
+        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics"));
+        capture("qa-long-recreated");
+        slide("seek",0.75f);until(s -> "Paused".equals(s.optString("playback")) && s.optLong("position_ms")>85000 && s.optLong("position_ms")<95000);
+        tap("play");until(s -> onlinePlaying(s,"tone-scale-long-v1"));capture("qa-long-after-seek");
+        tap("next");until(s -> onlinePlaying(s,"tone-chord"));tap("previous");until(s -> onlinePlaying(s,"tone-scale-long-v1"));
+        slide("seek",0.99f);until(8000,"long file EOF advances the shared queue",s -> onlinePlaying(s,"tone-chord"));capture("qa-long-after-end");
+        tap("stop");until(s -> "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics"));
     }
     private void hideKeyboard() throws Exception {
         runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
@@ -397,9 +422,10 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-shared-queue-trace");
             backgroundInput();
             audio();
+            longAudio();
             online();
             savedLibrary();
-            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; real Commons search/load/cancel/PCM/next/previous/paused recreation/background; qualified favorites/save/remove/durable metadata/legacy preservation\n");
+            result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; long WAV bounded delivery/positive samples/seek/EOF/cancel; real Commons search/load/cancel/PCM/next/previous/paused recreation/background; qualified favorites/save/remove/durable metadata/legacy preservation\n");
             finish(Activity.RESULT_OK,result);
         } catch(Throwable error) { result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
     }

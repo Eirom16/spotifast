@@ -81,6 +81,8 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo test --locked -p doremi-app --all-targets
+          cargo test --locked -p doremi-player --features native-output --all-targets
+          cargo clippy --locked -p doremi-player --features native-output --all-targets -- -D warnings
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings
           cargo build --locked -p doremi-app --bin doremi-app
       - name: Real X11 navigation, keyboard and queue sequence

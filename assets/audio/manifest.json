@@ -14,5 +14,18 @@
       "sha256": "64312482dac0eb3c9887a838d43f6e2d7faa0654274c1a099a11bcde69d9a0eb",
       "bytes": 768044
     }
+  ],
+  "generated_files": [
+    {
+      "id": "tone-scale-long-v1",
+      "file": "original-scale-120s-v1.wav",
+      "source_file": "scale.wav",
+      "source_sha256": "63aa41e98d3ff67982e2b56bb782df1f8ce151ae0f46666b32e761a81c24994d",
+      "repeats": 15,
+      "duration_ms": 120000,
+      "bytes": 11520044,
+      "license": "CC0-1.0",
+      "validation": "Exact byte comparison against the original PCM sequence; generated in app-owned storage, never bundled as a large APK asset."
+    }
   ]
 }

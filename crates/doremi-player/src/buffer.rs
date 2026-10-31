@@ -88,6 +88,12 @@ impl Drop for Producer {
     }
 }
 impl Consumer {
+    pub fn is_finished(&self) -> bool {
+        self.shared.end.load(Ordering::Acquire) != 0
+    }
+    pub fn is_failed(&self) -> bool {
+        self.shared.end.load(Ordering::Acquire) == 2
+    }
     pub fn capacity(&self) -> usize {
         self.shared.frames.len()
     }
