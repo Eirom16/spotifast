@@ -154,6 +154,9 @@ def slider(name, fraction):
 
 
 def local_wav_ui():
+    def local_playing(data, identity):
+        metrics=data["audio_metrics"]
+        return data["current"]==identity and data["current_provider"]=="demo" and data["playback"]=="Playing" and metrics and metrics["frames"]>10000
     start();tap("long-audio")
     wait(lambda s:s["current"]=="tone-scale-long-v1" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("nonzero_samples",0)>0)
     wait(lambda s:s["position_ms"]>23000,32)
@@ -171,9 +174,10 @@ def local_wav_ui():
     tap("settings");tap("light");tap("home");tap("player");capture("long-playing-light")
     slider("seek",.75);wait(lambda s:s["playback"]=="Paused" and 85000<s["position_ms"]<95000)
     tap("play");wait(lambda s:s["playback"]=="Playing" and s["audio_metrics"]["nonzero_samples"]>0);capture("long-after-seek")
-    tap("next");wait(lambda s:playing(s,"tone-chord"));tap("previous");wait(lambda s:playing(s,"tone-scale-long-v1"))
-    slider("seek",.99);wait(lambda s:playing(s,"tone-chord"),8);capture("long-after-end")
+    tap("next");wait(lambda s:local_playing(s,"tone-chord"));tap("previous");wait(lambda s:local_playing(s,"tone-scale-long-v1"))
+    slider("seek",.99);wait(lambda s:local_playing(s,"tone-chord"),8);capture("long-after-end")
     tap("stop");wait(lambda s:s["playback"]=="Paused" and s["audio_metrics"] is None)
+    tap("home");tap("long-audio");wait(lambda s:local_playing(s,"tone-scale-long-v1"))
     report["close_ms"]=close();report["result"]="pass"
     report["checks"]=["regular WAV file / bounded 8192-frame channel",">23 seconds delivered without full PCM allocation","positive output samples","no provider initialization","pause / seek / next / previous / EOF / cancel","dark/light UI","decoder shutdown"]
     (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
