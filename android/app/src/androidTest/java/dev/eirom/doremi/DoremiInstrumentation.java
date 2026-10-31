@@ -394,6 +394,22 @@ public final class DoremiInstrumentation extends Instrumentation {
         }
         throw new AssertionError("Document control remained outside the visible content");
     }
+    private void cancelOwnDocumentPicker() throws Exception {
+        // Own folder was verified immediately before entering this method.
+        // Back navigates directories before it finishes DocumentsUI on API 28.
+        for(int attempt=0;attempt<8;attempt++) {
+            android.view.accessibility.AccessibilityNodeInfo root=automation().getRootInActiveWindow();
+            String owner=root==null?"":String.valueOf(root.getPackageName());
+            if(getTargetContext().getPackageName().equals(owner)) {foreground();return;}
+            if(!"com.android.documentsui".equals(owner)) throw new AssertionError("Owned document picker lost foreground; no key injected");
+            long time=SystemClock.uptimeMillis();
+            automation().injectInputEvent(new android.view.KeyEvent(time,time,android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_BACK,0),true);
+            SystemClock.sleep(80);
+            automation().injectInputEvent(new android.view.KeyEvent(time,SystemClock.uptimeMillis(),android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_BACK,0),true);
+            SystemClock.sleep(250);
+        }
+        throw new AssertionError("Owned selector did not finish after bounded Back navigation");
+    }
     private void chooseOwnDocument(String filename) throws Exception {
         lastAction="select-owned-document";
         documentControl("import-wav");
@@ -402,9 +418,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(bounds.isEmpty()) throw new AssertionError("Owned file has no touch bounds");
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,bounds.centerX(),bounds.centerY(),0);
+        down.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         if(!automation().injectInputEvent(down,true)) throw new AssertionError("Owned picker touch rejected");down.recycle();
         SystemClock.sleep(80);
         MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,bounds.centerX(),bounds.centerY(),0);
+        up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         if(!automation().injectInputEvent(up,true)) throw new AssertionError("Owned picker release rejected");up.recycle();
         foreground();
         until(15000,"selected document completion",data -> !data.optJSONObject("local_import").optBoolean("pending"));
@@ -424,9 +442,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("home");tap("player");slide("volume",0.08f);tap("library");
         if(!restore) {
             documentControl("import-wav");ownPickerNode("Invalid.wav");
-            automation().injectInputEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_BACK),true);
-            automation().injectInputEvent(new android.view.KeyEvent(android.view.KeyEvent.ACTION_UP,android.view.KeyEvent.KEYCODE_BACK),true);
-            foreground();until(data -> !data.optJSONObject("local_import").optBoolean("pending"));
+            cancelOwnDocumentPicker();until(data -> !data.optJSONObject("local_import").optBoolean("pending"));
             if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("Selector cancellation changed existing favorites");
             chooseOwnDocument("Invalid.wav");until(data -> data.optString("notice").contains("no es WAV"));
             if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("An invalid document changed existing favorites");
