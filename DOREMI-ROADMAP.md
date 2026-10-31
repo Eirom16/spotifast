@@ -559,3 +559,5 @@ Regresión completa `41244383738` en curso, no declarada verde todavía.
 Siguiente corte: más formatos locales y MediaSession/background; proveedor
 productivo y cuenta opcional posteriores. La política estable de tres
 plataformas y autorización de publicación continúa vigente, sin releases.
+
+Regresión completa del hito WAV `02b686b`: `41244383738`, nueve jobs aprobados, incluida la Preview. La pareja Linux/Android instalada conserva ese commit validado mientras se desarrolla soporte FLAC en el mismo motor/cola, sin anunciarlo todavía como función probada.

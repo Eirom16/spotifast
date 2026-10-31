@@ -10,7 +10,7 @@ Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
 Estado actual (2026-10-31): APK y Doremi Native Dev Linux `02b686b`, descargados de CI e instalados conservando datos. Ambos importan WAV PCM16 mono/estéreo y reproducen con buffer PCM de 64 KiB. Android usa el selector del sistema y una copia privada (hasta 256 MiB), Linux selector o arrastre. La suite específica física de importación/restauración pasó con siete capturas y la suite general con otras 22; Linux pasó su QA real de selección/arrastre/restauración. El WAV original y los favoritos anteriores se conservaron. El error de formato ya aparece junto al botón y no queda oculto bajo las tarjetas.
 
-CI enfocada `41243539529` sobre `02b686b`: ambos hosts aprobados (15 tests library, 23 app, 13 player, Clippy y empaquetado). Regresión completa `41244383738` en curso sobre el mismo commit; todavía no se declara aprobada. La última regresión completa aprobada sigue siendo `41223684373` sobre `d07e76a`: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
+CI enfocada `41243539529` sobre `02b686b`: ambos hosts aprobados (15 tests library, 23 app, 13 player, Clippy y empaquetado). Regresión completa `41244383738` aprobada sobre el mismo commit: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
 
 El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
@@ -629,3 +629,5 @@ Xvfb/Mesa software y salida nativa, sin atribuirlo a GPU física o Wayland.
 Regresión completa `41244383738` en curso; no se publica ninguna release.
 Siguiente prioridad viable: ampliar formatos locales y controles de plataforma,
 con el mismo dueño de cola/identidad/persistencia y datos anteriores protegidos.
+
+Cierre de regresión WAV: CI completa `41244383738` aprobada, nueve jobs sobre `02b686b`. La Preview del mismo commit se descargó para verificación; su instalación previa se conserva. El siguiente trabajo FLAC permanece experimental y aún no se atribuye al software instalado.
