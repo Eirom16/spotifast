@@ -1,5 +1,6 @@
 //! Host-owned JSON encoding. No provider resources, requests or credentials.
 pub mod collection;
+pub mod local_files;
 use doremi_core::{
     media::{Media, MediaId, ProviderId},
     queue::{Queue, Repeat, checkpoint as core},
@@ -198,6 +199,7 @@ struct Write {
     prefs: Option<Vec<u8>>,
     queue: Option<Vec<u8>>,
     library: Option<collection::Collection>,
+    local_files: Option<local_files::Index>,
     state: Vec<u8>,
 }
 impl Write {
@@ -211,6 +213,9 @@ impl Write {
         }
         if newer.library.is_none() {
             newer.library = self.library;
+        }
+        if newer.local_files.is_none() {
+            newer.local_files = self.local_files;
         }
         newer
     }
@@ -233,11 +238,31 @@ impl Writer {
         let worker = std::thread::spawn(move || {
             let mut previous = std::collections::BTreeMap::new();
             let mut previous_library: Option<collection::Collection> = None;
+            let mut previous_files: Option<local_files::Index> = None;
             while let Ok(mut write) = receiver.recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     write = write.supersede(newer);
                 }
                 let mut failed = false;
+                if let Some(files) = write.local_files
+                    && !previous_files
+                        .as_ref()
+                        .is_some_and(|previous| files.same_snapshot(previous))
+                {
+                    // Publish locators before documents that can reference them.
+                    // On failure leave the previous library/queue intact and let
+                    // the caller retry the complete accepted snapshot.
+                    let saved = files.encode().ok().is_some_and(|bytes| {
+                        atomic_write(&directory, "local-files-v1.json", &bytes, true).is_ok()
+                    });
+                    if !saved {
+                        eprintln!("Doremi local file index persistence failed");
+                        output.failed.store(true, Ordering::Release);
+                        output.completed.store(write.id, Ordering::Release);
+                        continue;
+                    }
+                    previous_files = Some(files);
+                }
                 if let Some(library) = write.library
                     && !previous_library
                         .as_ref()
@@ -307,6 +332,16 @@ impl Writer {
         library: Option<collection::Collection>,
         state: Vec<u8>,
     ) -> Result<usize, SubmitError> {
+        self.submit_documents(prefs, queue, library, None, state)
+    }
+    pub fn submit_documents(
+        &self,
+        prefs: Option<Vec<u8>>,
+        queue: Option<Vec<u8>>,
+        library: Option<collection::Collection>,
+        local_files: Option<local_files::Index>,
+        state: Vec<u8>,
+    ) -> Result<usize, SubmitError> {
         let id = NEXT_WRITE
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| SubmitError::Closed)?;
@@ -316,6 +351,7 @@ impl Writer {
                 prefs,
                 queue,
                 library,
+                local_files,
                 state,
             })
             .map_err(|error| match error {
@@ -355,7 +391,7 @@ fn atomic_write(directory: &Path, name: &str, bytes: &[u8], durable: bool) -> st
 pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
     if !matches!(
         name,
-        "preferences-v1.json" | "queue-v1.json" | "library-v1.json"
+        "preferences-v1.json" | "queue-v1.json" | "library-v1.json" | "local-files-v1.json"
     ) {
         return Err(Error::Encoding);
     }
@@ -381,6 +417,7 @@ mod storage_tests {
             prefs: Some(vec![1]),
             queue: Some(vec![2]),
             library: Some(collection::Collection::default()),
+            local_files: Some(local_files::Index::default()),
             state: vec![3],
         };
         let diagnostics = Write {
@@ -388,6 +425,7 @@ mod storage_tests {
             prefs: None,
             queue: None,
             library: None,
+            local_files: None,
             state: vec![4],
         };
         let merged = save.supersede(diagnostics);
@@ -395,18 +433,21 @@ mod storage_tests {
         assert_eq!(merged.prefs, Some(vec![1]));
         assert_eq!(merged.queue, Some(vec![2]));
         assert!(merged.library.is_some());
+        assert!(merged.local_files.is_some());
         assert_eq!(merged.state, vec![4]);
         let update = Write {
             id: 3,
             prefs: Some(vec![5]),
             queue: Some(vec![6]),
             library: None,
+            local_files: None,
             state: vec![7],
         };
         let merged = merged.supersede(update);
         assert_eq!(merged.prefs, Some(vec![5]));
         assert_eq!(merged.queue, Some(vec![6]));
         assert!(merged.library.is_some());
+        assert!(merged.local_files.is_some());
     }
     fn directory(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -488,6 +529,72 @@ mod storage_tests {
         let bytes = read(&directory, "library-v1.json").unwrap().unwrap();
         assert_eq!(collection::Collection::decode(&bytes).unwrap(), library);
         assert!(!directory.join("library-v1.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn accepted_locator_snapshot_is_durable_and_cannot_mutate_after_submission() {
+        let directory = directory("storage-local-files");
+        std::fs::create_dir_all(&directory).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        let first = local_files::media_id("00000000000000000000000000000001").unwrap();
+        let second = local_files::media_id("00000000000000000000000000000002").unwrap();
+        let mut files = local_files::Index::default();
+        files
+            .insert(first.clone(), directory.join("original.wav"))
+            .unwrap();
+        let writer = Writer::new(directory.clone());
+        let id = writer
+            .submit_documents(None, None, None, Some(files.clone()), b"{}".to_vec())
+            .unwrap();
+        files.insert(second, directory.join("next.wav")).unwrap();
+        assert!(!wait(&writer, id));
+        let restored =
+            local_files::Index::decode(&read(&directory, "local-files-v1.json").unwrap().unwrap())
+                .unwrap();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(
+            restored.get(&first),
+            Some(directory.join("original.wav").as_path())
+        );
+        writer.shutdown();
+        assert!(!directory.join("local-files-v1.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn a_failed_locator_write_cannot_publish_new_library_or_queue_references() {
+        let directory = directory("storage-local-files-failure");
+        std::fs::create_dir_all(directory.join("local-files-v1.json")).unwrap();
+        let directory = directory.canonicalize().unwrap();
+        std::fs::write(
+            directory.join("library-v1.json"),
+            b"preserve previous library",
+        )
+        .unwrap();
+        let mut files = local_files::Index::default();
+        files
+            .insert(
+                local_files::media_id("00000000000000000000000000000001").unwrap(),
+                directory.join("original.wav"),
+            )
+            .unwrap();
+        let writer = Writer::new(directory.clone());
+        let id = writer
+            .submit_documents(
+                None,
+                Some(b"new queue".to_vec()),
+                Some(collection::Collection::default()),
+                Some(files),
+                b"{}".to_vec(),
+            )
+            .unwrap();
+        assert!(wait(&writer, id));
+        writer.shutdown();
+        assert_eq!(
+            std::fs::read(directory.join("library-v1.json")).unwrap(),
+            b"preserve previous library"
+        );
+        assert!(!directory.join("queue-v1.json").exists());
+        assert!(directory.join("local-files-v1.json").is_dir());
         std::fs::remove_dir_all(directory).unwrap();
     }
 }
