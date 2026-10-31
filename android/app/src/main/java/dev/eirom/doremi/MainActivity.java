@@ -63,6 +63,24 @@ public final class MainActivity extends Activity {
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("audio/*");
         intent.putExtra(Intent.EXTRA_LOCAL_ONLY,true);
+        // Keep this request in the system documents UI, rather than delegating
+        // it to a third-party file-manager default that may ignore SAF hints.
+        // Query only this action; no package inventory or default changes.
+        android.content.pm.ResolveInfo systemPicker=null;
+        for(android.content.pm.ResolveInfo candidate:getPackageManager().queryIntentActivities(intent,
+                android.content.pm.PackageManager.MATCH_SYSTEM_ONLY|android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)) {
+            if(systemPicker==null) systemPicker=candidate;
+            String name=candidate.activityInfo.packageName;
+            if("com.android.documentsui".equals(name) || "com.google.android.documentsui".equals(name)) {
+                systemPicker=candidate;break;
+            }
+        }
+        if(systemPicker==null) {
+            deliverDocument("");
+            Toast.makeText(this,"Selector de documentos del sistema no disponible",Toast.LENGTH_LONG).show();
+            return;
+        }
+        intent.setComponent(new android.content.ComponentName(systemPicker.activityInfo.packageName,systemPicker.activityInfo.name));
         // Development QA opens only its own generated directory; never collect
         // the user's Recents listing when automating the system picker.
         String folder=getIntent().getStringExtra("dev.eirom.doremi.qa.documentFolder");

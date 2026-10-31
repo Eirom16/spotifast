@@ -44,7 +44,11 @@ def main():
     with wave.open(str(fixture),"wb") as wav:
         wav.setnchannels(2);wav.setsampwidth(2);wav.setframerate(16000)
         wav.writeframes(b"".join(original[i:i+2]*2 for i in range(0,len(original),6))*15)
-    invalid=out/"Invalid.wav";invalid.write_bytes(b"owned invalid WAV fixture")
+    # A well-formed 24-bit container remains visible under Android's audio MIME
+    # filter but is explicitly unsupported by the first PCM16 import slice.
+    invalid=out/"Invalid.wav"
+    with wave.open(str(invalid),"wb") as wav:
+        wav.setnchannels(1);wav.setsampwidth(3);wav.setframerate(16000);wav.writeframes(bytes(480))
     folder="Doremi-QA-"+args.commit[:12]+uuid.uuid4().hex[:8]
     remote="/sdcard/Download/"+folder
     exists=subprocess.run(["adb","-d","shell","test","-e",remote],capture_output=True,timeout=30)
