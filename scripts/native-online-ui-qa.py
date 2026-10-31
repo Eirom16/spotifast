@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import sys
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,6 +19,9 @@ parser.add_argument("output", type=Path)
 parser.add_argument("--commit", required=True)
 parser.add_argument("--local-only", action="store_true", help="Exercise long local WAV without provider requests")
 parser.add_argument("--seek-boundary-only", action="store_true", help="Hold a seek gesture across end of track; the next occurrence must not inherit it")
+parser.add_argument("--local-import-only", action="store_true", help="Use the owned native file selector, real WAV output and process restoration")
+parser.add_argument("--import-fixture", type=Path, help="Explicit authorized WAV for the native import test")
+parser.add_argument("--import-valid-first", action="store_true", help="Diagnostic ordering: choose the valid file before the invalid file")
 args = parser.parse_args()
 binary = args.binary.resolve()
 out = args.output.resolve()
@@ -40,10 +44,21 @@ env = os.environ.copy()
 env.pop("WAYLAND_DISPLAY", None)
 env.pop("WAYLAND_SOCKET", None)
 env["DOREMI_DATA_DIR"] = str(profile)
+# Native chooser history/config stay in this test profile, never in the user's
+# desktop data. The test wrapper supplies a separate non-activating session bus.
+if args.local_import_only:
+    env["GSK_RENDERER"]="cairo"
+    env["GDK_SCALE"]="1"
+    env["GDK_DPI_SCALE"]="1"
+    for key, directory in [("XDG_DATA_HOME", "dialog-data"),("XDG_CONFIG_HOME","dialog-config"),("XDG_CACHE_HOME","dialog-cache")]:
+        env[key]=str(out/directory)
+        (out/directory).mkdir()
+
 process = None
 log = None
 window = None
 wait_trace = []
+start_count = 0
 
 
 def xdo(*arguments):
@@ -52,7 +67,7 @@ def xdo(*arguments):
 
 def state():
     data = json.loads((profile / "qa-state.json").read_text())
-    assert data["pid"] == process.pid, "Stale process diagnostics"
+    if data["pid"] != process.pid:raise ValueError("Stale process diagnostics")
     return data
 
 
@@ -76,8 +91,9 @@ def wait(predicate, seconds=14):
 
 
 def start():
-    global process, window, log
-    log = (out / ("runtime-1.log" if process is None else "runtime-2.log")).open("w")
+    global process, window, log, start_count
+    start_count += 1
+    log = (out / f"runtime-{start_count}.log").open("x")
     process = subprocess.Popen([str(binary)], env=env, stdout=log, stderr=subprocess.STDOUT)
     window = xdo("search", "--sync", "--onlyvisible", "--pid", process.pid).splitlines()[0]
     xdo("windowfocus", "--sync", window)
@@ -90,9 +106,20 @@ def tap(name):
     left, top, right, bottom = rect
     assert 0 <= left < right <= data["viewport"][0] and 0 <= top < bottom <= data["viewport"][1], name
     assert int(xdo("getwindowfocus")) == int(window), "Own Doremi window must have focus"
+    xdo("windowraise",window)
     scale = data["pixels_per_point"]
-    xdo("mousemove", "--window", window, round((left + right) * scale / 2), round((top + bottom) * scale / 2), "click", 1)
-    time.sleep(0.06)
+    # Returning from another native surface needs an enter and then a motion
+    # event. X11 CursorEntered carries no coordinates to egui.
+    xdo("mousemove","--window",window,1,1);time.sleep(.06)
+    target=[round((left+right)*scale/2),round((top+bottom)*scale/2)]
+    xdo("mousemove", "--window", window, *target)
+    time.sleep(.1)
+    if "input" in data:
+        wait(lambda s:s["input"]["position"] is not None and all(abs(s["input"]["position"][i]-target[i]/scale)<2 for i in (0,1)),3)
+    pointer=dict(line.split("=",1) for line in xdo("getmouselocation","--shell").splitlines())
+    assert int(pointer["WINDOW"])==int(window),"Another native surface intercepts the pointer"
+    xdo("mousedown",1);time.sleep(.08);xdo("mouseup",1)
+    time.sleep(0.08)
 
 
 def capture(name):
@@ -188,6 +215,160 @@ def local_wav_ui():
     report["close_ms"]=close();report["result"]="pass"
     report["checks"]=["regular WAV file / bounded 8192-frame channel",">23 seconds delivered without full PCM allocation","positive output samples","no provider initialization","pause / seek / next / previous / EOF / cancel","dark/light UI","decoder shutdown"]
     (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
+
+
+def local_import_ui():
+    import shutil
+    samples=profile/"samples";samples.mkdir()
+    source=args.import_fixture or ROOT/"target/wav-stream-fixtures/original-scale-stereo-16k-120s.wav"
+    assert source.exists(),"Prepare only the original CC0 stereo fixture first"
+    selected=samples/"Original Café estéreo.wav";shutil.copyfile(source,selected)
+    bad=samples/"Invalid.wav";bad.write_bytes(b"own invalid WAV fixture")
+    digest=hashlib.sha256(selected.read_bytes()).hexdigest()
+    start();tap("library");capture("library-before-import")
+    initial=state()["saved_media"]
+    def selector():
+        tap("import-wav")
+        try:opened=wait(lambda s:s["local_import"]["phase"]=="selector" and s["local_import"]["picker_pid"]>0)
+        except AssertionError:
+            report["failed_open_input_probe"]={"before":state()}
+            capture("failed-import-click")
+            try:
+                tap("settings");report["failed_open_input_probe"]["settings"]=wait(lambda s:s["page"]=="Settings",2)
+            except Exception as error:report["failed_open_input_probe"]["navigation_error"]=str(error)
+            raise
+        pid=opened["local_import"]["picker_pid"]
+        assert Path(f"/proc/{pid}/exe").resolve().name=="zenity"
+        deadline=time.monotonic()+10
+        while time.monotonic()<deadline:
+            try:
+                ids=xdo("search","--onlyvisible","--pid",pid).splitlines()
+                if ids:
+                    dialog=ids[0];xdo("windowraise",dialog);xdo("windowfocus","--sync",dialog)
+                    assert int(xdo("getwindowfocus"))==int(dialog)
+                    time.sleep(.5)
+                    return pid,dialog
+            except subprocess.CalledProcessError:pass
+            time.sleep(.05)
+        raise AssertionError("Owned native chooser did not become visible")
+    def reaped(pid):
+        deadline=time.monotonic()+4
+        while Path(f"/proc/{pid}").exists() and time.monotonic()<deadline:time.sleep(.02)
+        assert not Path(f"/proc/{pid}").exists(),"Own selector process was not reaped"
+    def choose(path):
+        pid,dialog=selector()
+        # These are the two rows verified in the captured private GTK/Cairo
+        # chooser, at scale 1. The directory contains only our own fixtures.
+        row=95 if path==bad else 133
+        assert path in (bad,selected)
+        xdo("windowraise",dialog);xdo("windowfocus","--sync",dialog)
+        assert int(xdo("getwindowfocus"))==int(dialog)
+        xdo("mousemove","--window",dialog,260,row)
+        xdo("mousedown",1);time.sleep(.08);xdo("mouseup",1);time.sleep(.1)
+        xdo("mousedown",1);time.sleep(.08);xdo("mouseup",1)
+        try:wait(lambda s:not s["local_import"]["pending"])
+        except AssertionError:
+            if Path(f"/proc/{pid}").exists():
+                subprocess.run(["import","-window",dialog,str(out/"selector-selection-failure.png")],check=True,timeout=8)
+            raise
+        reaped(pid);xdo("windowraise",window);xdo("windowfocus","--sync",window);time.sleep(.3)
+    pid,dialog=selector()
+    subprocess.run(["import","-window",dialog,str(out/"owned-native-selector.png")],check=True,timeout=8)
+    xdo("key","--clearmodifiers","Escape");wait(lambda s:not s["local_import"]["pending"]);reaped(pid)
+    xdo("windowfocus","--sync",window)
+    assert state()["saved_media"]==initial and state()["local_import"]["files"]==0
+    pid,dialog=selector();xdo("windowfocus","--sync",window);tap("cancel-import")
+    wait(lambda s:not s["local_import"]["pending"]);reaped(pid)
+    assert state()["saved_media"]==initial and state()["local_import"]["files"]==0
+    if not args.import_valid_first:
+        choose(bad);wait(lambda s:"no es WAV" in s["notice"])
+        assert state()["saved_media"]==initial and state()["local_import"]["files"]==0
+        capture("invalid-wav-preserves-library")
+    choose(selected)
+    current=wait(lambda s:s["current_provider"]=="local-files" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("nonzero_samples",0)>0)
+    identity=current["current"];occurrence=current["current_occurrence"]
+    assert current["local_import"]["files"]==1 and current["audio_metrics"]["streaming"] and current["audio_metrics"]["pcm_bytes"]==65536
+    assert not current["online"]["worker_initialized"] and 0.02<current["volume"]<0.15
+    capture("imported-file-playing")
+    if args.import_valid_first:
+        saved=state()["saved_media"];tap("library");choose(bad)
+        wait(lambda s:"no es WAV" in s["notice"])
+        assert state()["saved_media"]==saved and state()["local_import"]["files"]==1
+        report["test_order"]="diagnostic: invalid WAV chosen while the imported file is playing; idle invalid-first case remains separate"
+        capture("invalid-wav-preserves-library");tap("home");tap("player")
+    tap("pause");wait(lambda s:s["playback"]=="Paused");time.sleep(.2)
+    paused=state()["position_ms"];time.sleep(.4);assert state()["position_ms"]==paused
+    slider("seek",.75);wait(lambda s:s["playback"]=="Paused" and 85000<s["position_ms"]<95000)
+    tap("play");wait(lambda s:s["playback"]=="Playing" and s["audio_metrics"]["nonzero_samples"]>0)
+    tap("library");capture("imported-library-dark")
+    tap("settings");tap("light");tap("library");capture("imported-library-light")
+    tap("add:"+identity);tap("add:"+identity)
+    queued=wait(lambda s:len(s["manual_occurrences"])==2)["manual_occurrences"]
+    assert queued[0]!=queued[1]
+    tap("home");tap("player");tap("next")
+    wait(lambda s:s["current_occurrence"]==queued[0] and (s["audio_metrics"] or {}).get("frames",0)>5000)
+    tap("previous");wait(lambda s:s["current_occurrence"]==occurrence and (s["audio_metrics"] or {}).get("frames",0)>5000)
+    tap("next");wait(lambda s:s["current_occurrence"]==queued[0] and (s["audio_metrics"] or {}).get("frames",0)>5000)
+    tap("pause");wait(lambda s:s["playback"]=="Paused")
+    tap("library");tap("forget:"+identity)
+    wait(lambda s:not any(m["provider"]=="local-files" and m["id"]==identity for m in s["saved_media"]))
+    assert state()["current_occurrence"]==queued[0] and state()["local_import"]["files"]==1
+    assert hashlib.sha256(selected.read_bytes()).hexdigest()==digest
+    report["first_close_ms"]=close();start();tap("library")
+    assert not any(m["provider"]=="local-files" for m in state()["saved_media"]),"A removed favorite was automatically reimported"
+    choose(selected)
+    wait(lambda s:s["current"]==identity and s["current_provider"]=="local-files" and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("frames",0)>5000)
+    assert state()["local_import"]["files"]==1
+    tap("pause");wait(lambda s:s["playback"]=="Paused");report["second_close_ms"]=close()
+    index=json.loads((profile/"local-files-v1.json").read_text());assert index["schema"]==1 and len(index["files"])==1
+    assert (profile/"local-files-v1.json").stat().st_mode&0o777==0o600
+    start();tap("library");wait(lambda s:any(m["provider"]=="local-files" and m["id"]==identity for m in s["saved_media"]))
+    assert not state()["local_import"]["pending"] and state()["audio_metrics"] is None and not state()["online"]["worker_initialized"]
+    capture("restored-local-library")
+    tap("select:"+identity);wait(lambda s:s["current"]==identity and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("nonzero_samples",0)>0)
+    capture("restored-local-output");tap("stop")
+    wait(lambda s:s["audio_metrics"] is None)
+    # GTK owns a real text/uri-list selection on this private X server. The
+    # pointer crosses its drag threshold and enters Doremi before release.
+    # This exercises GTK -> Xdnd -> winit -> egui, without injecting app state.
+    with (out/"drag-source.log").open("x") as drag_log:
+        drag=subprocess.Popen([sys.executable,"-B",str(ROOT/"scripts/native-file-drag-source.py"),str(selected)],env=env,stdout=drag_log,stderr=subprocess.STDOUT)
+        try:
+            drag_window=xdo("search","--sync","--onlyvisible","--pid",drag.pid).splitlines()[0]
+            xdo("windowraise",drag_window);xdo("windowfocus","--sync",drag_window);time.sleep(.3)
+            subprocess.run(["import","-window",drag_window,str(out/"owned-drag-source.png")],check=True,timeout=8)
+            def geometry(w):return {k:int(v) for k,v in (line.split("=",1) for line in xdo("getwindowgeometry","--shell",w).splitlines())}
+            source_rect=geometry(drag_window);target_rect=geometry(window)
+            origin=(source_rect["X"]+source_rect["WIDTH"]//2,source_rect["Y"]+source_rect["HEIGHT"]//2)
+            target=(target_rect["X"]+target_rect["WIDTH"]//2,target_rect["Y"]+target_rect["HEIGHT"]//2)
+            xdo("mousemove",*origin);time.sleep(.15);xdo("mousedown",1);time.sleep(.1)
+            for step in range(1,21):
+                xdo("mousemove",*(round(origin[i]+(target[i]-origin[i])*step/20) for i in (0,1)));time.sleep(.04)
+            time.sleep(.4);xdo("mouseup",1)
+            wait(lambda s:s["current_provider"]=="local-files" and s["current"]==identity and s["playback"]=="Playing" and (s["audio_metrics"] or {}).get("nonzero_samples",0)>0)
+            assert state()["local_import"]["files"]==1 and not state()["local_import"]["pending"]
+            assert drag.wait(timeout=4)==0
+        finally:
+            xdo("mouseup",1)
+            if drag.poll() is None:drag.terminate();drag.wait(timeout=4)
+    events=(out/"drag-source.log").read_text()
+    assert '"event": "provided-owned-uri"' in events and '"event": "drag-ended"' in events
+    xdo("windowraise",window);xdo("windowfocus","--sync",window)
+    capture("native-file-drop-output");tap("stop");report["close_ms"]=close()
+    assert hashlib.sha256(selected.read_bytes()).hexdigest()==digest
+    report.update(result="pass",local_identity=identity,original_sha256=digest,original_preserved=True,checks=["owned native chooser / Unicode selection","Escape / app cancel / own child reaped","invalid WAV preserves metadata","bounded real file output / pause / seek","duplicate occurrences / previous / forward","favorite removal preserves source and queue","same canonical path reuses identity","private index / fresh process restoration without automatic IO","real GTK/Xdnd Unicode file drop / real PCM / reused identity","dark/light UI"])
+    (out/"report.json").write_text(json.dumps(report,indent=2)+"\n");print(out)
+
+
+if args.local_import_only:
+    try:local_import_ui()
+    except BaseException as error:
+        (out/"failure.json").write_text(json.dumps(dict(report,result="failed",error=str(error),wait_trace=wait_trace,last_state=state() if process and process.poll() is None else None),indent=2)+"\n")
+        if process and process.poll() is None:
+            try:close()
+            except Exception:process.terminate();process.wait(timeout=8)
+        raise
+    raise SystemExit(0)
 
 
 if args.seek_boundary_only:

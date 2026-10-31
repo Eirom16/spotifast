@@ -537,3 +537,14 @@ Avance de WAV largo (`a39ce24`): CI enfocada `41155541994`, suite física comple
 La primera corrección de CPU (`03ef929`) ya tiene comparación física y suite ordinaria aprobada: muestra larga 289 ms CPU/1101 ms frente a 652/1100 anteriores. Se detectó además un gesto de seek que podía heredarse al cambiar de ocurrencia; `539fdbf` lo vincula a la ocurrencia y está en validación con un caso específico. Cerrar este defecto precede a la selección/importación general de archivos; no cambia el alcance pendiente de MediaSession ni cuenta opcional.
 
 Cierre del gesto de seek (`539fdbf`): CI `41212891370`, caso XTest y caso ADB de 3 s mantenido aprobados, además de 22 capturas ordinarias y restauración en proceso nuevo. Instalado en laptop y SM-J701M. Quedan avisos CPAL intermitentes sin captura acústica; el siguiente corte de producto es importar/abrir WAV reales, con localizadores privados persistentes y sin duplicar reglas de cola. El índice está en preparación; autenticación, MediaSession y streaming remoto continuo conservan sus gates pendientes.
+
+
+Importación WAV Linux cerrada (`d07e76a`): selector y arrastre GTK/Xdnd reales,
+PCM16 mono/estéreo, worker cancelable, índice privado atómico y restauración
+sin apertura automática. CI enfocada `41221845085` aprobada; instalado como
+Doremi Native Dev. APK del mismo SHA actualizada en el SM-J701M: suite física
+22 capturas y restauración 2 capturas PASS, favoritos conservados; persisten
+avisos CPAL puntuales. Regresión completa `41223684373` en curso, aún sin gate
+verde atribuido. Siguiente prioridad: selección Android con SAF y los mismos
+contratos neutrales, antes de más formatos/MediaSession. Autenticación opcional
+y gate estable Linux/Windows/Android permanecen posteriores, sin releases.

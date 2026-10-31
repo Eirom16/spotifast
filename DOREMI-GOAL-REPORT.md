@@ -8,13 +8,13 @@ ARMv7 (sistema de 32 bits), 720×1280, densidad efectiva 300 dpi,
 MemTotal 1.843.892 kB. Depuración USB autorizada. No registrar número de serie.
 Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
-Estado actual (2026-10-31): APK y Doremi Native Dev Linux `539fdbf`, descargados de CI e instalados conservando datos. Suite física completa PASS (22 capturas), restauración en proceso nuevo PASS (2 capturas), WAV de 120 s con buffer PCM de 64 KiB y controles probados. El gesto de seek mantenido durante 3 s ya no salta la siguiente ocurrencia: reproducido antes y corregido después en Linux y Samsung. La CPU del audio bajó en las muestras físicas; persisten avisos CPAL intermitentes, documentados sin prometer ausencia total de cortes. Las cuatro canciones de demostración siguen siendo metadatos silenciosos.
+Estado actual (2026-10-31): APK y Doremi Native Dev Linux `d07e76a`, descargados de CI e instalados conservando datos. Linux importa WAV PCM16 mono/estéreo mediante selector nativo o arrastre, reproduce con buffer PCM de 64 KiB y restaura su biblioteca con identidades neutrales. QA real XTest/GTK aprobada, incluida selección Unicode, rechazo de WAV inválido, cancelación, controles y restauración. Android conserva audio local/online experimental: suite física PASS (22 capturas) y restauración en proceso nuevo PASS (2). La importación general de archivos Android sigue pendiente. Las cuatro canciones de demostración siguen siendo metadatos silenciosos.
 
-CI enfocada `41212891370`: ambos hosts aprobados (19 tests app, 13 player, Clippy y empaquetado). Regresión completa `41155115847` sobre `57a0205` (anterior a correcciones posteriores): nueve jobs verdes, incluida la Preview conservada y Windows/macOS del legado. No se atribuye ese gate completo al SHA posterior. La Preview de ese gate se descargó y verificó por hashes externos/internos y ELF (`target/downloaded-ci/preview-57a0205/verified-archive.json`); no se sustituyó la Preview instalada. Los cambios posteriores nativos tienen CI enfocada y pruebas de dispositivo con su SHA explícito.
+CI enfocada `41221845085`: ambos hosts aprobados (13 tests library, 22 app, 13 player, Clippy y empaquetado). Regresión completa `41223684373` en curso sobre el mismo `d07e76a`; aún no se declara verde. La última regresión completa aprobada sigue siendo `41155115847` sobre `57a0205`, anterior a las correcciones posteriores. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
 
 El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
-Pendientes: selector/importación general de archivos, más formatos, streaming remoto continuo, MediaSession/background, proveedor productivo y cuenta opcional. La CPU del WAV largo en el teléfono merece optimización; no se confunde con consumo de batería. No se capturó salida acústica ni micrófono. El historial siguiente conserva pruebas, fallos y correcciones; sus pendientes corresponden a cada iteración.
+Pendientes: selector/importación general de archivos en Android, más formatos, streaming remoto continuo, MediaSession/background, proveedor productivo y cuenta opcional. La CPU del WAV largo en el teléfono merece optimización; no se confunde con consumo de batería. No se capturó salida acústica ni micrófono. El historial siguiente conserva pruebas, fallos y correcciones; sus pendientes corresponden a cada iteración.
 
 Primeras iteraciones CI:
 - `40769993298` (`0aac395`): quick y core Android aprobados; APK falló antes
@@ -446,3 +446,54 @@ Corrección `539fdbf` en validación (`41212891370`): identidad del slider vincu
 El caso ADB adicional mantuvo el seek en EOF 3000 ms y comprobó la siguiente ocurrencia reproduciéndose a 2480 ms, con muestras de salida positivas. El mismo caso antes (`03ef929`) había terminado en Stopped saltando ambas pistas. Evidencia: `target/android-qa/{03ef929fc912,539fdbf2f8ba}/thread-held-seek-*.json`. El caso corregido tuvo un aviso CPAL en frame 1924 y la restauración un aviso en frame 0; no se ocultan ni se equiparan a vaciados del canal PCM propio. Sin micrófono, acústica ni batería medidos.
 
 Linux pasó tanto el caso específico de gesto mantenido como el recorrido WAV completo. La captura antes muestra Stopped sin selección; después muestra el siguiente arpegio a ~2 s/Playing. Evidencia: `target/native-seek-boundary-{before-03ef929,after-539fdbf}/`, `target/native-long-ui-539fdbf/`. Instalado como Doremi Native Dev, SHA-256 `cd3f45cb7565c317eddcfb0e4376de32e5ed7b7f31fd00d871dc8e3f175d8708`. Ya puede probarse Inicio → Probar WAV de 2 minutos en ambos hosts. Siguiente corte activo: entrada de archivos WAV reales y sus localizadores privados persistentes, separados de IDs/metadatos/cola. El índice nuevo está en desarrollo local; aún no se anuncia importación funcional.
+
+## Importación WAV real en Linux y nueva validación física
+
+Código `d07e76a9885f3f0fff3e37287c0d49059ca4fa03`, CI enfocada
+[41221845085](https://github.com/Eirom16/spotifast/actions/runs/41221845085)
+aprobada. `23d8996` falló por usar el campo antiguo de DroppedFile; `b594aed`
+corrigió el acceso al método de egui fijado y la publicación privada del índice.
+No se rebajaron los gates ni se modificó la Preview.
+
+El selector Linux y la inspección WAV corren en un worker acotado, cancelable
+y con generación/deadline. El Model compartido conserva la única cola y
+biblioteca; el índice separado guarda localizadores privados, no URLs ni
+credenciales. Las escrituras del índice (0600) preceden a sus referencias y
+un error impide publicar datos colgantes. El callback sigue sin IO.
+
+Prueba reproducible: `scripts/native-file-import-qa.py`, evidencia
+`target/native-local-import-d07e76a-drag2/report.json`. Se generó exclusivamente
+una derivación de la escala original CC0: WAV estéreo, 16 kHz, 120 s,
+SHA-256 `c7d146d2625aab23837fe07411c3a3437c129baee9ac4193343b8f9cbe8b8ecf`.
+Se comprobaron selector nativo y texto Unicode, Escape/cancelación y recolección
+del hijo propio, WAV inválido sin mutación, PCM real, pausa/seek, duplicados por
+ocurrencia, Previous/forward, quitar favorito sin borrar fuente ni cola,
+reutilización de identidad, reinicio sin apertura/red automática, temas y
+arrastre GTK/Xdnd real mediante XTest hasta salida PCM. El original conserva su
+hash. Capturas revisadas en el directorio de evidencia, fuera de git.
+
+Los primeros intentos de QA fallaron al heredar el portal de la sesión y al
+retornar el puntero desde GTK sin movimiento posterior a CursorEntered.
+Se aisló el bus/display/datos GTK de QA y se verificó posición egui antes del
+toque. El mismo caso inválido-primero pasó con `b594aed`, anterior a los
+nuevos diagnósticos, descartando atribuir el arreglo a un cambio del botón.
+El primer helper de arrastre importó Gdk 4 por defecto; se fijó Gdk/Gtk 3 y
+se repitió con éxito. No se alteró la configuración de seguridad del sistema.
+
+Reconexión física: mismo Samsung SM-J701M autorizado, API 28/ARMv7. APK
+SHA-256 `89f113710cf35e3a89af4b50d5b2343fdff5bb621f9d11362a57cdd3cb61ebf0`,
+actualización ADB exitosa sin borrar datos. Suite ordinaria y restauración:
+`target/android-qa/d07e76a9885f/{instrumentation,library-restore}/summary.json`,
+ambas PASS. Favoritos previos preservados; el caso de quitar uno preexistente
+se omite deliberadamente. Muestra WAV largo: 1.192.328 frames, volumen 0,08,
+48 kHz, 65.536 bytes PCM, cero buffer_underruns y un aviso CPAL en frame 1924.
+Restauración online: un aviso CPAL en frame 0. Sin errores críticos detectados
+en logs del proceso; no hay medición acústica ni promesa de ausencia de cortes.
+
+Linux instalado como Doremi Native Dev, SHA-256 del binario
+`708deaf406bdf0a0b09a17e3a7d6206e34eaeab579cbfecd4952faddbf54e311`.
+La UI se verificó en Xvfb/Mesa software, no en Wayland/GPU física. ARM64/16 KiB
+continúan como gate estático, no ejecutado en este teléfono ARMv7/4 KiB.
+Siguiente corte: importación Android mediante selección explícita del usuario,
+sin permiso de almacenamiento general, sin recorrer archivos personales y
+reutilizando el Model/Index/engine compartidos. Cuenta opcional sigue posterior.
