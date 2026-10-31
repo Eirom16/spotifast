@@ -282,6 +282,13 @@ panic = "abort"
 [profile.dev.package."*"]
 opt-level = 2
 
+# Workspace members are excluded from the wildcard above. The shared audio
+# decoder/callback also needs optimized arithmetic in development APKs; keep
+# debug assertions and the host/UI profile unchanged. Physical ARMv7 evidence
+# is recorded in DOREMI-GOAL-REPORT.md.
+[profile.dev.package.doremi-player]
+opt-level = 2
+
 # projectm-sys names the library it links after Rust's profile (a `d` suffix
 # for dev) but CMake names what it builds after the optimisation level, so an
 # optimised dev build would look for a library that was never made. A debug

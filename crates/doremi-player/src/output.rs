@@ -618,6 +618,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
     } = state;
     let channels = usize::from(config.channels);
     let errors = stats.clone();
+    let mut first_callback = true;
     device
         .build_output_stream(
             config,
@@ -678,13 +679,12 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                     }
                 }
                 stats.nonzero.fetch_add(nonzero, Ordering::Relaxed);
-                if delivered > 0 {
-                    let _ = stats.first_callback.compare_exchange(
-                        0,
+                if delivered > 0 && first_callback {
+                    stats.first_callback.store(
                         started.elapsed().as_micros().max(1) as u64,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
+                        Ordering::Release,
                     );
+                    first_callback = false;
                 }
                 stats.frames.fetch_add(delivered, Ordering::Relaxed);
                 stats.callbacks.fetch_add(1, Ordering::Relaxed);

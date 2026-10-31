@@ -43,6 +43,7 @@ impl Feed {
                         return;
                     }
                 };
+                let mut first_pcm = true;
                 loop {
                     if stop.load(Ordering::Acquire)
                         || control.epoch.load(Ordering::Acquire) != epoch
@@ -61,12 +62,13 @@ impl Feed {
                             return;
                         }
                     };
-                    let _ = stats.first_pcm.compare_exchange(
-                        0,
-                        started.elapsed().as_micros().max(1) as u64,
-                        Ordering::AcqRel,
-                        Ordering::Acquire,
-                    );
+                    if first_pcm {
+                        stats.first_pcm.store(
+                            started.elapsed().as_micros().max(1) as u64,
+                            Ordering::Release,
+                        );
+                        first_pcm = false;
+                    }
                     while sender.try_push(frame).is_err() {
                         if stop.load(Ordering::Acquire)
                             || control.epoch.load(Ordering::Acquire) != epoch
