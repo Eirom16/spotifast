@@ -438,10 +438,15 @@ public final class DoremiInstrumentation extends Instrumentation {
         until(15000,"selected document completion",data -> !data.optJSONObject("local_import").optBoolean("pending"));
     }
     private String savedDocument(JSONObject data) throws Exception {
-        JSONArray items=data.getJSONArray("saved_media");
+        // qa-state deliberately exposes only qualified IDs. Check the durable
+        // collection for metadata, then require the same ID in the live model.
+        JSONArray items=privateDocument("library-v1.json").getJSONArray("items");
         for(int i=0;i<items.length();i++) {
             JSONObject item=items.getJSONObject(i);
-            if("local-files".equals(item.optString("provider")) && "Original Café estéreo".equals(item.optString("title"))) return item.getString("id");
+            if("local-files".equals(item.optString("provider")) && "Original Café estéreo".equals(item.optString("title"))) {
+                JSONArray saved=data.getJSONArray("saved_media");
+                for(int j=0;j<saved.length();j++) if(item.getString("id").equals(saved.getJSONObject(j).optString("id")) && "local-files".equals(saved.getJSONObject(j).optString("provider"))) return item.getString("id");
+            }
         }
         return "";
     }
@@ -456,6 +461,12 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("Selector cancellation changed existing favorites");
             chooseOwnDocument("Invalid.wav");until(data -> data.optString("notice").contains("no es WAV"));
             if(!originalLibrary.equals(state().getJSONArray("saved_media").toString())) throw new AssertionError("An invalid document changed existing favorites");
+            boolean visibleError=false;JSONObject invalidState=state();JSONArray invalidControls=invalidState.getJSONArray("controls");
+            for(int i=0;i<invalidControls.length();i++) {
+                JSONObject control=invalidControls.getJSONObject(i);JSONArray rect=control.getJSONArray("rect");
+                if("import-feedback".equals(control.optString("name")) && rect.getDouble(1)>=60 && rect.getDouble(3)<invalidState.getJSONArray("viewport").getDouble(1)-60) visibleError=true;
+            }
+            if(!visibleError) throw new AssertionError("Import error is outside the visible library content");
             capture("qa-document-invalid");
             chooseOwnDocument("Original Café estéreo.wav");
             until(15000,"private document output",data -> "local-files".equals(data.optString("current_provider")) && "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);

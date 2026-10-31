@@ -6,6 +6,8 @@ use persistence::local_files::Index;
 pub struct State {
     pub index: Index,
     pub writable: bool,
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub feedback: Option<(bool, &'static str)>,
     #[cfg(target_os = "android")]
     pub selector: Option<u64>,
     #[cfg(target_os = "android")]
@@ -22,6 +24,8 @@ impl State {
         Self {
             index: Index::default(),
             writable: true,
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            feedback: None,
             #[cfg(target_os = "android")]
             selector: None,
             #[cfg(target_os = "android")]
@@ -100,10 +104,15 @@ impl Model {
             }
         }
     }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn local_feedback(&mut self, error: bool, message: &'static str) {
+        self.local_files.feedback = Some((error, message));
+        self.notice = message.into();
+    }
     pub fn cancel_local_import(&mut self) {
         #[cfg(target_os = "android")]
         if self.local_files.selector.take().is_some() {
-            self.notice = "Importación cancelada.".into();
+            self.local_feedback(false, "Importación cancelada.");
             self.revision += 1;
         }
         #[cfg(any(target_os = "linux", target_os = "android"))]
@@ -111,19 +120,22 @@ impl Model {
             if let Some(worker) = &self.local_files.worker {
                 worker.cancel();
             }
-            self.notice = "Importación cancelada.".into();
+            self.local_feedback(false, "Importación cancelada.");
             self.revision += 1;
         }
     }
     #[cfg(target_os = "linux")]
     pub fn open_local(&mut self, path: Option<PathBuf>, ctx: &egui::Context) {
         if !self.local_files.writable || !self.write_library {
-            self.notice =
-                "Importación no disponible: los datos existentes son de solo lectura.".into();
+            self.local_feedback(
+                true,
+                "Importación no disponible: los datos existentes son de solo lectura.",
+            );
             self.revision += 1;
             return;
         }
         self.cancel_local_import();
+        self.local_files.feedback = None;
         if self.local_files.worker.is_none() {
             self.local_files.worker = Worker::new().ok();
         }
@@ -141,19 +153,25 @@ impl Model {
                 self.local_files.pending = Some(id);
                 self.notice = "Selecciona un WAV para importarlo a tu biblioteca.".into();
             }
-            Err(_) => self.notice = "No se pudo iniciar la importación. Inténtalo de nuevo.".into(),
+            Err(_) => self.local_feedback(
+                true,
+                "No se pudo iniciar la importación. Inténtalo de nuevo.",
+            ),
         }
         self.revision += 1;
     }
     #[cfg(target_os = "android")]
     pub fn open_local(&mut self, _: Option<PathBuf>, _: &egui::Context) {
         if !self.local_files.writable || !self.write_library {
-            self.notice =
-                "Importación no disponible: los datos existentes son de solo lectura.".into();
+            self.local_feedback(
+                true,
+                "Importación no disponible: los datos existentes son de solo lectura.",
+            );
             self.revision += 1;
             return;
         }
         self.cancel_local_import();
+        self.local_files.feedback = None;
         self.local_files.generation = self.local_files.generation.saturating_add(1);
         self.local_files.selector = Some(self.local_files.generation);
         self.notice = "Selecciona un WAV local. Se guardará una copia privada.".into();
@@ -166,12 +184,12 @@ impl Model {
         }
         self.local_files.selector = None;
         if uri.is_empty() {
-            self.notice = "Importación cancelada.".into();
+            self.local_feedback(false, "Importación cancelada.");
             self.revision += 1;
             return;
         }
         if !uri.starts_with("content://") || uri.len() > 4096 || uri.chars().any(char::is_control) {
-            self.notice = "El selector no devolvió un documento compatible.".into();
+            self.local_feedback(true, "El selector no devolvió un documento compatible.");
             self.revision += 1;
             return;
         }
@@ -193,7 +211,7 @@ impl Model {
                 self.local_files.pending = Some(id);
                 self.notice = "Importando WAV…".into();
             }
-            Err(_) => self.notice = "No se pudo iniciar la importación.".into(),
+            Err(_) => self.local_feedback(true, "No se pudo iniciar la importación."),
         }
         self.revision += 1;
     }
@@ -218,7 +236,7 @@ impl Model {
         match event.result {
             Ok(meta) => self.accept_local(meta),
             Err(error) => {
-                self.notice = match error {
+                let message = match error {
                     Error::Cancelled => "Importación cancelada.",
                     Error::Deadline => "La importación agotó su tiempo de espera.",
                     Error::Format => "Este archivo no es WAV PCM16 mono o estéreo compatible.",
@@ -229,8 +247,8 @@ impl Model {
                     Error::Busy => "La importación está ocupada. Inténtalo de nuevo.",
                     #[cfg(target_os = "android")]
                     Error::TooLarge => "El archivo supera el límite de importación de 256 MiB.",
-                }
-                .into();
+                };
+                self.local_feedback(error != Error::Cancelled, message);
                 self.revision += 1;
             }
         }
@@ -254,12 +272,13 @@ impl Model {
         let mut files = self.local_files.index.clone();
         let mut library = self.library.clone();
         if files.insert(id, meta.path.clone()).is_err() || library.save(media.clone()).is_err() {
-            self.notice="La biblioteca o el índice alcanzaron su límite. Los datos anteriores se conservan.".into();
+            self.local_feedback(true, "La biblioteca o el índice alcanzaron su límite. Los datos anteriores se conservan.");
             self.revision += 1;
             return;
         }
         self.local_files.index = files;
         self.library = library;
+        self.local_files.feedback = Some((false, "WAV añadido a tu biblioteca."));
         #[cfg(target_os = "linux")]
         if let Some(parent) = meta.path.parent() {
             self.local_files.directory = parent.to_path_buf();

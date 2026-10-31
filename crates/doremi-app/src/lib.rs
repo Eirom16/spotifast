@@ -992,6 +992,10 @@ impl DoremiApp {
                                 ui.label("Importación en curso…");
                                 if self.button(ui,"cancel-import","Cancelar importación",220.0) {self.model.as_mut().unwrap().cancel_local_import();}
                             } else if self.button(ui,"import-wav","Importar WAV",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
+                            if !self.model.as_ref().unwrap().local_files.pending() && let Some((error,message))=self.model.as_ref().unwrap().local_files.feedback {
+                                let response=if error {ui.colored_label(ui.visuals().error_fg_color,message)} else {ui.label(message)};
+                                self.controls.push(Control{name:"import-feedback".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
+                            }
                             #[cfg(target_os = "linux")]
                             ui.small("WAV PCM16, mono o estéreo. También puedes arrastrarlo a Doremi.");
                             #[cfg(target_os = "android")]
