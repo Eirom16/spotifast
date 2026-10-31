@@ -252,9 +252,10 @@ impl Writer {
                     // Publish locators before documents that can reference them.
                     // On failure leave the previous library/queue intact and let
                     // the caller retry the complete accepted snapshot.
-                    let saved = files.encode().ok().is_some_and(|bytes| {
-                        atomic_write(&directory, "local-files-v1.json", &bytes, true).is_ok()
-                    });
+                    let saved = files
+                        .encode()
+                        .ok()
+                        .is_some_and(|bytes| atomic_locators(&directory, &bytes).is_ok());
                     if !saved {
                         eprintln!("Doremi local file index persistence failed");
                         output.failed.store(true, Ordering::Release);
@@ -370,6 +371,54 @@ impl Writer {
         drop(self.sender);
         let _ = self.worker.join();
     }
+}
+// Private locator paths get exclusively created temporary files. Never truncate
+// an unknown stale temp or follow a temp symlink. Existing documents retain their
+// original writer behavior and compatibility.
+fn atomic_locators(directory: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    static TEMPORARY: AtomicUsize = AtomicUsize::new(1);
+    std::fs::create_dir_all(directory)?;
+    let mut opened = None;
+    for _ in 0..4 {
+        let nonce = TEMPORARY
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .map_err(|_| std::io::Error::other("Temporary counter exhausted"))?;
+        let temporary = directory.join(format!(
+            ".local-files-v1-{}-{nonce}.tmp",
+            std::process::id()
+        ));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&temporary) {
+            Ok(file) => {
+                opened = Some((temporary, file));
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    let (temporary, mut file) =
+        opened.ok_or_else(|| std::io::Error::other("No exclusive temporary available"))?;
+    let result = (|| {
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temporary, directory.join("local-files-v1.json"))?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    result
 }
 fn atomic_write(directory: &Path, name: &str, bytes: &[u8], durable: bool) -> std::io::Result<()> {
     use std::io::Write;
@@ -542,6 +591,11 @@ mod storage_tests {
         files
             .insert(first.clone(), directory.join("original.wav"))
             .unwrap();
+        std::fs::write(
+            directory.join("local-files-v1.tmp"),
+            b"preserve unknown temporary",
+        )
+        .unwrap();
         let writer = Writer::new(directory.clone());
         let id = writer
             .submit_documents(None, None, None, Some(files.clone()), b"{}".to_vec())
@@ -557,7 +611,22 @@ mod storage_tests {
             Some(directory.join("original.wav").as_path())
         );
         writer.shutdown();
-        assert!(!directory.join("local-files-v1.tmp").exists());
+        assert_eq!(
+            std::fs::read(directory.join("local-files-v1.tmp")).unwrap(),
+            b"preserve unknown temporary"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(directory.join("local-files-v1.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]

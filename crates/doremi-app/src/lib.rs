@@ -859,7 +859,10 @@ impl DoremiApp {
             let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
             if !dropped.is_empty() {
                 if dropped.len() == 1
-                    && let Some(path) = dropped.into_iter().next().and_then(|file| file.path)
+                    && let Some(path) = dropped
+                        .into_iter()
+                        .next()
+                        .map(|file| file.path().to_path_buf())
                 {
                     self.model.as_mut().unwrap().open_local(Some(path), &ctx);
                 } else {
