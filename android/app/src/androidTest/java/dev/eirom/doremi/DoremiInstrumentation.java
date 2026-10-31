@@ -394,13 +394,22 @@ public final class DoremiInstrumentation extends Instrumentation {
         }
         throw new AssertionError("Document control remained outside the visible content");
     }
+    private void documentReturned(long previousInstance) throws Exception {
+        foreground();
+        until(data -> data.optLong("instance")!=previousInstance);
+        // Window focus is delivered before the outgoing picker animation stops
+        // intercepting touches on this Samsung/API 28. Do not grant injection
+        // permission or send a touch into that foreign transition window.
+        SystemClock.sleep(750);foreground();
+    }
     private void cancelOwnDocumentPicker() throws Exception {
+        long previousInstance=state().getLong("instance");
         // Own folder was verified immediately before entering this method.
         // Back navigates directories before it finishes DocumentsUI on API 28.
         for(int attempt=0;attempt<8;attempt++) {
             android.view.accessibility.AccessibilityNodeInfo root=automation().getRootInActiveWindow();
             String owner=root==null?"":String.valueOf(root.getPackageName());
-            if(getTargetContext().getPackageName().equals(owner)) {foreground();return;}
+            if(getTargetContext().getPackageName().equals(owner)) {documentReturned(previousInstance);return;}
             if(!"com.android.documentsui".equals(owner)) throw new AssertionError("Owned document picker lost foreground; no key injected");
             long time=SystemClock.uptimeMillis();
             automation().injectInputEvent(new android.view.KeyEvent(time,time,android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_BACK,0),true);
@@ -412,6 +421,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private void chooseOwnDocument(String filename) throws Exception {
         lastAction="select-owned-document";
+        long previousInstance=state().getLong("instance");
         documentControl("import-wav");
         android.view.accessibility.AccessibilityNodeInfo node=ownPickerNode(filename);
         android.graphics.Rect bounds=new android.graphics.Rect();node.getBoundsInScreen(bounds);
@@ -424,7 +434,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,bounds.centerX(),bounds.centerY(),0);
         up.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
         if(!automation().injectInputEvent(up,true)) throw new AssertionError("Owned picker release rejected");up.recycle();
-        foreground();
+        documentReturned(previousInstance);
         until(15000,"selected document completion",data -> !data.optJSONObject("local_import").optBoolean("pending"));
     }
     private String savedDocument(JSONObject data) throws Exception {
