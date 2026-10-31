@@ -8,9 +8,9 @@ ARMv7 (sistema de 32 bits), 720×1280, densidad efectiva 300 dpi,
 MemTotal 1.843.892 kB. Depuración USB autorizada. No registrar número de serie.
 Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
-Estado actual (2026-10-31): APK y Doremi Native Dev Linux `02b686b`, descargados de CI e instalados conservando datos. Ambos importan WAV PCM16 mono/estéreo y reproducen con buffer PCM de 64 KiB. Android usa el selector del sistema y una copia privada (hasta 256 MiB), Linux selector o arrastre. La suite específica física de importación/restauración pasó con siete capturas y la suite general con otras 22; Linux pasó su QA real de selección/arrastre/restauración. El WAV original y los favoritos anteriores se conservaron. El error de formato ya aparece junto al botón y no queda oculto bajo las tarjetas.
+Estado actual (2026-10-31): Android `02b686b` instalado y validado con importación WAV real, siete capturas específicas y 22 de regresión general; Linux Native Dev actualizado a `ec06121` con WAV y FLAC importables, selección/arrastre/controles/restauración aprobados. Ambos usan el mismo Model/cola/índice y canal PCM acotado. La prueba Android FLAC queda pendiente: ADB dejó de detectar el teléfono después del hito WAV. Su APK está descargado y verificado, sin atribuirle ejecución física.
 
-CI enfocada `41243539529` sobre `02b686b`: ambos hosts aprobados (15 tests library, 23 app, 13 player, Clippy y empaquetado). Regresión completa `41244383738` aprobada sobre el mismo commit: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
+CI enfocada `41247046616` sobre `ec06121`: ambos hosts aprobados (15 tests library, 23 app, 16 player, Clippy y empaquetado). Regresión completa `41248095448` en curso sobre ese commit; todavía no se declara verde. La última completa aprobada es `41244383738` sobre `02b686b`: nueve jobs, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; archivo del mismo `02b686b` descargado/verificado. No se atribuyen gates de un SHA a otro.
 
 El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
@@ -631,3 +631,46 @@ Siguiente prioridad viable: ampliar formatos locales y controles de plataforma,
 con el mismo dueño de cola/identidad/persistencia y datos anteriores protegidos.
 
 Cierre de regresión WAV: CI completa `41244383738` aprobada, nueve jobs sobre `02b686b`. La Preview del mismo commit se descargó para verificación; su instalación previa se conserva. El siguiente trabajo FLAC permanece experimental y aún no se atribuye al software instalado.
+
+
+Preview `02b686b` descargada/verificada sin sustituir la instalada:
+`target/downloaded-ci/preview-02b686b/verified-archive.json`, SHA-256 del archivo
+`de3af4c5086819cde01997bcfbd4bf87693b263ad27c732058182e4209bb4c60`,
+binario `681095368214788003400ba5bb24ea5f5a60c14a48b6976abf29f9e43d1d7dc6`.
+Coinciden hashes externos/internos, commit, versión 0.1.0 y ELF64 x86_64;
+audio false/release false. CI completa `41244383738` verde.
+
+Corte FLAC experimental `ec06121`, CI enfocada `41247046616` en curso.
+Symphonia 0.5.5/MPL-2.0 sin modificar, metadatos acotados, un bloque por vez,
+la misma interpolación y canal PCM fijo, detección por contenido y los mismos
+IDs/cola/persistencia. Quince tests player con FLAC+Ogg y Clippy, más checks
+ligeros, aprobados localmente. Paridad exacta con el WAV CC0, seek/remuestreo,
+EOF y truncación probados; no se afirma todavía reproducción FLAC nativa.
+ADB dejó de detectar el teléfono tras cerrar el hito WAV; se continúa con CI
+y Linux y se reanudará Android cuando vuelva a estar disponible. No se ha
+instalado el candidato FLAC ni se considera validado físicamente.
+
+
+FLAC Linux `ec06121`: CI enfocada `41247046616` aprobada. QA real
+`target/native-local-flac-ec06121/report.json` PASS: FLAC estéreo/16 kHz/120 s
+original CC0, selección Unicode, arrastre GTK/Xdnd, pausa/seek, duplicados,
+Previous/forward, conservación de fuente/cola/favoritos y restauración en
+proceso nuevo. Capturas revisadas; render Xvfb/Mesa software y salida nativa,
+sin medición acústica ni de GPU física. La regresión WAV del mismo binario
+`target/native-local-wav-ec06121/report.json` también PASS.
+FLAC SHA-256 `be57f0f12ef2216bbaf315fa86ed936953620ad334109d0aed474446e6a89735`,
+derivado exclusivamente del original CC0; no se descargó música ajena.
+
+Linux instalado: binario SHA-256
+`6ee5a9779d166e44769ed290116551d5c5c248dca6dcfb0156633d6a7168ed78`,
+con datos/builds previos conservados. El canal de salida sigue en 8192 frames;
+FLAC añade buffers de codec/conversión acotados a un bloque y 64 KiB de
+entrada, no una copia PCM completa. No se presenta 64 KiB como RAM total del
+proceso ni de todos los buffers del decoder.
+
+APK `ec06121` descargado automáticamente, hash/manifest/ABI/alineación
+verificados: SHA-256
+`c86663014e5b7244c8497e82ea59fe0f8cb1e5e963e6e407d25b1d28cb9353f6`.
+No instalado ni ejecutado: no hay dispositivo USB accesible. El teléfono
+mantiene la APK WAV `02b686b` probada; se retomará FLAC sin borrar datos cuando
+regrese. Regresión completa `41248095448` en curso, sin releases publicadas.

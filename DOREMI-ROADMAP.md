@@ -561,3 +561,12 @@ productivo y cuenta opcional posteriores. La política estable de tres
 plataformas y autorización de publicación continúa vigente, sin releases.
 
 Regresión completa del hito WAV `02b686b`: `41244383738`, nueve jobs aprobados, incluida la Preview. La pareja Linux/Android instalada conserva ese commit validado mientras se desarrolla soporte FLAC en el mismo motor/cola, sin anunciarlo todavía como función probada.
+
+
+FLAC Linux verificado (`ec06121`): mismo motor/cola/índice, detección por contenido,
+interpolación compartida y decoder Symphonia sin modificar. CI enfocada
+`41247046616` aprobada; selección/arrastre/controles/restauración FLAC y
+regresión WAV reales PASS. Native Dev Linux actualizado conservando datos.
+APK descargado/verificado, Android FLAC pendiente por desconexión USB; el
+WAV físico `02b686b` sigue probado/instalado. Completa `41248095448` en curso.
+No se anuncia FLAC Android ni una release estable hasta cerrar sus gates.
