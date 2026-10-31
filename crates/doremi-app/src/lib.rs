@@ -14,6 +14,9 @@ mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
 use doremi_library as persistence;
+#[cfg(target_os = "linux")]
+mod file_input;
+mod local_media;
 mod saved;
 #[cfg(not(target_os = "android"))]
 mod wav_probe;
@@ -104,6 +107,7 @@ struct Model {
     original_path: Option<PathBuf>,
     // Transient CLI-selected file capability, separate from saved metadata.
     wav_input: Option<(MediaId, PathBuf)>,
+    local_files: local_media::State,
     // Source data, not a second queue. Only the explicit bounded CLI corpus
     // populates this cache; no arbitrary files or persisted transport URIs.
     prepared: Vec<(MediaId, Arc<Pcm>)>,
@@ -170,6 +174,7 @@ impl Model {
             focus: !cfg!(target_os = "android"),
             original_path: None,
             wav_input: None,
+            local_files: local_media::State::new(),
             prepared: Vec::new(),
             #[cfg(any(target_os = "linux", target_os = "android"))]
             online: online_model::State::new(),
@@ -206,6 +211,7 @@ impl Model {
             }
         }
         model.load_library(directory);
+        model.load_local_files(directory);
         match persistence::read(directory, "queue-v1.json") {
             Ok(Some(bytes)) => match persistence::decode(&bytes).and_then(|checkpoint| {
                 model
@@ -234,6 +240,9 @@ impl Model {
     }
     fn command(&mut self, command: Command) {
         let cancelled = matches!(&command, Command::Cancel);
+        if cancelled {
+            self.cancel_local_import();
+        }
         if let Command::Append(media) = &command
             && self.queue.manual().len().saturating_add(media.len())
                 > doremi_core::queue::checkpoint::ENTRY_LIMIT
@@ -268,6 +277,7 @@ impl Model {
         self.queue.current().is_some_and(|entry| {
             Builtin::from_media(&entry.media.id).is_some()
                 || doremi_player::original_long::matches(&entry.media.id)
+                || self.local_files.index.get(&entry.media.id).is_some()
                 || self
                     .wav_input
                     .as_ref()
@@ -326,6 +336,10 @@ impl Model {
                                         )
                                     }),
                             )
+                        } else if let Some(path) = self.local_files.index.get(&entry.media.id) {
+                            Some(self.audio.as_mut().ok_or(EngineError::Closed).and_then(
+                                |engine| engine.load_wav(request, path.to_path_buf(), position_ms),
+                            ))
                         } else if let Some((_, path)) = self
                             .wav_input
                             .as_ref()
@@ -427,6 +441,7 @@ impl Model {
         }
     }
     fn start_context(&mut self, rows: Vec<Media>, start: usize) {
+        self.cancel_local_import();
         let order = if self.queue.shuffled() {
             shuffled(rows.len(), Some(start))
         } else {
@@ -677,6 +692,16 @@ impl DoremiApp {
                     "Audio local original · 2:00 · CC0".into()
                 } else if Builtin::from_media(&media.id).is_some() {
                     "Audio local original · 0:08 · CC0".into()
+                } else if self
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .local_files
+                    .index
+                    .get(&media.id)
+                    .is_some()
+                {
+                    "Archivo WAV local".into()
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
                     "Tono de prueba online · 0:10 · CC0".into()
                 } else if demo_candidate(&media.id) {
@@ -750,6 +775,7 @@ impl DoremiApp {
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
         let state = serde_json::json!({
+            "local_import":model.local_files.snapshot(),"notice":model.notice,
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
@@ -791,10 +817,12 @@ impl DoremiApp {
         let prefs = model
             .write_prefs
             .then(|| serde_json::to_vec(&model.prefs).unwrap());
-        match self.writer.as_ref().unwrap().submit_collection(
+        match self.writer.as_ref().unwrap().submit_documents(
             prefs,
             queue,
             model.write_library.then(|| model.library.clone()),
+            (model.local_files.writable && !model.local_files.index.is_empty())
+                .then(|| model.local_files.index.clone()),
             state.clone(),
         ) {
             Ok(id) => {
@@ -826,6 +854,22 @@ impl DoremiApp {
 impl DoremiApp {
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_os = "linux")]
+        {
+            let dropped = ctx.input_mut(|input| std::mem::take(&mut input.raw.dropped_files));
+            if !dropped.is_empty() {
+                if dropped.len() == 1
+                    && let Some(path) = dropped.into_iter().next().and_then(|file| file.path)
+                {
+                    self.model.as_mut().unwrap().open_local(Some(path), &ctx);
+                } else {
+                    let model = self.model.as_mut().unwrap();
+                    model.notice = "Importa un archivo WAV cada vez.".into();
+                    model.revision += 1;
+                }
+            }
+            self.model.as_mut().unwrap().poll_local(&ctx);
+        }
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_online(&ctx);
         self.model.as_mut().unwrap().poll_audio();
@@ -934,6 +978,14 @@ impl DoremiApp {
                         let library=self.model.as_ref().unwrap().library.clone();
                         ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
                         if !self.model.as_ref().unwrap().write_library {ui.small("Solo lectura: el archivo anterior se conserva.");}
+                        #[cfg(target_os = "linux")]
+                        {
+                            if self.model.as_ref().unwrap().local_files.pending() {
+                                ui.label("Importación en curso…");
+                                if self.button(ui,"cancel-import","Cancelar importación",220.0) {self.model.as_mut().unwrap().cancel_local_import();}
+                            } else if self.button(ui,"import-wav","Importar WAV",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
+                            ui.small("WAV PCM16, mono o estéreo. También puedes arrastrarlo a Doremi.");
+                        }
                         self.rows(ui, library.items());
                     }
                     Page::Queue => {
@@ -971,7 +1023,8 @@ impl DoremiApp {
                     Page::Player => {
                         if self.model.as_ref().unwrap().real_audio() {
                             let online=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().online_candidate(&entry.media.id));
-                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else{"Muestras originales de Doremi · CC0"});
+                            let file=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().local_files.index.get(&entry.media.id).is_some());
+                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else if file {"Archivo WAV de tu biblioteca"}else{"Muestras originales de Doremi · CC0"});
                             #[cfg(target_os = "android")]
                             ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
                             let model = self.model.as_mut().unwrap();

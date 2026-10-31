@@ -76,7 +76,7 @@ jobs:
       - name: Native UI libraries and isolated graphical QA
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick zenity
       - name: Host tests and lint, without the Spotifast dependency tree
         run: |
           cargo fmt --all --check
