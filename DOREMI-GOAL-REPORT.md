@@ -8,13 +8,13 @@ ARMv7 (sistema de 32 bits), 720×1280, densidad efectiva 300 dpi,
 MemTotal 1.843.892 kB. Depuración USB autorizada. No registrar número de serie.
 Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
 
-Estado actual (2026-10-31): APK y Doremi Native Dev Linux `d07e76a`, descargados de CI e instalados conservando datos. Linux importa WAV PCM16 mono/estéreo mediante selector nativo o arrastre, reproduce con buffer PCM de 64 KiB y restaura su biblioteca con identidades neutrales. QA real XTest/GTK aprobada, incluida selección Unicode, rechazo de WAV inválido, cancelación, controles y restauración. Android conserva audio local/online experimental: suite física PASS (22 capturas) y restauración en proceso nuevo PASS (2). La importación general de archivos Android sigue pendiente. Las cuatro canciones de demostración siguen siendo metadatos silenciosos.
+Estado actual (2026-10-31): APK y Doremi Native Dev Linux `02b686b`, descargados de CI e instalados conservando datos. Ambos importan WAV PCM16 mono/estéreo y reproducen con buffer PCM de 64 KiB. Android usa el selector del sistema y una copia privada (hasta 256 MiB), Linux selector o arrastre. La suite específica física de importación/restauración pasó con siete capturas y la suite general con otras 22; Linux pasó su QA real de selección/arrastre/restauración. El WAV original y los favoritos anteriores se conservaron. El error de formato ya aparece junto al botón y no queda oculto bajo las tarjetas.
 
-CI enfocada `41221845085`: ambos hosts aprobados (13 tests library, 22 app, 13 player, Clippy y empaquetado). Regresión completa `41223684373` aprobada sobre el mismo `d07e76a`: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
+CI enfocada `41243539529` sobre `02b686b`: ambos hosts aprobados (15 tests library, 23 app, 13 player, Clippy y empaquetado). Regresión completa `41244383738` en curso sobre el mismo commit; todavía no se declara aprobada. La última regresión completa aprobada sigue siendo `41223684373` sobre `d07e76a`: nueve jobs verdes, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; no se atribuyen gates de un SHA a otro.
 
 El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
-Pendientes: selector/importación general de archivos en Android, más formatos, streaming remoto continuo, MediaSession/background, proveedor productivo y cuenta opcional. La CPU del WAV largo en el teléfono merece optimización; no se confunde con consumo de batería. No se capturó salida acústica ni micrófono. El historial siguiente conserva pruebas, fallos y correcciones; sus pendientes corresponden a cada iteración.
+Pendientes: más formatos, MediaSession/background, streaming remoto continuo, proveedor productivo y cuenta opcional. La CPU del WAV largo en el teléfono merece optimización; no se confunde con consumo de batería. No se capturó salida acústica ni micrófono. El historial siguiente conserva pruebas, fallos y correcciones; sus pendientes corresponden a cada iteración.
 
 Primeras iteraciones CI:
 - `40769993298` (`0aac395`): quick y core Android aprobados; APK falló antes
@@ -519,3 +519,113 @@ directa de library. Quince tests library, Clippy y checks ligeros aprobados.
 La selección y el audio Android de este candidato todavía NO están validados.
 Se prepara QA del selector con carpeta que solo contiene fixtures CC0 propios,
 sin capturas del selector ni enumeración de Recents personales.
+
+
+Candidato base `e144f20`: CI `41239277138` con ambos hosts aprobados.
+APK descargado con gh, hashes/manifest/ELF verificados, SHA-256
+`91a70758382acd52ccd5b2b801237c5a168fc866bff8cd79f641c97dae1babee`.
+Actualización ADB y lanzamiento correctos; suite física completa PASS, 22
+capturas, sin errores críticos detectados y favoritos anteriores conservados:
+`target/android-qa/e144f2056f52/instrumentation/summary.json`. Captura propia de
+Biblioteca revisada: el botón Importar WAV y su alcance PCM16/256 MiB aparecen
+correctamente. No se atribuye a esa suite una selección SAF que aún no ejecuta.
+
+Linux del mismo `e144f20` pasó la suite real de importación/arrastre/restauración:
+`target/native-local-import-e144f20/report.json`, y quedó instalado como Native
+Dev conservando datos y builds anteriores. La regresión completa del legado y
+Preview verde sigue correspondiendo a `d07e76a`, no al candidato posterior.
+
+`4e23cb1` añadió QA específica y conservación del resultado pendiente; su CI
+`41240158536` se canceló por la siguiente corrección. `6ea9fa6` evita que
+suspender una carga online cancele un intento independiente de documento, con
+un test sin IO/red. CI vigente `41240283311` en curso; checks ligeros locales
+aprobados. La prueba específica del selector se ejecutará solo con su APK
+verificado y una carpeta nueva con muestras CC0 propias. No se publican releases.
+
+
+Cierre de CI Rust `6ea9fa6`: `41240283311` aprobada (15 tests library,
+23 app, 13 player y gates de ambos hosts). La primera prueba SAF física
+`target/android-qa/6ea9fa688890/documents/` FALLÓ al abrir ZArchiver como
+selector predeterminado: el test no encontró su carpeta y no seleccionó ni
+capturó archivos ajenos. Se cerró únicamente la solicitud abierta por Doremi.
+
+`2dfb68a` selecciona un manejador de sistema para OPEN_DOCUMENT, prefiriendo
+DocumentsUI, con una consulta de paquetes limitada a esa acción. No modifica
+valores predeterminados ni añade permisos de almacenamiento. Reutiliza las
+bibliotecas Rust verificadas `6ea9fa6` con comprobación obligatoria del
+fingerprint; CI `41241330682`, job Android aprobado. En el teléfono el test
+sí encontró su carpeta y fixtures; falló al esperar que un solo Back cerrara
+un selector que primero navega a la carpeta superior. Biblioteca/índice no
+cambiaron; evidencia `target/android-qa/2dfb68ae7d6b/documents/`.
+
+`e5b452a` corrige solo QA: Back acotado mientras la ventana pertenece al
+selector propio y eventos de archivo con SOURCE_TOUCHSCREEN explícito.
+CI actual `41242019455`, Android aprobado y host Linux todavía en curso.
+La ejecución automática de cada push Java se reemplazó por una dispatch con
+`native_run=41240283311`, para verificar/reutilizar el Rust idéntico y no
+recompilar ambas ABI innecesariamente. Los runs cancelados no se registran
+como aprobados. Las capturas SAF siguen limitadas a la superficie de Doremi.
+
+
+Importación física funcional `e710e95` (APK con Rust `6ea9fa6` reutilizado y
+fingerprint verificado), CI `41242616062` aprobada. El modo `document-import`
+pasó: selector de sistema/carpeta propia, Back acotado, rechazo de WAV PCM24 sin
+mutar favoritos, nombre Unicode, copia privada, PCM estéreo 16 kHz de 120 s,
+pausa/seek, misma identidad al reimportar, recreación pausada y claro/oscuro.
+Cinco capturas propias en
+`target/android-qa/e710e951a1c2/documents/document-import/`. La muestra de
+1101 ms midió 214 ms CPU total del proceso y PSS 38.760 KiB; 65.536 bytes PCM,
+86.580 frames, cero vaciados y cero avisos CPAL en esa ventana. Otro estado
+posterior al reimportar registró un aviso CPAL en frame 0, sin ocultarlo.
+
+El guard del modo `document-restore` falló al buscar el título en `saved_media`,
+un resumen diagnóstico que solo contiene proveedor/ID. El nuevo proceso sí
+conservaba el ID y el índice, estaba pausado y sin audio ni worker de red.
+Una comprobación independiente ADB, con APK/hash verificados, geometría propia
+y guardas de foco, cerró y reabrió únicamente Doremi, comprobó ausencia de IO
+automática y volvió a entregar PCM desde ese mismo ID al pulsar Play:
+`target/android-qa/e710e951a1c2/manual-document-restore/report.json` PASS.
+La copia interna coincide con SHA-256
+`c7d146d2625aab23837fe07411c3a3437c129baee9ac4193343b8f9cbe8b8ecf`,
+modo 600. El original de prueba conserva su hash. Sin captura acústica.
+
+La captura del WAV rechazado mostró un defecto visible: el mensaje quedaba
+fuera de pantalla debajo de las tarjetas. `02b686b` lo coloca junto al botón de
+importación en ambos hosts, conservando layout automático/touch 48/gap 8.
+También corrige el guard de restauración para consultar la colección durable
+y requerir el mismo ID en el modelo, y exige geometría visible del error.
+Checks ligeros aprobados; CI `41243539529` en curso. Todavía no se declara
+aprobada la suite específica completa de ese candidato ni su corrección visual.
+
+
+## Importación WAV cerrada en ambos hosts
+
+`02b686be38bd44030bee2017f4de7322ccd362ff`, CI enfocada
+[41243539529](https://github.com/Eirom16/spotifast/actions/runs/41243539529)
+aprobada. APK SHA-256 `d81478fa7ac55a3d31b19fcc4517283a4bdc28f3a03871401fa688fcae36dbf5`,
+verificado/actualizado en SM-J701M sin borrar datos. Suite SAF completa PASS:
+`target/android-qa/02b686be38bd/documents/summary.json`, siete capturas propias.
+Cancelación, rechazo PCM24 con error visible, selección Unicode, salida real,
+pausa/seek, recreación, identidad única al repetir, copia privada por hash y
+restauración en proceso nuevo sin IO automática aprobadas. El guard ahora
+consulta metadatos durables y exige el ID en el modelo; no asume títulos en
+el resumen de diagnóstico. Original intacto, mismos favoritos preexistentes,
+sin permisos de almacenamiento ni cambios de valores predeterminados.
+
+La regresión física ordinaria también pasó con 22 capturas y sin errores
+críticos detectados:
+`target/android-qa/02b686be38bd/instrumentation/summary.json`.
+En la muestra del WAV importado: 277 ms CPU total de proceso/1101 ms,
+PSS 33.130 KiB, 84.488 frames, PCM 65.536 bytes, cero buffer_underruns y un
+aviso CPAL en frame 0. No se interpreta como CPU exclusiva del decoder,
+benchmark acústico, FPS ni batería. Capturas revisadas de error, claro y oscuro
+y reproducción tras reinicio; la limitación de captura acústica permanece.
+
+Linux: `target/native-local-import-02b686b/report.json` PASS, selector GTK,
+arrastre real Xdnd, errores, controles, duplicados, restauración y cierre normal.
+Instalado como Doremi Native Dev; binario SHA-256
+`044fa4dd3083aa27744a74eedd6dc36c087ecd39e520f777aabc537b46090f13`.
+Xvfb/Mesa software y salida nativa, sin atribuirlo a GPU física o Wayland.
+Regresión completa `41244383738` en curso; no se publica ninguna release.
+Siguiente prioridad viable: ampliar formatos locales y controles de plataforma,
+con el mismo dueño de cola/identidad/persistencia y datos anteriores protegidos.

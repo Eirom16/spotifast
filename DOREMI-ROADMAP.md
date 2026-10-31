@@ -547,3 +547,15 @@ Doremi Native Dev. APK del mismo SHA actualizada en el SM-J701M: suite física
 avisos CPAL puntuales. Regresión completa `41223684373` aprobada (nueve jobs). Siguiente prioridad: selección Android con SAF y los mismos
 contratos neutrales, antes de más formatos/MediaSession. Autenticación opcional
 y gate estable Linux/Windows/Android permanecen posteriores, sin releases.
+
+
+Importación WAV Android y Linux verificada (`02b686b`): CI enfocada
+`41243539529` aprobada, ambos hosts instalados conservando datos. Selector SAF
+real, copia privada acotada y restauración física PASS (7 capturas), suite
+Android general PASS (22) y QA Linux selector/arrastre/cola/restauración PASS.
+Error visible junto a Importar WAV, Unicode y rechazo PCM24 probados. Buffer
+PCM de 64 KiB; quedan avisos CPAL iniciales ocasionales sin captura acústica.
+Regresión completa `41244383738` en curso, no declarada verde todavía.
+Siguiente corte: más formatos locales y MediaSession/background; proveedor
+productivo y cuenta opcional posteriores. La política estable de tres
+plataformas y autorización de publicación continúa vigente, sin releases.
