@@ -29,10 +29,12 @@ import java.util.function.Predicate;
 public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
     private String lastAction="startup";
+    private long settledInstance=-1;
+    private int settledWidth=-1,settledHeight=-1;
     private String mode="full";
     private String documentFolder="";
     private String documentTitle="Original Café estéreo",documentFilename="Original Café estéreo.wav";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} start(); }
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} if(arguments!=null && "mp3".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café MP3 estéreo";documentFilename=documentTitle+".mp3";} start(); }
     private JSONObject state() throws Exception {
         return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
@@ -57,12 +59,30 @@ public final class DoremiInstrumentation extends Instrumentation {
     private void foreground() throws Exception {
         long deadline=SystemClock.uptimeMillis()+6000;
         do {
-            final boolean[] focused={false};
-            runOnMainSync(() -> focused[0]=!activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus() && activity.getWindow().getDecorView().isShown());
-            if(focused[0]) {waitForIdleSync();return;}
+            final boolean[] focused={false};final int[] size=new int[2];
+            runOnMainSync(() -> {
+                SurfaceView view=surface(activity.getWindow().getDecorView());
+                focused[0]=!activity.isFinishing() && !activity.isDestroyed() && activity.hasWindowFocus() && activity.getWindow().getDecorView().isShown() && view!=null;
+                if(view!=null) {size[0]=view.getWidth();size[1]=view.getHeight();}
+            });
+            if(focused[0]) {
+                JSONObject current=state();float scale=(float)current.optDouble("pixels_per_point",1);
+                JSONArray viewport=current.optJSONArray("viewport");
+                boolean geometry=viewport!=null && size[0]>0 && size[1]>0 && Math.abs(viewport.optDouble(0)*scale-size[0])<2 && Math.abs(viewport.optDouble(1)*scale-size[1])<2;
+                if(geometry) {
+                    long instance=current.optLong("instance");
+                    if(instance!=settledInstance || size[0]!=settledWidth || size[1]!=settledHeight) {
+                        settledInstance=instance;settledWidth=size[0];settledHeight=size[1];
+                        // Android publishes focus and GL geometry before its
+                        // replacement/rotation animation releases touch input.
+                        SystemClock.sleep(750);continue;
+                    }
+                    waitForIdleSync();return;
+                }
+            }
             SystemClock.sleep(80);
         } while(SystemClock.uptimeMillis()<deadline);
-        throw new AssertionError("Doremi did not regain window focus; no input injected");
+        throw new AssertionError("Doremi did not regain focus and matching GL geometry; no input injected");
     }
     private void settledForeground() throws Exception {
         foreground();
@@ -467,7 +487,9 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONObject initial=state();String originalLibrary=initial.getJSONArray("saved_media").toString();
         if(restore && (savedDocument(initial).isEmpty() || !initial.isNull("audio_metrics") || initial.getJSONObject("online").optBoolean("worker_initialized") || "Playing".equals(initial.optString("playback")))) throw new AssertionError("Restoration lost the document or started automatic IO");
         tap("home");
-        if(initial.isNull("current")) {
+        if(!restore) {
+            // A new device, or a preceding failed suite, can retain a simulated
+            // demo selection. Its player intentionally has no audio sliders.
             tap("local-audio");until(data -> "Playing".equals(data.optString("playback")));tap("pause");
         } else {tap("player");}
         slide("volume",0.08f);tap("library");

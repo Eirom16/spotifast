@@ -48,6 +48,19 @@ jobs:
           gradle-version: '8.13'
           cache-disabled: true
       - run: rustup show active-toolchain
+      - name: Require successful native gates before reusing identical Rust
+        if: env.DOREMI_NATIVE_RUN != ''
+        run: |
+          mkdir -p target
+          gh run view "$DOREMI_NATIVE_RUN" --repo "$GITHUB_REPOSITORY" --json status,conclusion,jobs > target/reused-native-gates.json
+          python3 - <<'PYCODE'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('target/reused-native-gates.json').read_text())
+          assert data['status']=='completed' and data['conclusion']=='success'
+          jobs={job['name']:job['conclusion'] for job in data['jobs']}
+          assert jobs.get('android-apk')=='success' and jobs.get('native-host')=='success'
+          PYCODE
       - name: Build both Android ABIs, test APK and verify packaging
         run: bash scripts/build-android.sh
       - uses: actions/upload-artifact@v6
@@ -66,6 +79,9 @@ jobs:
           retention-days: 7
 
   native-host:
+    # Java-only APK iterations reuse a successful host gate; the Android job
+    # independently rejects every Rust input difference before packaging.
+    if: ${{ !inputs.native_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
