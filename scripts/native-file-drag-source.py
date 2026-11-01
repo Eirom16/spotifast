@@ -22,7 +22,7 @@ parser.add_argument("fixture", type=Path)
 args = parser.parse_args()
 fixture = args.fixture.resolve(strict=True)
 assert fixture.is_relative_to(ROOT / "target") and fixture.is_file()
-assert fixture.name in ("Original Café estéreo.wav", "Original Café estéreo.flac"), "Only the owned QA fixture"
+assert fixture.name in ("Original Café estéreo.wav", "Original Café estéreo.flac", "Original Café estéreo.mp3"), "Only the owned QA fixture"
 assert os.environ.get("DOREMI_DATA_DIR"), "Private QA environment required"
 window = Gtk.Window(title="Doremi QA — own CC0 drag source")
 window.set_default_size(280, 120)

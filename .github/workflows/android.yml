@@ -99,8 +99,8 @@ jobs:
           cargo test --locked -p doremi-library --all-targets
           cargo clippy --locked -p doremi-library --all-targets -- -D warnings
           cargo test --locked -p doremi-app --all-targets
-          cargo test --locked -p doremi-player --features native-output,local-flac --all-targets
-          cargo clippy --locked -p doremi-player --features native-output,local-flac --all-targets -- -D warnings
+          cargo test --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets
+          cargo clippy --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets -- -D warnings
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings
           cargo build --locked -p doremi-app --bin doremi-app
       - name: Real X11 navigation, keyboard and queue sequence

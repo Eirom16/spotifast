@@ -997,9 +997,9 @@ impl DoremiApp {
                                 self.controls.push(Control{name:"import-feedback".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
                             }
                             #[cfg(target_os = "linux")]
-                            ui.small("WAV PCM16 y FLAC mono o estéreo. También puedes arrastrarlos a Doremi.");
+                            ui.small("WAV PCM16, FLAC y MP3 mono o estéreo. También puedes arrastrarlos a Doremi.");
                             #[cfg(target_os = "android")]
-                            ui.small("WAV PCM16 y FLAC locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
+                            ui.small("WAV PCM16, FLAC y MP3 locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
                         }
                         self.rows(ui, library.items());
                     }

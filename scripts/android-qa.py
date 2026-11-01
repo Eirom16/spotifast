@@ -72,10 +72,12 @@ def main():
     parser.add_argument('--commit',required=True)
     parser.add_argument('--install',action='store_true')
     parser.add_argument('--origin-y',type=float,default=48)
+    parser.add_argument('--attempt',default='',help='New evidence suffix; never overwrite a previous device run')
     args=parser.parse_args()
     apk=verify_payload(args.directory,args.commit)
-    output=Path('target/android-qa')/args.commit[:12]
-    output.mkdir(parents=True,exist_ok=True)
+    assert re.fullmatch(r'[a-z0-9-]{0,32}',args.attempt)
+    output=Path('target/android-qa')/args.commit[:12]/('manual'+('-'+args.attempt if args.attempt else ''))
+    output.mkdir(parents=True,exist_ok=False)
     results=[]
     # -d refuses to operate when there is more than one USB target.
     assert adb('get-state').strip()=='device'
@@ -93,14 +95,16 @@ def main():
     wait_for(lambda s:bool(s['controls']) and s.get('pid')==pid)
     time.sleep(1)
     def capture(name):
-        focus=adb('shell','dumpsys','window','windows')
+        focus=adb('shell','dumpsys','window')
         assert any('mCurrentFocus=' in line and PACKAGE in line for line in focus.splitlines()), 'Doremi must own the foreground before capture'
         png=adb('exec-out','screencap','-p',raw=True)
-        focus=adb('shell','dumpsys','window','windows')
+        focus=adb('shell','dumpsys','window')
         assert any('mCurrentFocus=' in line and PACKAGE in line for line in focus.splitlines()), 'Doremi lost focus during capture'
         (output/f'{name}.png').write_bytes(png)
         (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
     def tap(name):
+        focus=adb('shell','dumpsys','window')
+        assert any('mCurrentFocus=' in line and PACKAGE+'/' in line for line in focus.splitlines()), 'No touch outside Doremi'
         data=state()
         control=next(c for c in data['controls'] if c['name']==name)
         x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']

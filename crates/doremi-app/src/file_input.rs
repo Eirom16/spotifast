@@ -102,7 +102,7 @@ impl Seek for Guarded<'_> {
         self.file.seek(at)
     }
 }
-fn inspect(path: PathBuf, control: &Control, id: u64) -> Result<Metadata, Error> {
+fn inspect(path: PathBuf, control: &Arc<Control>, id: u64) -> Result<Metadata, Error> {
     let deadline = Instant::now() + Duration::from_secs(8);
     check(control, id, deadline)?;
     let text = path.to_str().ok_or(Error::Name)?;
@@ -128,8 +128,10 @@ fn inspect(path: PathBuf, control: &Control, id: u64) -> Result<Metadata, Error>
     let mut signature = [0; 4];
     file.read_exact(&mut signature).map_err(|_| Error::Format)?;
     file.seek(SeekFrom::Start(0)).map_err(|_| Error::Input)?;
-    let decoded = if &signature == b"fLaC" {
-        LocalFile::open(file).map(|source| source.info())
+    let decoded = if &signature != b"RIFF" {
+        let token = control.clone();
+        LocalFile::open_cancellable(file, move || check(&token, id, deadline).is_err())
+            .map(|source| source.info())
     } else {
         Wav::open(Guarded {
             file,
@@ -144,7 +146,7 @@ fn inspect(path: PathBuf, control: &Control, id: u64) -> Result<Metadata, Error>
     let title = path
         .file_stem()
         .and_then(|name| name.to_str())
-        .unwrap_or("Archivo WAV")
+        .unwrap_or("Audio local")
         .chars()
         .filter(|c| !c.is_control())
         .take(256)
@@ -238,7 +240,7 @@ fn select(
 fn import_document(
     uri: String,
     directory: PathBuf,
-    control: &Control,
+    control: &Arc<Control>,
     id: u64,
 ) -> Result<Metadata, Error> {
     use doremi_library::document_copy::{self, Error as CopyError};
@@ -251,7 +253,13 @@ fn import_document(
     }
     // Reject unsupported audio before allocating a private copy. The copied
     // snapshot is validated again in case the selected original changed.
-    LocalFile::open(file.try_clone().map_err(|_| Error::Input)?).map_err(|_| Error::Format)?;
+    let token = control.clone();
+    let probe =
+        LocalFile::open_cancellable(file.try_clone().map_err(|_| Error::Input)?, move || {
+            check(&token, id, deadline).is_err()
+        });
+    check(control, id, deadline)?;
+    probe.map_err(|_| Error::Format)?;
     let path = document_copy::store(file, &directory, || {
         check(control, id, deadline).map_err(|e| match e {
             Error::Cancelled => CopyError::Cancelled,
@@ -269,7 +277,7 @@ fn import_document(
     let title = std::path::Path::new(&title)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or("Archivo WAV")
+        .unwrap_or("Audio local")
         .chars()
         .filter(|c| !c.is_control())
         .take(256)
@@ -308,7 +316,7 @@ impl Worker {
                                     .args([
                                         "--file-selection",
                                         "--title=Doremi: importar audio",
-                                        "--file-filter=Audio WAV PCM16 y FLAC | *.wav *.WAV *.flac *.FLAC",
+                                        "--file-filter=Audio WAV PCM16, FLAC y MP3 | *.wav *.WAV *.flac *.FLAC *.mp3 *.MP3",
                                         "--filename",
                                     ])
                                     .arg(initial)
@@ -406,7 +414,7 @@ mod tests {
     use super::*;
     #[test]
     fn selected_wav_metadata_is_neutral_and_cancellation_precedes_any_file_read() {
-        let control = Control::default();
+        let control = Arc::new(Control::default());
         control.generation.store(1, Ordering::Release);
         assert!(matches!(
             inspect(PathBuf::from("never-read.wav"), &control, 0),
@@ -421,6 +429,19 @@ mod tests {
         assert_eq!(meta.duration_ms, 8000);
         assert_eq!(meta.title, "scale");
         assert!(meta.path.is_absolute());
+    }
+    #[test]
+    fn selected_compressed_metadata_uses_the_shared_decoders() {
+        let control = Arc::new(Control::default());
+        for name in ["scale.flac", "scale.mp3"] {
+            let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../doremi-player/tests/fixtures")
+                .join(name);
+            let metadata = inspect(path, &control, 0).unwrap();
+            assert_eq!(metadata.title, "scale");
+            assert_eq!(metadata.duration_ms, 8000);
+            assert!(metadata.path.is_absolute());
+        }
     }
     #[cfg(target_os = "linux")]
     #[test]

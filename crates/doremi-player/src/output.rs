@@ -575,7 +575,12 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
             let source = if wav_only {
                 LocalFile::Wav(Box::new(Wav::open(file).map_err(EngineError::Decode)?))
             } else {
-                LocalFile::open(file).map_err(EngineError::Decode)?
+                let control = state.control.clone();
+                let epoch = state.epoch;
+                LocalFile::open_cancellable(file, move || {
+                    control.epoch.load(Ordering::Acquire) != epoch
+                })
+                .map_err(EngineError::Decode)?
             };
             let duration = source.info().duration_ms();
             load.stats.streaming.store(true, Ordering::Release);

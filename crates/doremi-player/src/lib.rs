@@ -1,10 +1,12 @@
 //! Bounded audio preparation and native output. Audited short media uses immutable
-//! PCM; seekable PCM16 WAV and optional FLAC files use a decode worker and fixed
+//! PCM; seekable PCM16 WAV and optional FLAC/MP3 files use a decode worker and fixed
 //! atomic PCM channel. No callback performs disk/network IO or takes a lock.
 pub mod buffer;
 #[cfg(feature = "local-flac")]
 pub mod flac;
 pub mod local_file;
+#[cfg(feature = "local-mp3")]
+pub mod mp3;
 #[cfg(feature = "ogg-vorbis")]
 mod ogg;
 pub mod original_long;
@@ -70,6 +72,7 @@ pub enum DecodeError {
     InvalidWav,
     InvalidOgg,
     InvalidFlac,
+    InvalidMp3,
     Cancelled,
     UnsupportedFormat,
     InvalidOutputRate,

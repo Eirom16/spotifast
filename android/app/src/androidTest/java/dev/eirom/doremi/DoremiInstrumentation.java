@@ -193,7 +193,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         resources.put("audio_metrics",sample.optJSONObject("audio_metrics"));resources.put("acoustic_capture",false);
         resources.put("volume",sample.optDouble("volume"));resources.put("playback",sample.optString("playback"));
         resources.put("current_provider",sample.optString("current_provider"));
-        resources.put("condition",sample.optJSONObject("audio_metrics").optBoolean("streaming")?"native output from bounded WAV decode buffer; no acoustic capture":"native output from fully prepared PCM; no acoustic capture");
+        resources.put("condition",sample.optJSONObject("audio_metrics").optBoolean("streaming")?"native output from bounded local-file decode buffer; no acoustic capture":"native output from fully prepared PCM; no acoustic capture");
         Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void audio() throws Exception {

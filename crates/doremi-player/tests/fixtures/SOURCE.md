@@ -38,3 +38,24 @@ Generator: ffmpeg version n9.0.2 Copyright (c) 2000-2026 the FFmpeg developers
 Source SHA-256: `63aa41e98d3ff67982e2b56bb782df1f8ce151ae0f46666b32e761a81c24994d`.
 
 FLAC SHA-256: `9a6af9a0825f6af8f461cbd483ae2d80e458e20d983b64bb57d2951d2a87ee6b`, 125316 bytes, 8 s / 48 kHz / mono / 16-bit.
+
+## Original scale, MP3
+
+`scale.mp3` (VBR with Xing/LAME gapless metadata) and `scale-cbr.mp3`
+(CBR without an index) derive only from the same original CC0 scale.
+Generated locally with FFmpeg n9.0.2/libmp3lame; this CLI is not linked into
+or distributed with Doremi. The unchanged Symphonia 0.5.5 MP3 decoder
+uses the same MPL-2.0 attribution above. No decoder source was copied.
+
+```sh
+ffmpeg -nostdin -v error -n -i assets/audio/scale.wav -map_metadata -1 -c:a libmp3lame -q:a 3 -fflags +bitexact -flags:a +bitexact crates/doremi-player/tests/fixtures/scale.mp3
+ffmpeg -nostdin -v error -n -i assets/audio/scale.wav -map_metadata -1 -c:a libmp3lame -b:a 128k -write_xing 0 -fflags +bitexact -flags:a +bitexact crates/doremi-player/tests/fixtures/scale-cbr.mp3
+```
+
+SHA-256:
+- VBR: `7652a88f8c73f63b3531edc3de5d6424e3fa2aa8e1334cb93d98a3a891aaa6a0`.
+- CBR: `8871f1475ff1425dbd59b5981405ec04e3034453ae71e8d85ac29a99217aa906`.
+
+Tests compare signal error against the original, exact gapless duration,
+CBR frame-scan duration, every sample after seeks with bounded decoder
+preroll, EOF/backward seek, truncation, metadata bounds and corrupt index counts.

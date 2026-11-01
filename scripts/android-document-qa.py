@@ -27,12 +27,12 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact",type=Path)
     parser.add_argument("--commit",required=True)
-    parser.add_argument("--format",choices=("wav","flac"),default="wav")
+    parser.add_argument("--format",choices=("wav","flac","mp3"),default="wav")
     parser.add_argument("--attempt",default="",help="New evidence suffix after a diagnosed terminal failure")
     args=parser.parse_args()
     apk=runpy.run_path(str(ROOT/"scripts/android-qa.py"))["verify_payload"](args.artifact,args.commit)
     assert re.fullmatch(r"[a-z0-9-]{0,32}",args.attempt)
-    out=ROOT/"target/android-qa"/args.commit[:12]/("documents"+("-flac" if args.format=="flac" else "")+("-"+args.attempt if args.attempt else ""))
+    out=ROOT/"target/android-qa"/args.commit[:12]/("documents"+("-"+args.format if args.format!="wav" else "")+("-"+args.attempt if args.attempt else ""))
     out.mkdir(parents=True,exist_ok=False)
     source=ROOT/"assets/audio/scale.wav"
     manifest=json.loads((source.parent/"manifest.json").read_text())
@@ -48,6 +48,10 @@ def main():
     if args.format=="flac":
         encoded=out/"Original Café FLAC estéreo.flac"
         subprocess.run(["ffmpeg","-nostdin","-v","error","-n","-i",str(fixture),"-map_metadata","-1","-c:a","flac","-compression_level","5","-fflags","+bitexact","-flags:a","+bitexact",str(encoded)],check=True,timeout=60)
+        fixture=encoded
+    elif args.format=="mp3":
+        encoded=out/"Original Café MP3 estéreo.mp3"
+        subprocess.run(["ffmpeg","-nostdin","-v","error","-n","-i",str(fixture),"-map_metadata","-1","-c:a","libmp3lame","-q:a","3","-fflags","+bitexact","-flags:a","+bitexact",str(encoded)],check=True,timeout=60)
         fixture=encoded
     # A well-formed 24-bit container remains visible under Android's audio MIME
     # filter but is explicitly unsupported by the first PCM16 import slice.
