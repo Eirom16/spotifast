@@ -53,6 +53,19 @@ def main():
     (output / "latest-state.json").write_text(json.dumps(latest, indent=2) + "\n")
     own_log = adb("logcat", "-d", f"--pid={int(latest['pid'])}", "-t", "1000").decode(errors="replace")
     (output / "own-process.log").write_text(own_log)
+    if not log.decode().startswith("PASS: ") or "FAIL:" in log.decode():
+        # Capture was taken inside our still-running Activity before finish.
+        # Reject stale diagnostics from an earlier instrumented process.
+        try:
+            failure = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-failure.json"))
+            if failure["pid"] == latest["pid"]:
+                (output / "qa-failure.json").write_text(json.dumps(failure, indent=2) + "\n")
+                (output / "qa-failure.png").write_bytes(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-failure.png"))
+                pointer = json.loads(adb("exec-out", "run-as", PACKAGE, "cat", "files/qa-input-delivery.json"))
+                if pointer.get("pid") == latest["pid"]:
+                    (output / "qa-input-delivery.json").write_text(json.dumps(pointer, indent=2) + "\n")
+        except (subprocess.CalledProcessError, ValueError, KeyError):
+            pass
     assert log.decode().startswith("PASS: ") and "FAIL:" not in log.decode(), log.decode()
     states = []
     for name in CAPTURES:

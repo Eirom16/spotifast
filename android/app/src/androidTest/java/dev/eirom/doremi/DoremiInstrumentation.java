@@ -29,6 +29,7 @@ import java.util.function.Predicate;
 public final class DoremiInstrumentation extends Instrumentation {
     private Activity activity;
     private String lastAction="startup";
+    private JSONObject lastPointer=new JSONObject();
     private long settledInstance=-1;
     private int settledWidth=-1,settledHeight=-1;
     private String mode="full";
@@ -121,6 +122,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         } while(SystemClock.uptimeMillis()<deadline);
         throw new AssertionError("Doremi surface capture failed: "+name+" status="+lastStatus);
     }
+    private void sendOwnPointerSync(MotionEvent event) throws Exception {
+        event.setSource(android.view.InputDevice.SOURCE_TOUCHSCREEN);
+        lastPointer=new JSONObject().put("pid",android.os.Process.myPid()).put("action",event.getActionMasked()).put("x",event.getX()).put("y",event.getY()).put("source",event.getSource());
+        boolean delivered=automation().injectInputEvent(event,true);
+        lastPointer.put("delivered",delivered);
+        if(!delivered) throw new AssertionError("Doremi pointer injection was rejected");
+    }
     private void tap(String name) throws Exception { tap(name,500); }
     private void tap(String name,long settle) throws Exception {
         lastAction="tap:"+name;
@@ -134,11 +142,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         float x=origin[0]+(float)(rect.getDouble(0)+rect.getDouble(2))*scale/2;
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
-        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0); sendPointerSync(down); down.recycle();
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0); sendOwnPointerSync(down); down.recycle();
         // Hold across rendered frames; a future event timestamp alone does not
         // keep the native pointer down while egui evaluates slider interaction.
         SystemClock.sleep(80);
-        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0); sendPointerSync(up); up.recycle();
+        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0); sendOwnPointerSync(up); up.recycle();
         SystemClock.sleep(settle);
     }
     private void slide(String name,float fraction) throws Exception {
@@ -157,11 +165,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         float x=origin[0]+(left+handle+(right-left-2*handle)*fraction)*scale;
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
-        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendPointerSync(down);down.recycle();
+        MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendOwnPointerSync(down);down.recycle();
         // Hold across rendered frames; a future event timestamp alone does not
         // keep the native pointer down while egui evaluates slider interaction.
         SystemClock.sleep(80);
-        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0);sendPointerSync(up);up.recycle();SystemClock.sleep(500);
+        MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0);sendOwnPointerSync(up);up.recycle();SystemClock.sleep(500);
     }
     private void backgroundInput() throws Exception {
         tap("search");tap("query");text("Lluvia",true);
@@ -418,11 +426,11 @@ public final class DoremiInstrumentation extends Instrumentation {
             float x=origin[0]+(float)data.getJSONArray("viewport").getDouble(0)*0.9f*scale;
             float from=height*(rect.getDouble(1)<60?0.35f:0.7f),to=height*(rect.getDouble(1)<60?0.7f:0.35f);
             long time=SystemClock.uptimeMillis();
-            MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,origin[1]+from*scale,0);sendPointerSync(down);down.recycle();
+            MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,origin[1]+from*scale,0);sendOwnPointerSync(down);down.recycle();
             for(int step=1;step<=12;step++) {
-                SystemClock.sleep(25);MotionEvent move=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,x,origin[1]+(from+(to-from)*step/12)*scale,0);sendPointerSync(move);move.recycle();
+                SystemClock.sleep(25);MotionEvent move=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,x,origin[1]+(from+(to-from)*step/12)*scale,0);sendOwnPointerSync(move);move.recycle();
             }
-            MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,origin[1]+to*scale,0);sendPointerSync(up);up.recycle();SystemClock.sleep(250);
+            MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,origin[1]+to*scale,0);sendOwnPointerSync(up);up.recycle();SystemClock.sleep(250);
         }
         throw new AssertionError("Document control remained outside the visible content");
     }
@@ -617,6 +625,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));
             SystemClock.sleep(400);capture("qa-portrait");
             runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
+            capture("qa-rotation-return");
             tap("cancel-search");until(s -> s.optString("query").isEmpty());
             tap("next");until(s -> s.optString("current").equals("dawn") && s.optJSONArray("manual").length()==1);
             tap("next");until(s -> s.optString("current").equals("dawn") && s.optJSONArray("manual").length()==0);
@@ -630,6 +639,12 @@ public final class DoremiInstrumentation extends Instrumentation {
             savedLibrary();
             result.putString("stream","PASS: Unicode/burst IME, Activity recreation with duplicate queue, landscape/portrait, shared rain -> dawn -> dawn -> cafe trace; IME cancel after background; native PCM play/pause/seek/volume/next/previous/EOF/cancel/focus/recreation/background; long WAV bounded delivery/positive samples/seek/EOF/cancel; real Commons search/load/cancel/PCM/next/previous/paused recreation/background; qualified favorites/save/remove/durable metadata/legacy preservation\n");
             finish(Activity.RESULT_OK,result);
-        } catch(Throwable error) { result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
+        } catch(Throwable error) {
+            try {
+                capture("qa-failure");
+                lastPointer.put("last_action",lastAction);
+                Files.write(new File(getTargetContext().getFilesDir(),"qa-input-delivery.json").toPath(),lastPointer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            } catch(Throwable diagnosticError) { error.addSuppressed(diagnosticError); }
+            result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
     }
 }
