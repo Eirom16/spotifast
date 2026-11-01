@@ -64,6 +64,12 @@ public final class DoremiInstrumentation extends Instrumentation {
         } while(SystemClock.uptimeMillis()<deadline);
         throw new AssertionError("Doremi did not regain window focus; no input injected");
     }
+    private void settledForeground() throws Exception {
+        foreground();
+        // Focus can precede the end of Android window replacement animations.
+        // Keep touch injection on our settled window after recreation/resume.
+        SystemClock.sleep(750);foreground();
+    }
     private void capture(String name) throws Exception {
         foreground();
         long deadline=SystemClock.uptimeMillis()+4000;int lastStatus=-1;
@@ -204,12 +210,14 @@ public final class DoremiInstrumentation extends Instrumentation {
         Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Audio recreation did not return an Activity");activity=recreated;
         until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && s.optString("playback").equals("Paused"));
-        tap("home");tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
+        settledForeground();
+        tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
         long beforeBackground=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
         runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
         until(s -> s.optLong("instance")!=beforeBackground && s.optString("playback").equals("Paused"));
-        tap("home");tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
+        settledForeground();
+        tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
         // Clear modes/manual entries so natural EOF must advance to the second tone.
         while(!state().optString("repeat").equals("Off")) tap("repeat");
         if(state().optBoolean("shuffle")) tap("shuffle");
@@ -355,11 +363,14 @@ public final class DoremiInstrumentation extends Instrumentation {
     private android.app.UiAutomation automation() {
         return getUiAutomation(android.app.UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
     }
+    private boolean systemDocumentPicker(String owner) {
+        return "com.android.documentsui".equals(owner) || "com.google.android.documentsui".equals(owner);
+    }
     private android.view.accessibility.AccessibilityNodeInfo ownPickerNode(String text) throws Exception {
         long deadline=SystemClock.uptimeMillis()+8000;
         do {
             android.view.accessibility.AccessibilityNodeInfo root=automation().getRootInActiveWindow();
-            if(root!=null && "com.android.documentsui".equals(String.valueOf(root.getPackageName()))) {
+            if(root!=null && systemDocumentPicker(String.valueOf(root.getPackageName()))) {
                 // Query only our exact folder/file names; never dump Recents,
                 // screen contents or names belonging to the device's owner.
                 boolean ownFolder=false;
@@ -401,7 +412,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         // Window focus is delivered before the outgoing picker animation stops
         // intercepting touches on this Samsung/API 28. Do not grant injection
         // permission or send a touch into that foreign transition window.
-        SystemClock.sleep(750);foreground();
+        settledForeground();
     }
     private void cancelOwnDocumentPicker() throws Exception {
         long previousInstance=state().getLong("instance");
@@ -411,7 +422,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             android.view.accessibility.AccessibilityNodeInfo root=automation().getRootInActiveWindow();
             String owner=root==null?"":String.valueOf(root.getPackageName());
             if(getTargetContext().getPackageName().equals(owner)) {documentReturned(previousInstance);return;}
-            if(!"com.android.documentsui".equals(owner)) throw new AssertionError("Owned document picker lost foreground; no key injected");
+            if(!systemDocumentPicker(owner)) throw new AssertionError("Owned document picker lost foreground; no key injected");
             long time=SystemClock.uptimeMillis();
             automation().injectInputEvent(new android.view.KeyEvent(time,time,android.view.KeyEvent.ACTION_DOWN,android.view.KeyEvent.KEYCODE_BACK,0),true);
             SystemClock.sleep(80);
@@ -455,7 +466,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(!restore && !documentFolder.matches("Doremi-QA-[0-9a-f]{7,40}")) throw new AssertionError("A private QA folder is required");
         JSONObject initial=state();String originalLibrary=initial.getJSONArray("saved_media").toString();
         if(restore && (savedDocument(initial).isEmpty() || !initial.isNull("audio_metrics") || initial.getJSONObject("online").optBoolean("worker_initialized") || "Playing".equals(initial.optString("playback")))) throw new AssertionError("Restoration lost the document or started automatic IO");
-        tap("home");tap("player");slide("volume",0.08f);tap("library");
+        tap("home");
+        if(initial.isNull("current")) {
+            tap("local-audio");until(data -> "Playing".equals(data.optString("playback")));tap("pause");
+        } else {tap("player");}
+        slide("volume",0.08f);tap("library");
         if(!restore) {
             documentControl("import-wav");ownPickerNode("Invalid.wav");
             cancelOwnDocumentPicker();until(data -> !data.optJSONObject("local_import").optBoolean("pending"));

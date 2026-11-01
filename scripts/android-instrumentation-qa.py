@@ -29,7 +29,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifact", type=Path)
     parser.add_argument("--commit", required=True)
+    parser.add_argument("--attempt", default="", help="New evidence suffix after a diagnosed terminal failure")
     args = parser.parse_args()
+    assert re.fullmatch(r"[a-z0-9-]{0,32}", args.attempt)
     verifier = runpy.run_path(str(ROOT / "scripts/android-qa.py"))
     apk = verifier["verify_payload"](args.artifact, args.commit)
     manifest = json.loads((args.artifact / "manifest.json").read_text())
@@ -38,9 +40,10 @@ def main():
     installed_path = installed.removeprefix("package:")
     assert installed_path.endswith("/base.apk")
     assert hashlib.sha256(adb("exec-out", "cat", installed_path)).digest() == hashlib.sha256(apk.read_bytes()).digest(), "Installed APK differs from verified CI artifact"
-    output = ROOT / "target/android-qa" / args.commit[:12] / "instrumentation"
-    output.mkdir(parents=True, exist_ok=True)
+    output = ROOT / "target/android-qa" / args.commit[:12] / ("instrumentation" + ("-" + args.attempt if args.attempt else ""))
+    output.mkdir(parents=True, exist_ok=False)
     adb("install", "-r", "-t", str(args.artifact / "app-debug-androidTest.apk"))
+    adb("shell", "am", "force-stop", PACKAGE)
     log = adb("shell", "am", "instrument", "-w",
               f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
     (output / "instrumentation.log").write_bytes(log)
