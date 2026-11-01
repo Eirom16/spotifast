@@ -3,16 +3,32 @@
 Base Preview validada: `7b9404c58f947d86b2ea51a6a360d3872edb6f46`.
 Rama autorizada: `feature/doremi-android-real`. Sin cambios en main ni releases.
 
-Teléfono detectado por ADB: Samsung SM-J701M, Android 9/API 28,
-ARMv7 (sistema de 32 bits), 720×1280, densidad efectiva 300 dpi,
-MemTotal 1.843.892 kB. Depuración USB autorizada. No registrar número de serie.
-Se construyen ARMv7 para este teléfono y ARM64 para el gate de empaquetado.
+Dispositivo actual de pruebas: Lenovo TB-X306X, Android 10/API 29,
+ARM64, 800×1280 físicos, 160 dpi, páginas de 4 KiB y 2.796.952 KiB de RAM.
+USB autorizado, sin registrar número de serie. APK `3479575` instalada y
+abierta con biblioteca ARM64. WAV y FLAC `3479575` aprobados físicamente
+con siete capturas por formato y restauración en procesos nuevos; la suite
+general está en repetición tras corregir sincronización de ventanas del harness.
+El Samsung SM-J701M anterior conserva su validación WAV `02b686b`, separada
+por modelo/SHA; no está conectado.
 
-Estado actual (2026-10-31): Android `02b686b` instalado y validado con importación WAV real, siete capturas específicas y 22 de regresión general; Linux Native Dev actualizado a `ec06121` con WAV y FLAC importables, selección/arrastre/controles/restauración aprobados. Ambos usan el mismo Model/cola/índice y canal PCM acotado. La prueba Android FLAC queda pendiente: ADB dejó de detectar el teléfono después del hito WAV. Su APK está descargado y verificado, sin atribuirle ejecución física.
+Estado actual (2026-10-31): Linux Native Dev `ec06121` permite importar WAV y
+FLAC mediante selector y arrastre, con controles y restauración comprobados.
+Android WAV fue validado en Samsung; WAV y FLAC ya están probados en el Lenovo.
+Ambos usan el mismo Model/cola/índice y canal PCM acotado.
 
-CI enfocada `41247046616` sobre `ec06121`: ambos hosts aprobados (15 tests library, 23 app, 16 player, Clippy y empaquetado). Regresión completa `41248095448` en curso sobre ese commit; todavía no se declara verde. La última completa aprobada es `41244383738` sobre `02b686b`: nueve jobs, incluida la Preview y los builds del legado Windows/macOS. Preview instalada conservada; archivo del mismo `02b686b` descargado/verificado. No se atribuyen gates de un SHA a otro.
+CI enfocada `41247046616` sobre `ec06121`: ambos hosts aprobados (15 tests
+library, 23 app, 16 player, Clippy y empaquetado). Regresión completa
+`41248095448` aprobada: nueve jobs, incluida Preview y legado Windows/macOS.
+Preview instalada conservada; archivo de ese mismo SHA descargado y verificado.
+CI enfocada `41261387968` sobre `3479575` aprobada en ambos hosts.
+Rust reutilizado de `ec06121`
+solo tras comprobar igualdad de todas sus entradas; no incorpora MP3.
 
-El teléfono real es ARMv7/API 28 con páginas de 4 KiB. ARM64/16 KiB tienen verificación estática de empaquetado; no se ejecutaron en este hardware. Linux se probó con salida nativa y UI Xvfb/Mesa software; no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
+ARM64 se ejecuta ahora en el Lenovo, con páginas de 4 KiB. La compatibilidad
+con 16 KiB tiene comprobaciones estáticas de empaquetado; no hay ejecución
+sobre hardware de 16 KiB. Linux usa salida nativa y UI Xvfb/Mesa software;
+no se atribuye a Wayland/GPU física ni a un nuevo host Windows Doremi.
 
 Pendientes: más formatos, MediaSession/background, streaming remoto continuo, proveedor productivo y cuenta opcional. La CPU del WAV largo en el teléfono merece optimización; no se confunde con consumo de batería. No se capturó salida acústica ni micrófono. El historial siguiente conserva pruebas, fallos y correcciones; sus pendientes corresponden a cada iteración.
 
@@ -674,3 +690,45 @@ verificados: SHA-256
 No instalado ni ejecutado: no hay dispositivo USB accesible. El teléfono
 mantiene la APK WAV `02b686b` probada; se retomará FLAC sin borrar datos cuando
 regrese. Regresión completa `41248095448` en curso, sin releases publicadas.
+
+
+Nuevo dispositivo Lenovo TB-X306X (ARM64/API 29, páginas 4 KiB):
+APK `3479575`, nativo `ec06121`. CI enfocada `41261387968` PASS en ambos
+hosts; CI completa del nativo `41248095448` PASS, nueve jobs.
+Instalación con firma de desarrollo y actualización conservando datos, sin
+permisos de almacenamiento generales. Selector del sistema detectado:
+`com.google.android.documentsui`; se amplió exclusivamente la allowlist de QA
+que antes reconocía `com.android.documentsui`.
+
+Evidencia real WAV: `target/android-qa/34795754129e/documents-lenovo-audio/summary.json`
+PASS, siete capturas. FLAC: `target/android-qa/34795754129e/documents-flac-lenovo/summary.json`
+PASS, siete capturas. Selección mediante el selector oficial, cancelación,
+rechazo del WAV de 24 bits, identidad estable al reimportar, tema claro/oscuro,
+seek/pausa, recreación y restauración con proceso nuevo sin IO automático.
+Originales CC0 y copias privadas verificadas por SHA-256; favoritos existentes
+conservados. Capturas reales revisadas en claro y oscuro, modo horizontal.
+
+Mediciones breves del proceso completo (no CPU aislada del decodificador):
+WAV 398 ms CPU / 1100 ms, PSS 32100 KiB; FLAC 426 ms / 1101 ms, PSS 33740 KiB.
+Ambos a 48 kHz de salida, volumen propio 0,08, canal de 8192 frames/65536 bytes,
+PCM no nulo, sin buffer-underruns ni xruns reportados durante esas muestras.
+El campo `condition` del harness antiguo aún dice WAV para FLAC; el formato
+real se comprueba mediante corpus/hash/decoder y se corrige la etiqueta en la
+siguiente iteración. No hay captura acústica ni medición de batería/FPS.
+
+Fallos conservados: primer intento sin foco; suite general posteriormente
+falló al tocar inmediatamente tras recreación/rotación (sin crash nativo).
+Primer documento falló porque una selección simulada previa carecía de slider
+de audio. Se repitió tras seleccionar la muestra real mediante ADB, con PASS
+de WAV y FLAC. QA `c35a9c1` añade geometría GL coincidente, espera de transición
+y precondición de audio real para no depender de otra suite. Su CI
+`41262110044` está aprobada: APK y reutilización del gate nativo `ec06121`,
+con coincidencia de todas las entradas Rust. `native-host` se omite en esta
+iteración Java: el run de origen debe tener ambos gates aprobados y el
+paquete se rechaza si cambia una sola entrada Rust. No se declara aprobada
+la regresión general del Lenovo todavía.
+
+Preview `ec06121` verificada sin reinstalar: 73 hashes internos, origen/versión
+y ELF x86_64; archivo SHA-256 `56394e84e3c8ee9893cff389d192ee256fe8420c92ec2d06c0805bb67a4a4b41`.
+Prueba ADB adicional: `target/android-qa/34795754129e/lenovo-adb-smoke/summary.json`
+PASS con 110600 frames/221174 muestras no nulas y pausa con reloj estable.

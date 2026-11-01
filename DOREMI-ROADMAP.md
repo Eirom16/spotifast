@@ -9,7 +9,10 @@ La aplicación preservada todavía es Spotifast 0.14.2, con Spotify/librespot.
 Hay APK de desarrollo instalada y validada en Android real, audio PCM local
 y un flujo online experimental de dos tonos Commons CC0 en Android/Linux.
 Los hosts también leen un WAV original de 120 s con buffer PCM de 64 KiB,
-comprobado en Linux y Android físico; el selector/importación general está pendiente.
+comprobado en Linux y Android físico. La importación WAV por selector está
+validada en ambos; FLAC también funciona en Linux y el nuevo Lenovo ARM64/API 29,
+con importación/controles/restauración comprobados. CI completa `ec06121`
+aprobada (nueve jobs). Regresión general del Lenovo en repetición; ver informe.
 La biblioteca propia ya guarda IDs neutrales y restaura favoritos en ambos hosts
 (ver `DOREMI-GOAL-REPORT.md`). No hay proveedor productivo definitivo.
 Preview 0.1 añade un ejecutable
