@@ -18,7 +18,9 @@ fn apply_to_style(style: &mut egui::Style, palette: &Palette) {
     style.animation_time = crate::motion::ANIMATION_TIME;
 }
 
-use egui::{Color32, CornerRadius, Response, Sense, Stroke, Vec2};
+#[cfg(test)]
+use egui::CornerRadius;
+use egui::{Color32, Response, Sense, Stroke, Vec2};
 use std::borrow::Cow;
 
 /// A palette file from the themes directory.

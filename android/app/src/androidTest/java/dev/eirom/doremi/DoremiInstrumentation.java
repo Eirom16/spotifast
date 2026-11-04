@@ -133,9 +133,20 @@ public final class DoremiInstrumentation extends Instrumentation {
     private void tap(String name,long settle) throws Exception {
         lastAction="tap:"+name;
         foreground();
-        JSONObject data=state(); JSONArray controls=data.getJSONArray("controls"); JSONArray rect=null;
-        for(int i=0;i<controls.length();i++) { JSONObject control=controls.getJSONObject(i); if(name.equals(control.getString("name"))) { rect=control.getJSONArray("rect"); break; } }
+        JSONObject data=state();JSONArray rect=controlRect(data,name);
+        if(rect==null && "Home".equals(data.optString("page")) && (name.startsWith("add:") || name.startsWith("select:") || name.startsWith("save:") || name.equals("local-audio") || name.equals("long-audio"))) {
+            tap("demo-examples");data=state();rect=controlRect(data,name);
+        }
         if(rect==null) throw new AssertionError("Missing control: "+name);
+        boolean fixed=java.util.Arrays.asList("home","search","library","queue","settings","play","pause","next","previous","stop","repeat","shuffle","seek","volume","player","player-more").contains(name);
+        for(int attempt=0;!fixed && attempt<30;attempt++) {
+            JSONArray page=data.optJSONArray("page_rect");
+            if(page==null || (rect.getDouble(1)>=page.getDouble(1) && rect.getDouble(3)<=page.getDouble(3))) break;
+            scrollPage(data,rect.getDouble(1)<page.getDouble(1));data=state();rect=controlRect(data,name);
+            if(rect==null) throw new AssertionError("Control disappeared while scrolling: "+name);
+        }
+        JSONArray viewport=data.getJSONArray("viewport");
+        if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) || rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1)) throw new AssertionError("Control outside Doremi viewport: "+name);
         final int[] origin=new int[2];
         runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
@@ -149,6 +160,21 @@ public final class DoremiInstrumentation extends Instrumentation {
         MotionEvent up=MotionEvent.obtain(time,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,y,0); sendOwnPointerSync(up); up.recycle();
         SystemClock.sleep(settle);
     }
+    private JSONArray controlRect(JSONObject data,String name) throws Exception {
+        JSONArray controls=data.getJSONArray("controls");
+        for(int i=0;i<controls.length();i++) {JSONObject control=controls.getJSONObject(i);if(name.equals(control.getString("name"))) return control.getJSONArray("rect");}
+        return null;
+    }
+    private void scrollPage(JSONObject data,boolean upward) throws Exception {
+        foreground();JSONArray page=data.getJSONArray("page_rect");final int[] origin=new int[2];
+        runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
+        float scale=(float)data.getDouble("pixels_per_point"),top=(float)page.getDouble(1),height=(float)(page.getDouble(3)-top);
+        float x=origin[0]+(float)(page.getDouble(0)+page.getDouble(2))*scale/2;
+        float from=origin[1]+(top+height*(upward?.25f:.8f))*scale,to=origin[1]+(top+height*(upward?.8f:.25f))*scale;
+        long started=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(started,started,MotionEvent.ACTION_DOWN,x,from,0);sendOwnPointerSync(down);down.recycle();
+        for(int step=1;step<=6;step++) {SystemClock.sleep(30);MotionEvent move=MotionEvent.obtain(started,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,x,from+(to-from)*step/6,0);sendOwnPointerSync(move);move.recycle();}
+        MotionEvent up=MotionEvent.obtain(started,SystemClock.uptimeMillis(),MotionEvent.ACTION_UP,x,to,0);sendOwnPointerSync(up);up.recycle();SystemClock.sleep(300);
+    }
     private void slide(String name,float fraction) throws Exception {
         lastAction="slide:"+name+":"+fraction;
         foreground();
@@ -157,12 +183,9 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(rect==null) throw new AssertionError("Missing slider: "+name);
         final int[] origin=new int[2];runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
-        // egui's slider rail is the first slider_width logical points, before its label.
-        float left=(float)rect.getDouble(0),right=Math.min((float)rect.getDouble(2),left+100f);
-        // The pinned egui slider shrinks the rail by its handle radius:
-        // height / 2.5, multiplied by the Rect handle aspect ratio 0.75.
-        float handle=(float)(rect.getDouble(3)-rect.getDouble(1))/2.5f*0.75f;
-        float x=origin[0]+(left+handle+(right-left-2*handle)*fraction)*scale;
+        // The shared Spotifast slider maps the complete recorded track rect.
+        float left=(float)rect.getDouble(0),right=(float)rect.getDouble(2);
+        float x=origin[0]+(left+(right-left)*fraction)*scale;
         float y=origin[1]+(float)(rect.getDouble(1)+rect.getDouble(3))*scale/2;
         long time=SystemClock.uptimeMillis();
         MotionEvent down=MotionEvent.obtain(time,time,MotionEvent.ACTION_DOWN,x,y,0);sendOwnPointerSync(down);down.recycle();

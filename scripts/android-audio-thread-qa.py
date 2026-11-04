@@ -78,8 +78,8 @@ try:
  if args.held_seek:
   tap('play');wait(lambda s:s['current']=='tone-scale-long-v1' and s['playback']=='Playing')
   current=state();rect=next(c['rect'] for c in current['controls'] if c['name']=='seek')
-  radius=(rect[3]-rect[1])/2.5*.75;scale=current['pixels_per_point']
-  x=round((rect[0]+100-radius)*scale+origin[0]);y=round((rect[1]+rect[3])/2*scale+origin[1])
+  scale=current['pixels_per_point']
+  x=round((rect[0]+(rect[2]-rect[0])*.99)*scale+origin[0]);y=round((rect[1]+rect[3])/2*scale+origin[1])
   focus=adb('shell','dumpsys','window','windows').decode()
   assert any('mCurrentFocus=' in l and PKG+'/' in l for l in focus.splitlines())
   adb('shell','input','swipe',str(x),str(y),str(x),str(y),'3000')

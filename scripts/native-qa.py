@@ -12,6 +12,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary',type=Path)
     parser.add_argument('output',type=Path)
+    parser.add_argument('--size',type=int,nargs=2,metavar=('WIDTH','HEIGHT'))
     args=parser.parse_args()
     output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
     directory=output/'profile'
@@ -35,6 +36,9 @@ def main():
     try:
         window=xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0]
         xdo('windowfocus','--sync',window)
+        if args.size:
+            xdo('windowsize','--sync',window,*args.size)
+            wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
         wait(lambda s:bool(s['controls']))
         def tap(name):
             fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume'}

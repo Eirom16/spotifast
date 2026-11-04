@@ -179,8 +179,7 @@ def cpu_ticks():
 report = dict(source_commit=args.commit, platform="Linux X11 / native default audio", software_rendering=env.get("LIBGL_ALWAYS_SOFTWARE") == "1", acoustic_capture=False, render_rate_measured=False)
 def slider(name, fraction, hold=.08):
     data=state();rect=next(control["rect"] for control in data["controls"] if control["name"]==name)
-    radius=(rect[3]-rect[1])/2.5*0.75
-    x=(rect[0]+radius+(100-2*radius)*fraction)*data["pixels_per_point"]
+    x=(rect[0]+(rect[2]-rect[0])*fraction)*data["pixels_per_point"]
     y=(rect[1]+rect[3])/2*data["pixels_per_point"]
     assert int(xdo("getwindowfocus"))==int(window)
     xdo("mousemove","--window",window,round(x),round(y),"mousedown",1)

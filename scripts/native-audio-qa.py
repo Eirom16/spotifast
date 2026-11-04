@@ -30,7 +30,7 @@ def capture(name):
  subprocess.run(['import','-window',window,str(out/(name+'.png'))],check=True);(out/(name+'.json')).write_text(json.dumps(state(),indent=2))
 try:
  window=xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0];xdo('windowfocus','--sync',window);wait(lambda s:bool(s['controls']))
- tap('local-audio');wait(lambda s:s['audio_metrics'] and s['audio_metrics']['frames']>10000 and s['playback']=='Playing');capture('playing')
+ tap('demo-examples');tap('local-audio');wait(lambda s:s['audio_metrics'] and s['audio_metrics']['frames']>10000 and s['playback']=='Playing');capture('playing')
  tap('pause');wait(lambda s:s['playback']=='Paused');time.sleep(.3);before=state()['position_ms'];time.sleep(.4);assert state()['position_ms']==before;capture('paused')
  tap('play');wait(lambda s:s['playback']=='Playing');tap('next');wait(lambda s:s['current']=='tone-chord' and s['position_ms']>100);capture('next')
  tap('previous');wait(lambda s:s['current']=='tone-scale' and s['position_ms']>100);capture('previous')

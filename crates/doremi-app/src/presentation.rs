@@ -69,7 +69,7 @@ impl DoremiApp {
                     });
                 });
         }
-        self.player_bar(ui, palette, wide || ui.available_height() < 500.0);
+        self.player_bar(ui, palette, wide);
         if wide {
             egui::Panel::left("sidebar")
                 .default_size(240.0)
@@ -179,81 +179,82 @@ impl DoremiApp {
     }
 
     fn transport(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
-        ui.horizontal(|ui| {
-            if self.icon_control(ui, palette, "shuffle", Icon::Shuffle, "Aleatorio", touch) {
-                let queue = &self.model.as_ref().unwrap().queue;
-                let order = if queue.shuffled() {
-                    Order::Sequential
-                } else {
-                    shuffled(
-                        queue.context().len(),
-                        queue.current().and_then(|current| {
-                            queue
-                                .context()
-                                .iter()
-                                .position(|entry| entry.id == current.id)
-                        }),
-                    )
-                };
-                self.model
-                    .as_mut()
-                    .unwrap()
-                    .command(Command::SetOrder(order));
-            }
-            if self.icon_control(
-                ui,
-                palette,
-                "previous",
-                Icon::SkipBackFilled,
-                "Anterior",
-                touch,
-            ) {
-                self.model.as_mut().unwrap().command(Command::Previous);
-            }
-            let playing = self.model.as_ref().unwrap().queue.playback() == Playback::Playing;
-            let response = theme::circle_button(
-                ui,
-                if playing {
-                    Icon::PauseFilled
-                } else {
-                    Icon::PlayFilled
-                },
-                if touch { 48.0 } else { 32.0 },
-                palette.accent,
-                palette.accent_hover,
-                palette.on_accent,
-                if playing { "Pausa" } else { "Reproducir" },
-            );
-            self.record(if playing { "pause" } else { "play" }, &response);
-            if response.clicked() {
-                self.model.as_mut().unwrap().command(if playing {
-                    Command::Pause
-                } else {
-                    Command::Play
-                });
-            }
-            if self.icon_control(
-                ui,
-                palette,
-                "next",
-                Icon::SkipForwardFilled,
-                "Siguiente",
-                touch,
-            ) {
-                self.model.as_mut().unwrap().command(Command::Next);
-            }
-            if self.icon_control(ui, palette, "repeat", Icon::Repeat, "Repetir", touch) {
-                let repeat = match self.model.as_ref().unwrap().queue.repeat() {
-                    Repeat::Off => Repeat::Context,
-                    Repeat::Context => Repeat::Track,
-                    Repeat::Track => Repeat::Off,
-                };
-                self.model
-                    .as_mut()
-                    .unwrap()
-                    .command(Command::SetRepeat(repeat));
-            }
-        });
+        ui.horizontal(|ui| self.transport_controls(ui, palette, touch));
+    }
+    fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
+        if self.icon_control(ui, palette, "shuffle", Icon::Shuffle, "Aleatorio", touch) {
+            let queue = &self.model.as_ref().unwrap().queue;
+            let order = if queue.shuffled() {
+                Order::Sequential
+            } else {
+                shuffled(
+                    queue.context().len(),
+                    queue.current().and_then(|current| {
+                        queue
+                            .context()
+                            .iter()
+                            .position(|entry| entry.id == current.id)
+                    }),
+                )
+            };
+            self.model
+                .as_mut()
+                .unwrap()
+                .command(Command::SetOrder(order));
+        }
+        if self.icon_control(
+            ui,
+            palette,
+            "previous",
+            Icon::SkipBackFilled,
+            "Anterior",
+            touch,
+        ) {
+            self.model.as_mut().unwrap().command(Command::Previous);
+        }
+        let playing = self.model.as_ref().unwrap().queue.playback() == Playback::Playing;
+        let response = theme::circle_button(
+            ui,
+            if playing {
+                Icon::PauseFilled
+            } else {
+                Icon::PlayFilled
+            },
+            if touch { 48.0 } else { 32.0 },
+            palette.accent,
+            palette.accent_hover,
+            palette.on_accent,
+            if playing { "Pausa" } else { "Reproducir" },
+        );
+        self.record(if playing { "pause" } else { "play" }, &response);
+        if response.clicked() {
+            self.model.as_mut().unwrap().command(if playing {
+                Command::Pause
+            } else {
+                Command::Play
+            });
+        }
+        if self.icon_control(
+            ui,
+            palette,
+            "next",
+            Icon::SkipForwardFilled,
+            "Siguiente",
+            touch,
+        ) {
+            self.model.as_mut().unwrap().command(Command::Next);
+        }
+        if self.icon_control(ui, palette, "repeat", Icon::Repeat, "Repetir", touch) {
+            let repeat = match self.model.as_ref().unwrap().queue.repeat() {
+                Repeat::Off => Repeat::Context,
+                Repeat::Context => Repeat::Track,
+                Repeat::Track => Repeat::Off,
+            };
+            self.model
+                .as_mut()
+                .unwrap()
+                .command(Command::SetRepeat(repeat));
+        }
     }
 
     fn progress(&mut self, ui: &mut egui::Ui) {
@@ -355,11 +356,14 @@ impl DoremiApp {
     }
 
     fn player_bar(&mut self, ui: &mut egui::Ui, palette: &Palette, wide: bool) {
+        let compact = !wide && ui.available_height() < 500.0;
         theme::player_bar(
             ui,
             palette.panel,
             if wide {
                 theme::PLAYER_BAR_HEIGHT
+            } else if compact {
+                104.0
             } else {
                 208.0
             },
@@ -398,6 +402,39 @@ impl DoremiApp {
                             self.volume(ui, palette);
                         });
                     });
+                } else if compact {
+                    ui.add_space(4.0);
+                    let title = self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .queue
+                        .current()
+                        .map(|entry| entry.media.title.as_str())
+                        .unwrap_or("Ninguna canción seleccionada");
+                    ui.add(egui::Label::new(RichText::new(title).size(13.0)).truncate());
+                    ui.horizontal(|ui| {
+                        self.transport_controls(ui, palette, true);
+                        let response = theme::icon_button(
+                            ui,
+                            Icon::Ellipsis,
+                            36.0,
+                            palette.secondary,
+                            palette.text,
+                            "Más controles",
+                        );
+                        self.record("player-more", &response);
+                        egui::Popup::menu(&response).show(|ui| {
+                            if self.button(ui, "stop", "Detener", 160.0) {
+                                self.model.as_mut().unwrap().command(Command::Cancel);
+                            }
+                            if self.button(ui, "player", "Reproductor", 160.0) {
+                                self.navigate(Page::Player);
+                            }
+                            ui.horizontal(|ui| self.volume(ui, palette));
+                        });
+                    });
+                    self.progress(ui);
                 } else {
                     ui.add_space(4.0);
                     self.now_playing(ui, palette);

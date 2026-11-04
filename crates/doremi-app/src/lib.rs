@@ -1359,7 +1359,12 @@ mod tests {
         app.model.as_mut().unwrap().page = Page::Search;
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
-            for size in [[384.0, 614.0], [682.0, 336.0], [440.0, 800.0]] {
+            for size in [
+                [384.0, 614.0],
+                [384.0, 332.0],
+                [682.0, 336.0],
+                [440.0, 800.0],
+            ] {
                 for _ in 0..3 {
                     let mut output = ctx.run_ui(
                         egui::RawInput {
@@ -1559,7 +1564,12 @@ mod tests {
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
-            for size in [[384.0, 614.0], [682.0, 336.0], [440.0, 800.0]] {
+            for size in [
+                [384.0, 614.0],
+                [384.0, 332.0],
+                [682.0, 336.0],
+                [440.0, 800.0],
+            ] {
                 for _ in 0..3 {
                     let mut output = ctx.run_ui(
                         egui::RawInput {
@@ -1603,6 +1613,49 @@ mod tests {
                     assert!(
                         pair[0].rect[2] <= pair[1].rect[0] || pair[0].rect[3] <= pair[1].rect[1]
                     );
+                }
+                let transport: Vec<_> = app
+                    .controls
+                    .iter()
+                    .filter(|control| {
+                        [
+                            "play",
+                            "pause",
+                            "previous",
+                            "next",
+                            "shuffle",
+                            "repeat",
+                            "seek",
+                            "volume",
+                            "player",
+                            "stop",
+                            "player-more",
+                        ]
+                        .contains(&control.name.as_str())
+                    })
+                    .collect();
+                for (index, left) in transport.iter().enumerate() {
+                    assert!(
+                        left.rect[0] >= 0.0
+                            && left.rect[2] <= size[0]
+                            && left.rect[1] >= 0.0
+                            && left.rect[3] <= size[1],
+                        "{} {:?} at {:?}",
+                        left.name,
+                        left.rect,
+                        size
+                    );
+                    for right in &transport[index + 1..] {
+                        let overlap = left.rect[0] < right.rect[2]
+                            && right.rect[0] < left.rect[2]
+                            && left.rect[1] < right.rect[3]
+                            && right.rect[1] < left.rect[3];
+                        assert!(
+                            !overlap,
+                            "{} overlaps {} at {:?}",
+                            left.name, right.name, size
+                        );
+                    }
                 }
             }
         }
