@@ -18,6 +18,13 @@ Tamaños publicados: Windows `yt-dlp.exe` 23.575.744 B, Linux x64
 41.166.968 B, Linux ARM64 40.789.792 B. No son memoria/latencia medidas,
 ni incluyen una integración Android, EJS/JS o reproducción de Doremi.
 No se descargaron ni instalaron componentes ejecutables.
+El pyproject fijado pide `yt-dlp-ejs==0.8.0`. La
+[guía EJS](https://github.com/yt-dlp/yt-dlp/wiki/EJS) consultada indica
+Deno ≥2.3.0 o Node ≥22.0.0; QuickJS ≥2023-12-09, con advertencias de
+rendimiento en revisiones antiguas. Bun está deprecado y no se propone.
+Los bundles oficiales incluyen EJS; sigue siendo necesario un runtime JS
+compatible. No se habilitan componentes remotos, plugins ni challenges para
+superar controles de acceso.
 
 Decisión del primer corte de catálogo: usar metadatos de la
 [API pública MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API),

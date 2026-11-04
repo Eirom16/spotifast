@@ -1,5 +1,6 @@
 > Doremi Android: host de desarrollo independiente en [`android/`](android/README.md).
-> Estado y evidencia del objetivo: [`DOREMI-GOAL-REPORT.md`](DOREMI-GOAL-REPORT.md).
+> Estado actual de producto: [`DOREMI-PRODUCT-REPORT.md`](DOREMI-PRODUCT-REPORT.md).
+> Evidencia histórica del host: [`DOREMI-GOAL-REPORT.md`](DOREMI-GOAL-REPORT.md).
 > APK instalada y navegación/restauración probadas en Android real. Las muestras de audio local ya funcionan en ambos hosts. La Preview Linux se conserva.
 
 # Doremi
@@ -8,9 +9,10 @@ Reproductor musical nativo en Rust, en migración desde
 [Eirom16/spotifast](https://github.com/Eirom16/spotifast), fork de
 [crmne/spotifast](https://github.com/crmne/spotifast).
 
-**Estado: host Doremi independiente de desarrollo para Linux y Android, con cola,
-biblioteca de prueba y preferencias compartidas. APK probada en SM-J701M/API 28.
-No hay release estable ni proveedor online integrado.**
+**Estado: host Doremi independiente para Linux/Android, catálogo público
+MusicBrainz y nuevo ejecutable Windows compilado en runner nativo.
+La búsqueda musical está probada en Linux y SM-J701M/API 28; MusicBrainz aporta
+metadatos, no audio. No hay release estable ni streaming musical productivo.**
 
 El objetivo es usar egui/eframe y contratos neutrales de búsqueda/resolución,
 con escritorio y Android construidos sobre el mismo núcleo. No usaremos
@@ -25,18 +27,18 @@ Premium del baseline. La estructura nueva no elimina ese acoplamiento.
 `doremi-core` contiene tipos neutrales y una máquina de cola determinista.
 El bridge conserva la integración manual del legado. El host independiente
 `doremi-app` usa el core para selección, duplicados, cola, modos y restauración
-pausada, con catálogo simulado y almacenamiento propio. El nuevo adaptador
-`doremi-player` añade dos muestras PCM/WAV originales CC0; sus controles y
-salida nativa pasaron pruebas en Linux y Android. Las cuatro canciones simuladas
-siguen silenciosas; este corte reproduce las dos muestras incluidas.
-Estado y cobertura real: [DOREMI-GOAL-REPORT.md](DOREMI-GOAL-REPORT.md).
-Rust nativo y yt-dlp se evaluarán experimentalmente; no hay proveedor elegido.
+pausada y almacenamiento propio. `doremi-ui` extrae componentes reales del
+legado para la presentación neutral. MusicBrainz permite buscar y explorar
+grabaciones/artistas/ediciones y guardar sus IDs; no se les asigna audio de otra
+fuente. El motor nativo y el experimento Commons CC0 permanecen separados de
+los datos demo, que siguen silenciosos.
+Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
+Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
 
-No renombramos aún IDs persistidos, keyrings, rutas, protocolos, iconos ni
-actualizador. **El ejecutable legado conserva su actualizador dirigido al
+El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
+actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
 upstream y su clave pública. No usarlo para distribuir Doremi ni aceptar sus
-actualizaciones como actualizaciones de Doremi.** El roadmap exige separar
-estas identidades antes del primer ejecutable Doremi.
+actualizaciones como actualizaciones de Doremi.** El roadmap conserva los gates de identidad y distribución.
 
 ## Desarrollo
 
@@ -51,7 +53,7 @@ cargo run --locked -p spotifast --features demo -- --demo
 
 GitHub Actions es el entorno principal para compilar el cliente completo.
 La CI separa checks rápidos, tests, Clippy y builds Linux/macOS/Windows del
-baseline. Un circuito enfocado genera el host Linux y el APK Android ARM64/ARMv7,
+baseline. Un circuito enfocado genera los nuevos hosts Linux/Windows y el APK Android ARM64/ARMv7,
 con manifiestos y checksums. Las estables futuras requieren Linux, Windows y
 Android con versión/commit comunes y gate global. No hay publicación automática de releases ni
 del sitio heredado. Estado real de ejecuciones y cachés: [CI-REPORT.md](CI-REPORT.md).
