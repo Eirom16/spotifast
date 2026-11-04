@@ -29,7 +29,7 @@ impl DoremiApp {
             self.navigate(Page::Search);
             ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("catalog-query")));
         }
-        if !ctx.wants_keyboard_input()
+        if !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             let model = self.model.as_mut().unwrap();

@@ -38,7 +38,10 @@ APK y validación física de esta iteración pendientes. ADB detectó SM-J701M;
 no se han modificado sus datos ni configuración.
 
 Checks: `cargo check --offline -p doremi-ui` pasó antes de componer el host.
-Circuito ligero, Clippy del host y CI se registrarán al terminar. Capturas,
+Circuito ligero y Clippy del host/all-targets pasaron. El primer check del
+host detectó el nombre de API de teclado cambiado en egui fijado; corregido
+y repetido con éxito. CI enfocada iniciada en `41919424431` para `8223b0d`;
+ese SHA anterior no contiene todavía la corrección de teclado. Capturas,
 logs y evidencias quedan fuera del árbol versionado. No hay release.
 
 Siguiente corte: terminar QA de geometría/navegación de esta composición,
