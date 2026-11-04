@@ -46,7 +46,9 @@ def main():
     else:
         base.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination)
-    binary = destination / "doremi-app"
+    filename=manifest["payload"]["file"]
+    assert filename in {"doremi","doremi-app"}
+    binary = destination / filename
     assert not binary.is_symlink()
     assert hashlib.sha256(binary.read_bytes()).hexdigest() == manifest["payload"]["sha256"]
     binary.chmod(binary.stat().st_mode | 0o100)
@@ -69,7 +71,7 @@ def main():
     text = f'''[Desktop Entry]
 Type=Application
 Name=Doremi Native Dev
-Comment=Audio local experimental y catálogo de demostración offline
+Comment=Catálogo musical y reproducción nativa experimental
 Exec="{binary}"
 TryExec={binary}
 Icon={icon}

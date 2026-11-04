@@ -15,3 +15,9 @@ assert subprocess.check_output([str(binary.resolve()),'--version'],text=True).st
 assert not subprocess.check_output(['git','status','--porcelain'],text=True).strip()
 host=next(line.split(': ',1)[1] for line in subprocess.check_output(['rustc','-vV'],text=True).splitlines() if line.startswith('host: '))
 manifest.write_text(json.dumps({'schema':1,'product':'Doremi','kind':'native-development','release':False,'version':version,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'source_dirty':False,'target':host,'payload':{'file':binary.name,'sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}},indent=2)+'\n')
+# Bind the complete artifact (including licenses) to checksums at build time.
+root=manifest.parent
+assert binary.resolve().parent==root.resolve()
+entries=sorted(root.rglob('*'))
+assert not any(path.is_symlink() for path in entries)
+(root/'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.relative_to(root).as_posix()}\n' for path in entries if path.is_file() and path.name!='SHA256SUMS'))

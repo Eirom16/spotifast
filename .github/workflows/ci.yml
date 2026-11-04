@@ -142,10 +142,13 @@ jobs:
         run: |
           cargo build --locked -p doremi-app --bins
           mkdir -p target/native-binary/licenses
-          cp target/ci/debug/doremi target/ci/debug/doremi-app LICENSE target/native-binary/
+          cp target/ci/debug/doremi target/ci/debug/doremi-app LICENSE Cargo.lock target/native-binary/
           cp assets/doremi/LICENSE target/native-binary/licenses/Doremi-assets-GPL-3.txt
           cp assets/doremi/PROVENANCE.md assets/fonts/Inter-LICENSE.txt assets/icons/LICENSE.txt target/native-binary/licenses/
           cp assets/audio/LICENSE.txt target/native-binary/licenses/Audio-CC0.txt
+          cp assets/audio/manifest.json target/native-binary/licenses/Audio-manifest.json
+          cp tools/provider-live-probe/corpus.json target/native-binary/licenses/Commons-CC0-corpus.json
+          cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-binary/licenses/Symphonia-source-and-fixture.md
           cp crates/doremi-player/licenses/* target/native-binary/licenses/
           python3 scripts/native-manifest.py target/native-binary/doremi target/native-binary/manifest.json
       - uses: actions/upload-artifact@v6
@@ -292,10 +295,16 @@ jobs:
           cargo build --locked -p doremi-app --bin doremi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force target/native-dist/licenses | Out-Null
-          Copy-Item target/ci/debug/doremi.exe, LICENSE target/native-dist/
+          Copy-Item target/ci/debug/doremi.exe, LICENSE, Cargo.lock target/native-dist/
           Copy-Item assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           Copy-Item assets/doremi/PROVENANCE.md, assets/fonts/Inter-LICENSE.txt, assets/icons/LICENSE.txt target/native-dist/licenses/
+          Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
+          Copy-Item assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
+          Copy-Item tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
+          Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
+          & ./scripts/windows-native-smoke.ps1 -Binary target/native-dist/doremi.exe -Output target/native-dist/smoke
+          if (!$?) { exit 1 }
           python scripts/native-manifest.py target/native-dist/doremi.exe target/native-dist/manifest.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v6

@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real", "feature/doremi-product-ui"]
-    paths: ["crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", "scripts/windows-native-smoke.ps1", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -111,7 +111,7 @@ jobs:
           mkdir -p target/native-dist
           cp target/native-cargo/debug/doremi target/native-dist/
           cp target/native-cargo/debug/doremi-app target/native-dist/
-          cp LICENSE target/native-dist/
+          cp LICENSE Cargo.lock target/native-dist/
           mkdir -p target/native-dist/licenses
           cp assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           cp assets/fonts/Inter-LICENSE.txt assets/icons/LICENSE.txt target/native-dist/licenses/
@@ -161,15 +161,21 @@ jobs:
           cargo build --locked -p doremi-app --bin doremi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force target/native-dist/licenses | Out-Null
-          Copy-Item target/native-cargo/debug/doremi.exe, LICENSE target/native-dist/
+          Copy-Item target/native-cargo/debug/doremi.exe, LICENSE, Cargo.lock target/native-dist/
           Copy-Item assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           Copy-Item assets/doremi/PROVENANCE.md, assets/fonts/Inter-LICENSE.txt, assets/icons/LICENSE.txt target/native-dist/licenses/
+          Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
+          Copy-Item assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
+          Copy-Item tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
+          Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & target/native-dist/doremi.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-FileHash target/native-dist/doremi.exe -Algorithm SHA256 | Format-List | Out-File target/native-dist/SHA256.txt
+          & ./scripts/windows-native-smoke.ps1 -Binary target/native-dist/doremi.exe -Output target/native-dist/smoke
+          if (!$?) { exit 1 }
           python scripts/native-manifest.py target/native-dist/doremi.exe target/native-dist/manifest.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          Get-FileHash target/native-dist/doremi.exe -Algorithm SHA256 | Format-List | Out-File target/native-dist/SHA256.txt
           # Native CLI/tests/build only. A runner without an audio device does
           # not prove playback on physical Windows hardware.
       - uses: actions/upload-artifact@v6

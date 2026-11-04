@@ -8,6 +8,7 @@ import runpy
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +18,35 @@ VERIFY = runpy.run_path(str(ROOT / "scripts/verify-artifacts.py"))
 
 
 class CITests(unittest.TestCase):
+    def test_native_manifest_binds_the_new_executable_and_every_license(self):
+        previous=Path.cwd()
+        with tempfile.TemporaryDirectory() as name:
+            root=Path(name)
+            package=root/'crates/doremi-app';package.mkdir(parents=True)
+            (package/'Cargo.toml').write_text('[package]\nversion="0.1.0"\n')
+            artifact=root/'artifact';artifact.mkdir()
+            binary=artifact/'doremi';binary.write_bytes(b'own synthetic executable')
+            licenses=artifact/'licenses';licenses.mkdir()
+            (licenses/'notice.txt').write_text('preserve the upstream license')
+            manifest=artifact/'manifest.json'
+            def output(command,**kwargs):
+                if command[0]==str(binary.resolve()):return 'Doremi Native Dev 0.1.0-dev\n'
+                if command==['git','status','--porcelain']:return ''
+                if command==['git','rev-parse','HEAD']:return 'a'*40+'\n'
+                if command==['rustc','-vV']:return 'host: x86_64-unknown-linux-gnu\n'
+                raise AssertionError(command)
+            try:
+                os.chdir(root)
+                with patch.object(sys,'argv',['native-manifest.py',str(binary),str(manifest)]),patch('subprocess.check_output',side_effect=output):
+                    runpy.run_path(str(ROOT/'scripts/native-manifest.py'))
+            finally:os.chdir(previous)
+            data=json.loads(manifest.read_text())
+            self.assertEqual(data['payload']['file'],'doremi')
+            records=dict(line.split('  ',1)[::-1] for line in (artifact/'SHA256SUMS').read_text().splitlines())
+            self.assertEqual(set(records),{'doremi','licenses/notice.txt','manifest.json'})
+            import hashlib
+            for relative,digest in records.items():self.assertEqual(hashlib.sha256((artifact/relative).read_bytes()).hexdigest(),digest)
+
     def test_failure_categories_do_not_turn_errors_into_success(self):
         category = REPORT["failure_category"]
         self.assertIsNone(category(0, "warning"))
