@@ -18,22 +18,22 @@ El objetivo completo sigue abierto; no hay release estable.
 - Linux: recorrido gráfico real PASS, con artista, álbum, Unicode, vacío,
   cancelación y guardado. También PASS navegación, teclado, cola con duplicados,
   temas/acento y ventana 384×658. Evidencias:
-  `/tmp/doremi-product-linux-6bbc/` y `/tmp/doremi-product-linux-rate/`.
+  `/home/eirom/.local/share/doremi/product-qa/2026-11-04/doremi-product-linux-6bbc/` y `/home/eirom/.local/share/doremi/product-qa/2026-11-04/doremi-product-linux-rate/`.
   La barra de `94d112b` pasó audio nativo real, pausa/reanudación, seek en
   pausa a 4006 ms, volumen por rueda/puntero, next/previous y cancelación:
   25.600 frames/51.194 muestras no nulas en la captura inicial. Muestras propias
   CC0, sin captura acústica; no es streaming ni benchmark de catálogo.
-  `/tmp/doremi-product-audio-94d112b/qa-seek/`; build local con cambios
+  `/home/eirom/.local/share/doremi/product-qa/2026-11-04/doremi-product-audio-94d112b/qa-seek/`; build local con cambios
   exclusivamente documentales fuera de sus entradas Rust, declarado como tal.
 - Android `6bbcfe3`: APK verificada e instalada por ADB en SM-J701M,
   Android 9/API 28, ARMv7. GUI y consulta «Moonlight Sonata» con **20 resultados**.
   Favoritos preservados, sesión pausada, sin autoplay. Navegación completa
-  dentro del viewport 384×658. Evidencia `/tmp/doremi-product-android-6bbc/`;
+  dentro del viewport 384×658. Evidencia `/home/eirom/.local/share/doremi/product-qa/2026-11-04/doremi-product-android-6bbc/`;
   APK SHA-256 `1caab6cdb906d8b64715a09b518aa629cd4ab977f874dc60cb14a37c9dfc37c4`.
 - Windows `6bbcfe3`: runner nativo pasó tests/build/CLI del nuevo `doremi.exe`.
   Artifact descargado: manifiesto/hash y PE x64 verificados, imports examinados.
   SHA-256 `c26d91187effe1d12868ad925bca88de554a75b1ec0e775631aa0bdae4653114`;
-  evidencia `/tmp/doremi-product-windows-6bbc/`. Sin prueba física Windows.
+  evidencia `/home/eirom/.local/share/doremi/product-qa/2026-11-04/doremi-product-windows-6bbc/`. Sin prueba física Windows.
 
 ## Alcance y limitaciones
 
@@ -57,6 +57,13 @@ recrear Activity; cancelación por generación y un hilo de DNS como máximo.
 Revisión actual de Tubefast, yt-dlp/EJS y RustyPipe en `TUBEFAST-ASSESSMENT.md`.
 
 ## Validación y correcciones en curso
+
+Nueva CI completa [41933320025](https://github.com/Eirom16/spotifast/actions/runs/41933320025),
+código `10f80b5`, en curso: quick y core Android aprobados; Linux, Windows,
+macOS y APK ejecutándose. Los commits documentales posteriores no cambian
+sus entradas Rust. Evidencia privada preservada con checksums fuera del árbol:
+`/home/eirom/.local/share/doremi/product-qa/2026-11-04/`.
+
 
 26 tests del host y 3 del parser pasaron; también Clippy del host, circuito
 ligero, 7 tests de tooling y 27 de políticas. La geometría cubre ahora el tamaño
