@@ -57,3 +57,25 @@ pub struct Media {
     pub title: String,
     pub duration_ms: Option<u64>,
 }
+
+/// Neutral catalog presentation, separate from the minimal persisted queue item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EntityKind {
+    Recording,
+    Artist,
+    Release,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtistCredit {
+    pub id: MediaId,
+    pub name: String,
+}
+
+/// A catalog result never implies that its provider supplies playable audio.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogEntry {
+    pub media: Media,
+    pub kind: EntityKind,
+    pub artists: Vec<ArtistCredit>,
+}

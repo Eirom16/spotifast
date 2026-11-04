@@ -37,22 +37,31 @@ def main():
         xdo('windowfocus','--sync',window)
         wait(lambda s:bool(s['controls']))
         def tap(name):
-            data=state(); control=next(c for c in data['controls'] if c['name']==name)
-            x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
-            xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
-            time.sleep(.4)
+            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume'}
+            for attempt in range(45):
+                data=state(); control=next(c for c in data['controls'] if c['name']==name)
+                x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
+                left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
+                if name in fixed or top<=y1<y2<=bottom:
+                    assert 0<=x1<x2<=data['viewport'][0],(name,control['rect'])
+                    xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
+                    time.sleep(.4)
+                    return
+                xdo('mousemove','--window',window,round((left+right)*scale/2),round((top+bottom)*scale/2),'click',4 if y1<top else 5)
+                time.sleep(.15)
+            raise AssertionError(f'Control did not scroll into the page: {name}')
         def capture(name):
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
         capture('home-dark')
-        tap('save:dawn');wait(lambda s:'dawn' in s['library'])
+        tap('demo-examples');tap('save:dawn');wait(lambda s:'dawn' in s['library'])
         for name,page in [('library','Library'),('queue','Queue'),('settings','Settings')]:
             tap(name);wait(lambda s:s['page']==page);capture(name)
         tap('green');wait(lambda s:s['green']);capture('green-dark')
         tap('light');wait(lambda s:s['light']);capture('green-light')
         tap('purple');wait(lambda s:not s['green']);capture('purple-light')
-        tap('search');wait(lambda s:s['page']=='Search');tap('query')
+        tap('search');wait(lambda s:s['page']=='Search');tap('source-demo');tap('query')
         xdo('type','--clearmodifiers','Lluvia');wait(lambda s:s['query']=='Lluvia');capture('search')
         tap('cancel-search');wait(lambda s:s['query']=='')
         tap('home');wait(lambda s:s['page']=='Home')

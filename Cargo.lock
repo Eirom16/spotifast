@@ -1556,6 +1556,7 @@ dependencies = [
  "doremi-commons",
  "doremi-core",
  "doremi-library",
+ "doremi-musicbrainz",
  "doremi-player",
  "doremi-ui",
  "eframe",
@@ -1593,6 +1594,16 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "doremi-musicbrainz"
+version = "0.1.0"
+dependencies = [
+ "doremi-core",
+ "reqwest",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

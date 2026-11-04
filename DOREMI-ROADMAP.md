@@ -1,5 +1,11 @@
 # Doremi: roadmap de migración
 
+Corte de producto activo en `feature/doremi-product-ui`: extracción compartida
+de presentación y catálogo público MusicBrainz; detalles, evidencia y gates
+pendientes en `DOREMI-PRODUCT-REPORT.md`. La recuperación visual completa,
+streaming musical autorizado y paridad física de plataformas siguen abiertos.
+No se retiran funciones del legado ni se añaden formatos locales en este corte.
+
 ## Estado y objetivo
 
 F0 validó el baseline y la infraestructura del fork Eirom16/spotifast.

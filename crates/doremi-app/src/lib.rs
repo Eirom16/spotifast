@@ -8,6 +8,8 @@ use doremi_core::{
 #[cfg(target_os = "android")]
 mod android_native;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+mod music_catalog;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod online;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod online_model;
@@ -46,15 +48,37 @@ fn seek_slider(
     position: &mut u64,
     duration: u64,
 ) -> egui::Response {
-    ui.push_id(identity, |ui| {
-        ui.add_sized(
-            [ui.available_width(), ui.spacing().interact_size.y],
-            egui::Slider::new(position, 0..=duration)
-                .text("Posición")
-                .show_value(false),
-        )
-    })
-    .inner
+    let mut palette = if ui.visuals().dark_mode {
+        doremi_ui::Palette::dark()
+    } else {
+        doremi_ui::Palette::light()
+    };
+    palette.accent = ui.visuals().selection.stroke.color;
+    let value = if duration == 0 {
+        0.0
+    } else {
+        *position as f32 / duration as f32
+    };
+    let (event, mut response) = doremi_ui::thin_slider_sized(
+        ui,
+        &palette,
+        identity,
+        "Posición",
+        value,
+        egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(16.0)),
+        None,
+    );
+    match event {
+        doremi_ui::SliderEvent::Dragging(value) => {
+            *position = (f64::from(value) * duration as f64).round() as u64
+        }
+        doremi_ui::SliderEvent::Committed(value) => {
+            *position = (f64::from(value) * duration as f64).round() as u64;
+            response.mark_changed();
+        }
+        doremi_ui::SliderEvent::None => {}
+    }
+    response
 }
 static RETAINED: Mutex<Option<Retained>> = Mutex::new(None);
 
@@ -114,6 +138,8 @@ struct Model {
     prepared: Vec<(MediaId, Arc<Pcm>)>,
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     online: online_model::State,
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    music: music_catalog::State,
 }
 
 const DEMO_TRACKS: [(&str, &str); 4] = [
@@ -179,6 +205,8 @@ impl Model {
             prepared: Vec::new(),
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             online: online_model::State::new(),
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            music: music_catalog::State::new(),
         }
     }
     fn load(directory: &std::path::Path) -> Self {
@@ -210,6 +238,10 @@ impl Model {
                 model.storage_warning =
                     Some("No se pudieron leer las preferencias. El archivo se conserva.");
             }
+        }
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        {
+            model.music.selected = true;
         }
         model.load_library(directory);
         model.load_local_files(directory);
@@ -459,6 +491,13 @@ impl Model {
     }
     fn search(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if self.music.selected {
+            self.music.search(&self.query);
+            self.revision += 1;
+            return;
+        }
+
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if self.online.selected {
             self.schedule_online_search();
             return;
@@ -504,6 +543,9 @@ impl Model {
         }
     }
     fn cancel_search(&mut self) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        self.music.cancel();
+
         self.query.clear();
         self.catalog.cancel();
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -619,6 +661,7 @@ pub struct DoremiApp {
     pending_write: usize,
     storage_error: Option<StorageError>,
     controls: Vec<Control>,
+    page_rect: [f32; 4],
     saved_state: Vec<u8>,
     pending: bool,
     last_persist: Instant,
@@ -651,6 +694,7 @@ impl DoremiApp {
             pending_write: 0,
             storage_error: None,
             controls: vec![],
+            page_rect: [0.0; 4],
             saved_state: vec![],
             pending: true,
             last_persist: Instant::now(),
@@ -660,7 +704,12 @@ impl DoremiApp {
         }
     }
     fn button(&mut self, ui: &mut egui::Ui, name: &str, label: &str, width: f32) -> bool {
-        let response = ui.add_sized([width.max(TOUCH), TOUCH], egui::Button::new(label));
+        let height = if ui.ctx().content_rect().width() >= 760.0 {
+            32.0
+        } else {
+            TOUCH
+        };
+        let response = ui.add_sized([width.max(TOUCH), height], egui::Button::new(label));
         self.controls.push(Control {
             name: name.into(),
             rect: [
@@ -700,6 +749,10 @@ impl DoremiApp {
             "streaming":m.streaming,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        let music_catalog = model.music.snapshot();
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
+        let music_catalog = serde_json::Value::Null;
         let state = serde_json::json!({
             "input":ctx.input(|input|serde_json::json!({"focused":input.raw.focused,"primary_down":input.pointer.primary_down(),"position":input.pointer.hover_pos().map(|point|[point.x,point.y])})),
             "local_import":model.local_files.snapshot(),"notice":model.notice,
@@ -707,6 +760,7 @@ impl DoremiApp {
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
             "current_provider":model.queue.current().map(|e|e.media.id.provider.as_str()),"online":model.source_diagnostics(),
+            "music_catalog":music_catalog,
             "current_occurrence": model.queue.current().map(|e|e.id.as_u64()),
             "manual_occurrences": model.queue.manual().iter().map(|e|e.id.as_u64()).collect::<Vec<_>>(),
             "position_ms":model.queue.position_ms(),
@@ -716,7 +770,7 @@ impl DoremiApp {
             "repeat": format!("{:?}", model.queue.repeat()), "shuffle": model.queue.shuffled(),
             "library": model.library.items().iter().filter(|media|media.id.provider.as_str()=="demo").map(|media|media.id.local()).collect::<Vec<_>>(),
             "saved_media":model.library.items().iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>(),
-            "controls": self.controls,
+            "controls": self.controls,"page_rect":self.page_rect,
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
         });
         let state = serde_json::to_vec(&state).unwrap();
@@ -802,7 +856,10 @@ impl DoremiApp {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_local(&ctx);
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        self.model.as_mut().unwrap().poll_online(&ctx);
+        {
+            self.model.as_mut().unwrap().poll_online(&ctx);
+            self.model.as_mut().unwrap().music.poll(&ctx);
+        }
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
         if model.queue.playback() == Playback::Loading {
@@ -830,56 +887,81 @@ impl DoremiApp {
         match page {
             Page::Home => {
                 ui.heading("Tu música, a tu ritmo");
-                ui.label(
-                    if cfg!(any(
-                        target_os = "linux",
-                        target_os = "android",
-                        target_os = "windows"
-                    )) {
-                        "Audio local y demostración. Commons experimental desde Buscar."
-                    } else {
-                        "Catálogo de prueba local. Sin Spotify ni conexión."
-                    },
-                );
-                if self.model.as_ref().unwrap().queue.current().is_some()
-                    && self.button(ui, "player", "Abrir reproductor", 220.0)
-                {
-                    let model = self.model.as_mut().unwrap();
-                    model.page = Page::Player;
-                    model.revision += 1;
+                ui.label("Busca canciones, artistas y álbumes. Guarda tus descubrimientos en este dispositivo.");
+                if self.button(ui, "browse-catalog", "Buscar música", 220.0) {
+                    self.navigate(Page::Search);
                 }
-                if self.button(ui, "local-audio", "Probar audio original", 240.0) {
-                    let model = self.model.as_mut().unwrap();
-                    model.start_context(vec![Builtin::Scale.media(), Builtin::Chord.media()], 0);
-                    model.page = Page::Player;
+                ui.add_space(16.0);
+                ui.heading("Tu biblioteca");
+                let library = self.model.as_ref().unwrap().library.clone();
+                if library.items().is_empty() {
+                    ui.weak("Guarda música desde Buscar para encontrarla aquí.");
+                } else {
+                    self.rows(ui, library.items());
                 }
-                if self.button(ui, "long-audio", "Probar WAV de 2 minutos", 260.0) {
-                    let model = self.model.as_mut().unwrap();
-                    model.start_context(
-                        vec![
-                            doremi_player::original_long::media(),
-                            Builtin::Chord.media(),
-                        ],
-                        0,
-                    );
-                    model.page = Page::Player;
-                }
-                self.rows(ui, &songs());
+                ui.add_space(16.0);
+                let response=egui::CollapsingHeader::new("Muestras originales y demostración").id_salt("demo-examples").show(ui,|ui| {
+                    ui.small("Muestras de prueba CC0 y datos de demostración. No son resultados del catálogo musical.");
+                    if self.button(ui,"local-audio","Audio original",220.0) {
+                        let model=self.model.as_mut().unwrap();model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);self.navigate(Page::Player);
+                    }
+                    if self.button(ui,"long-audio","Muestra original de 2 minutos",260.0) {
+                        let model=self.model.as_mut().unwrap();model.start_context(vec![doremi_player::original_long::media(),Builtin::Chord.media()],0);self.navigate(Page::Player);
+                    }
+                    self.rows(ui,&songs());
+                });
+                self.record("demo-examples", &response.header_response);
             }
             Page::Search => {
                 ui.heading("Buscar");
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 {
-                    let width = ((ui.available_width() - GAP) / 2.0).floor().max(TOUCH);
+                    let width = ((ui.available_width() - 2.0 * GAP) / 3.0)
+                        .floor()
+                        .max(TOUCH);
                     ui.horizontal_wrapped(|ui| {
-                        if self.button(ui, "source-demo", "Demostración", width) {
-                            self.model.as_mut().unwrap().set_online_source(false);
+                        if self.button(ui, "source-musicbrainz", "MusicBrainz", width) {
+                            let model = self.model.as_mut().unwrap();
+                            model.cancel_search();
+                            model.set_online_source(false);
+                            model.music.selected = true;
+                            model.revision += 1;
                         }
-                        if self.button(ui, "source-commons", "Commons · CC0", width) {
+                        if self.button(ui, "source-commons", "Commons", width) {
                             self.model.as_mut().unwrap().set_online_source(true);
                         }
+                        if self.button(ui, "source-demo", "Demo", width) {
+                            self.model.as_mut().unwrap().set_online_source(false);
+                        }
                     });
-                    ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Guardar añade un favorito, sin descargar audio."}else{"Fuente: demostración offline"});
+                    let model = self.model.as_ref().unwrap();
+                    ui.small(if model.music.selected {
+                        "Fuente: MusicBrainz · catálogo público; no proporciona audio."
+                    } else if model.online.selected {
+                        "Fuente: Commons · dos tonos CC0 de prueba."
+                    } else {
+                        "Fuente: demostración offline · sin audio."
+                    });
+                    if self.model.as_ref().unwrap().music.selected {
+                        ui.horizontal_wrapped(|ui| {
+                            for (kind, label) in [
+                                (doremi_core::media::EntityKind::Recording, "Canciones"),
+                                (doremi_core::media::EntityKind::Artist, "Artistas"),
+                                (doremi_core::media::EntityKind::Release, "Álbumes"),
+                            ] {
+                                let response = ui.selectable_label(
+                                    self.model.as_ref().unwrap().music.kind == kind,
+                                    label,
+                                );
+                                self.record(&format!("catalog-kind:{kind:?}"), &response);
+                                if response.clicked() {
+                                    let model = self.model.as_mut().unwrap();
+                                    model.music.kind = kind;
+                                    model.search();
+                                }
+                            }
+                        });
+                    }
                 }
                 let online = self.model.as_ref().unwrap().online_search_selected();
                 let response = ui.add_sized(
@@ -889,7 +971,7 @@ impl DoremiApp {
                         .hint_text(if online {
                             "Busca sine, 440 o 880"
                         } else {
-                            "Busca en la demostración"
+                            "Busca música por nombre o artista"
                         })
                         .char_limit(128),
                 );
@@ -907,6 +989,11 @@ impl DoremiApp {
                 }
                 if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
                     self.model.as_mut().unwrap().cancel_search();
+                }
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                if self.model.as_ref().unwrap().music.selected {
+                    self.music_results(ui);
+                    return;
                 }
                 let results = self.model.as_ref().unwrap().catalog.results().to_vec();
                 if let Some((error, message)) = self.model.as_ref().unwrap().search_feedback() {
@@ -1081,7 +1168,10 @@ impl Drop for DoremiApp {
     fn drop(&mut self) {
         if let Some(mut model) = self.model.take() {
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-            model.suspend_online();
+            {
+                model.suspend_online();
+                model.music.suspend();
+            }
             // The Android system picker pauses the Activity. Keep its explicit
             // import intent while suspending playback and the GL renderer.
             model.command_with_import_policy(Command::Cancel, !cfg!(target_os = "android"));
@@ -1229,7 +1319,7 @@ mod tests {
         };
         let mut old = 0;
         let rect = render(vec![], 1_u64, &mut old, 120000);
-        let pointer = egui::pos2(rect.min.x + 80.0, rect.center().y);
+        let pointer = egui::pos2(rect.min.x + rect.width() * 0.75, rect.center().y);
         let button = |pressed| egui::Event::PointerButton {
             pos: pointer,
             button: egui::PointerButton::Primary,
@@ -1288,14 +1378,16 @@ mod tests {
                     .iter()
                     .filter(|control| control.name.starts_with("source-"))
                     .collect::<Vec<_>>();
-                assert_eq!(controls.len(), 2);
+                assert_eq!(controls.len(), 3);
                 for control in &controls {
                     let [x1, y1, x2, y2] = control.rect;
                     assert!(x1 >= 0.0 && y1 >= 0.0 && x2 <= size[0] && y2 <= size[1]);
                     assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
                 }
-                assert_eq!(controls[0].rect[1], controls[1].rect[1]);
-                assert!((controls[1].rect[0] - controls[0].rect[2] - GAP).abs() < 0.1);
+                for pair in controls.windows(2) {
+                    assert_eq!(pair[0].rect[1], pair[1].rect[1]);
+                    assert!((pair[1].rect[0] - pair[0].rect[2] - GAP).abs() < 0.1);
+                }
             }
         }
         drop(app);
@@ -1388,6 +1480,11 @@ mod tests {
         };
         let mut output = ctx.run_ui(input(), |ui| app.draw(ui));
         output.textures_delta.clear();
+        assert!(
+            app.controls
+                .iter()
+                .any(|control| control.name == "browse-catalog")
+        );
         // Emulate an intent applied after drawing Home: the first publication
         // names Player, but still carries Home's controls from that frame.
         app.model.as_mut().unwrap().page = Page::Player;
@@ -1425,22 +1522,29 @@ mod tests {
         let mut output = ctx.run_ui(input(), |ui| app.draw(ui));
         output.textures_delta.clear();
         let state: serde_json::Value = serde_json::from_slice(&app.saved_state).unwrap();
-        let pause = state["controls"]
+        let play = state["controls"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|c| c["name"] == "pause")
+            .find(|control| control["name"] == "play")
             .unwrap();
+        let actual = app
+            .controls
+            .iter()
+            .find(|control| control.name == "play")
+            .unwrap();
+        assert_eq!(play["rect"], serde_json::json!(actual.rect));
+        assert_eq!(state["page"], "Player");
         assert!(
-            pause["rect"][3].as_f64().unwrap() < 550.0,
-            "Published controls must belong to the visible Player page"
+            play["rect"][3].as_f64().unwrap() < 614.0,
+            "Published transport must remain inside the viewport"
         );
         assert!(
             !state["controls"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|c| c["name"] == "select:dawn")
+                .any(|c| c["name"] == "browse-catalog")
         );
         drop(app);
         DoremiApp::shutdown();

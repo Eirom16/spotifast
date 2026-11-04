@@ -108,6 +108,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-app: dependencies` | `serde_json` | `1` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-commons` | `path=../doremi-commons` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-musicbrainz` | `path=../doremi-musicbrainz` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis', 'local-flac', 'local-mp3']; path=../doremi-player` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
@@ -142,10 +143,16 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-ui: dependencies` | `fastframe-icons` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
 | `crates/doremi-ui: dependencies` | `fastframe-theme` | `git=https://github.com/crmne/fastframe; optional=True; tag=v0.15.2` |
 | `crates/doremi-ui: dependencies` | `serde` | `features=['derive']; version=1` |
+| `crates/doremi-musicbrainz: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-musicbrainz: dependencies` | `reqwest` | `default-features=False; version=0.12` |
+| `crates/doremi-musicbrainz: dependencies` | `serde_json` | `1` |
+| `crates/doremi-musicbrainz: dependencies` | `tokio` | `features=['time']; version=1` |
+| `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 805 entradas (incluye miembros locales).
+`Cargo.lock`: 806 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -157,7 +164,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
 | 752 | `registry+https://github.com/rust-lang/crates.io-index` |
-| 9 | `workspace` |
+| 10 | `workspace` |
 
 ## Patches
 

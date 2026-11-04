@@ -1,0 +1,407 @@
+//! One cancelable metadata actor shared by Linux, Windows and Android.
+use super::*;
+use doremi_core::{
+    catalog::ProviderError,
+    media::{CatalogEntry, EntityKind},
+};
+use doremi_musicbrainz::{Client, Page as Results, Request};
+use tokio::sync::mpsc;
+
+type Completion = (u64, Result<Arc<Results>, ProviderError>);
+type HistoryEntry = (Option<CatalogEntry>, Option<Arc<Results>>, Option<Request>);
+struct Job {
+    generation: u64,
+    request: Option<Request>,
+    ctx: egui::Context,
+}
+struct Worker {
+    commands: mpsc::Sender<Job>,
+    events: mpsc::Receiver<Completion>,
+}
+impl Worker {
+    fn new() -> Result<Self, ProviderError> {
+        let (commands, mut receive) = mpsc::channel::<Job>(2);
+        let (send, events) = mpsc::channel(1);
+        std::thread::Builder::new()
+            .name("doremi-catalog".into())
+            .spawn(move || {
+                let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                else {
+                    return;
+                };
+                runtime.block_on(async move {
+                    let mut client = Client::new();
+                    let mut job = receive.recv().await;
+                    while let Some(current) = job {
+                        let Some(request) = current.request else {
+                            job = receive.recv().await;
+                            continue;
+                        };
+                        let result = async {
+                            match &mut client {
+                                Ok(client) => client.fetch(&request).await.map(Arc::new),
+                                Err(error) => Err(*error),
+                            }
+                        };
+                        tokio::select! {
+                            biased;
+                            next = receive.recv() => {job = next;},
+                            result = result => {
+                                current.ctx.request_repaint();
+                                tokio::select! {
+                                    biased;
+                                    next = receive.recv() => {job=next;},
+                                    sent = send.send((current.generation, result)) => {
+                                        if sent.is_err() {break;}
+                                        current.ctx.request_repaint();
+                                        job=receive.recv().await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
+            })
+            .map_err(|_| ProviderError::Unavailable)?;
+        Ok(Self { commands, events })
+    }
+}
+
+pub(super) struct State {
+    pub selected: bool,
+    pub kind: EntityKind,
+    pub page: Option<Arc<Results>>,
+    pub detail: Option<CatalogEntry>,
+    pub error: Option<ProviderError>,
+    pub waiting: bool,
+    request: Option<Request>,
+    history: Vec<HistoryEntry>,
+    generation: u64,
+    pending: Option<(Option<Request>, Instant)>,
+    worker: Option<Worker>,
+}
+impl State {
+    pub fn new() -> Self {
+        Self {
+            selected: false,
+            kind: EntityKind::Recording,
+            page: None,
+            detail: None,
+            error: None,
+            waiting: false,
+            request: None,
+            history: vec![],
+            generation: 0,
+            pending: None,
+            worker: None,
+        }
+    }
+    fn dispatch(&mut self, request: Option<Request>, delay: Duration) {
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("catalog generation exhausted");
+        self.waiting = request.is_some();
+        self.error = None;
+        self.request = request.clone();
+        self.pending = Some((request, Instant::now() + delay));
+    }
+    pub fn search(&mut self, query: &str) {
+        self.page = None;
+        self.detail = None;
+        self.history.clear();
+        self.dispatch(
+            (!query.trim().is_empty()).then(|| Request::Search {
+                query: query.into(),
+                kind: self.kind,
+                offset: 0,
+            }),
+            Duration::from_millis(350),
+        );
+    }
+    pub fn cancel(&mut self) {
+        self.page = None;
+        self.detail = None;
+        self.history.clear();
+        self.dispatch(None, Duration::ZERO);
+    }
+    pub fn suspend(&mut self) {
+        self.pending = None;
+        self.worker = None;
+        self.waiting = false;
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("catalog generation exhausted");
+    }
+    pub fn open(&mut self, entry: CatalogEntry) {
+        if self.history.len() == 8 {
+            self.history.remove(0);
+        }
+        self.history
+            .push((self.detail.take(), self.page.clone(), self.request.clone()));
+        let request = match entry.kind {
+            EntityKind::Recording => None,
+            EntityKind::Artist => Some(Request::ArtistRecordings {
+                id: entry.media.id.clone(),
+                offset: 0,
+            }),
+            EntityKind::Release => Some(Request::ReleaseTracks {
+                id: entry.media.id.clone(),
+            }),
+        };
+        self.dispatch(request, Duration::ZERO);
+        self.detail = Some(entry);
+        self.page = None;
+    }
+    pub fn back(&mut self) {
+        if let Some((detail, page, request)) = self.history.pop() {
+            self.dispatch(None, Duration::ZERO);
+            self.detail = detail;
+            self.page = page;
+            if self.page.is_none() && request.is_some() {
+                self.dispatch(request, Duration::ZERO);
+            } else {
+                self.request = request;
+            }
+        }
+    }
+    pub fn has_back(&self) -> bool {
+        !self.history.is_empty()
+    }
+    pub fn page_by(&mut self, forward: bool) {
+        let Some(page) = &self.page else {
+            return;
+        };
+        if forward && !page.more {
+            return;
+        }
+        let offset = if forward {
+            page.offset + 20
+        } else {
+            page.offset.saturating_sub(20)
+        };
+        let request = match &self.request {
+            Some(Request::Search { query, kind, .. }) => Request::Search {
+                query: query.clone(),
+                kind: *kind,
+                offset,
+            },
+            Some(Request::ArtistRecordings { id, .. }) => Request::ArtistRecordings {
+                id: id.clone(),
+                offset,
+            },
+            _ => return,
+        };
+        self.dispatch(Some(request), Duration::ZERO);
+        self.page = None;
+    }
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        if let Some(worker) = &mut self.worker {
+            while let Ok((generation, result)) = worker.events.try_recv() {
+                if generation == self.generation {
+                    self.waiting = false;
+                    match result {
+                        Ok(page) => self.page = Some(page),
+                        Err(error) => self.error = Some(error),
+                    }
+                }
+            }
+        }
+        let Some((request, due)) = &self.pending else {
+            return;
+        };
+        if *due > Instant::now() {
+            ctx.request_repaint_after(due.saturating_duration_since(Instant::now()));
+            return;
+        }
+        if self.worker.is_none() {
+            // Cancelling an unstarted search does not start a network runtime.
+            if request.is_none() {
+                self.pending = None;
+                return;
+            }
+            match Worker::new() {
+                Ok(worker) => self.worker = Some(worker),
+                Err(error) => {
+                    self.pending = None;
+                    self.waiting = false;
+                    self.error = Some(error);
+                    return;
+                }
+            }
+        }
+        let job = Job {
+            generation: self.generation,
+            request: request.clone(),
+            ctx: ctx.clone(),
+        };
+        match self.worker.as_ref().unwrap().commands.try_send(job) {
+            Ok(()) => self.pending = None,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                ctx.request_repaint_after(Duration::from_millis(20))
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.pending = None;
+                self.waiting = false;
+                self.error = Some(ProviderError::Unavailable);
+                self.worker = None;
+            }
+        }
+    }
+    pub fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({"selected":self.selected,"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
+    }
+}
+
+impl DoremiApp {
+    pub(super) fn music_results(&mut self, ui: &mut egui::Ui) {
+        let detail = self.model.as_ref().unwrap().music.detail.clone();
+        let page = self.model.as_ref().unwrap().music.page.clone();
+        if self.model.as_ref().unwrap().music.has_back()
+            && self.button(ui, "catalog-back", "Volver a resultados", 200.0)
+        {
+            self.model.as_mut().unwrap().music.back();
+            return;
+        }
+        if let Some(detail) = detail {
+            ui.heading(&detail.media.title);
+            self.music_entry(ui, &detail, false);
+        }
+        let state = &self.model.as_ref().unwrap().music;
+        if state.waiting {
+            ui.spinner();
+            ui.label("Consultando MusicBrainz…");
+        }
+        if let Some(error) = state.error {
+            ui.colored_label(
+                ui.visuals().error_fg_color,
+                format!("No se pudo consultar el catálogo: {error:?}"),
+            );
+        }
+        if let Some(page) = page {
+            if page.items.is_empty() {
+                ui.label("No hay resultados para esta consulta.");
+            }
+            for item in &page.items {
+                self.music_entry(ui, item, true);
+            }
+            ui.horizontal_wrapped(|ui| {
+                if page.offset > 0 && self.button(ui, "catalog-previous", "Página anterior", 160.0)
+                {
+                    self.model.as_mut().unwrap().music.page_by(false);
+                }
+                if page.more && self.button(ui, "catalog-next", "Más resultados", 160.0) {
+                    self.model.as_mut().unwrap().music.page_by(true);
+                }
+            });
+        }
+    }
+    fn music_entry(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry, open: bool) {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.set_width((ui.available_width() - 4.0).max(0.0));
+            ui.strong(&entry.media.title);
+            ui.label(match entry.kind {
+                EntityKind::Recording => "Grabación",
+                EntityKind::Artist => "Artista",
+                EntityKind::Release => "Álbum / edición",
+            });
+            for credit in &entry.artists {
+                let response = ui.link(&credit.name);
+                self.record(&format!("catalog-artist:{}", credit.id.local()), &response);
+                if response.clicked() {
+                    self.model.as_mut().unwrap().music.open(CatalogEntry {
+                        media: Media {
+                            id: credit.id.clone(),
+                            title: credit.name.clone(),
+                            duration_ms: None,
+                        },
+                        kind: EntityKind::Artist,
+                        artists: vec![],
+                    });
+                }
+            }
+            if let Some(ms) = entry.media.duration_ms {
+                ui.small(format!("{}:{:02}", ms / 60000, ms / 1000 % 60));
+            }
+            ui.small(format!("MusicBrainz · {}", entry.media.id.local()));
+            ui.weak("Metadatos públicos · esta fuente no proporciona audio ni carátula.");
+            ui.horizontal_wrapped(|ui| {
+                if open
+                    && self.button(
+                        ui,
+                        &format!("catalog-open:{}", entry.media.id.local()),
+                        "Explorar",
+                        120.0,
+                    )
+                {
+                    self.model.as_mut().unwrap().music.open(entry.clone());
+                }
+                if entry.kind == EntityKind::Recording {
+                    let saved = self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .library
+                        .contains(&entry.media.id);
+                    if self.button(
+                        ui,
+                        &format!("catalog-save:{}", entry.media.id.local()),
+                        if saved { "Guardada" } else { "Guardar" },
+                        120.0,
+                    ) {
+                        self.model.as_mut().unwrap().save_media(entry.media.clone());
+                    }
+                }
+            });
+        });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn a_replaced_or_cancelled_query_cannot_publish_old_results() {
+        let mut state = State::new();
+        state.search("first");
+        let old = state.generation;
+        state.search("Café 東京");
+        let current = state.generation;
+        let (commands, _receive) = mpsc::channel(2);
+        let (send, events) = mpsc::channel(1);
+        state.worker = Some(Worker { commands, events });
+        let page = Arc::new(Results {
+            items: vec![],
+            offset: 0,
+            more: false,
+        });
+        send.try_send((old, Ok(page.clone()))).unwrap();
+        state.poll(&egui::Context::default());
+        assert!(state.page.is_none());
+        assert!(state.waiting);
+        send.try_send((current, Ok(page.clone()))).unwrap();
+        state.poll(&egui::Context::default());
+        assert!(state.page.is_some());
+        assert!(!state.waiting);
+        state.cancel();
+        send.try_send((current, Ok(page))).unwrap();
+        state.poll(&egui::Context::default());
+        assert!(state.page.is_none());
+        assert!(!state.waiting);
+    }
+    #[test]
+    fn switching_from_musicbrainz_to_demo_rebuilds_the_correct_catalog() {
+        let mut model = Model::new(Preferences::default());
+        model.music.selected = true;
+        model.online.selected = false;
+        model.set_online_source(false);
+        model.query = "Café".into();
+        model.search();
+        assert_eq!(model.catalog.results().len(), 1);
+        assert_eq!(model.catalog.results()[0].id.provider.as_str(), "demo");
+        assert!(!model.music.selected);
+    }
+}

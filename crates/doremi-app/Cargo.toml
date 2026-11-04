@@ -29,6 +29,7 @@ serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))'.dependencies]
+doremi-musicbrainz = { path = "../doremi-musicbrainz" }
 # Shared optional Commons experiment; no network until explicitly selected.
 doremi-commons = { path = "../doremi-commons" }
 doremi-player = { path = "../doremi-player", features = ["native-output", "ogg-vorbis", "local-flac", "local-mp3"] }

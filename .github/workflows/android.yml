@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real", "feature/doremi-product-ui"]
-    paths: ["crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -98,6 +98,7 @@ jobs:
           cargo fmt --all --check
           cargo test --locked -p doremi-library --all-targets
           cargo clippy --locked -p doremi-library --all-targets -- -D warnings
+          cargo test --locked -p doremi-musicbrainz --all-targets
           cargo test --locked -p doremi-app --all-targets
           cargo test --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets
           cargo clippy --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets -- -D warnings
@@ -151,6 +152,8 @@ jobs:
       - name: Test and build the new Doremi host natively
         shell: pwsh
         run: |
+          cargo test --locked -p doremi-musicbrainz --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-app --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings

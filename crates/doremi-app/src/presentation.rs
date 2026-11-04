@@ -4,7 +4,7 @@ use doremi_ui::{self as theme, Icon, Palette};
 use egui::{Align, Frame, Layout, Margin, RichText, Vec2};
 
 impl DoremiApp {
-    fn record(&mut self, name: &str, response: &egui::Response) {
+    pub(super) fn record(&mut self, name: &str, response: &egui::Response) {
         self.controls.push(Control {
             name: name.into(),
             rect: [
@@ -16,7 +16,7 @@ impl DoremiApp {
         });
     }
 
-    fn navigate(&mut self, page: Page) {
+    pub(super) fn navigate(&mut self, page: Page) {
         let model = self.model.as_mut().unwrap();
         model.page = page;
         model.revision += 1;
@@ -50,11 +50,16 @@ impl DoremiApp {
                 .show(ui, |ui| {
                     let width = (ui.available_width() - ui.spacing().item_spacing.x * 4.0) / 5.0;
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().button_padding.x = 8.0;
                         for (page, name, label) in navigation() {
                             let response = ui.add_sized(
                                 [width, TOUCH],
-                                egui::Button::new(label)
-                                    .selected(self.model.as_ref().unwrap().page == page),
+                                egui::Button::new(if page == Page::Library {
+                                    "Biblio."
+                                } else {
+                                    label
+                                })
+                                .selected(self.model.as_ref().unwrap().page == page),
                             );
                             self.record(name, &response);
                             if response.clicked() {
@@ -139,6 +144,8 @@ impl DoremiApp {
                 {
                     ui.colored_label(palette.danger, error);
                 }
+                let rect = ui.max_rect();
+                self.page_rect = [rect.left(), rect.top(), rect.right(), rect.bottom()];
                 let page = self.model.as_ref().unwrap().page;
                 egui::ScrollArea::vertical()
                     .id_salt(format!("page:{page:?}"))
@@ -297,10 +304,21 @@ impl DoremiApp {
     fn volume(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         theme::icon(ui, Icon::Volume2, 18.0, palette.secondary);
         let model = self.model.as_mut().unwrap();
-        ui.spacing_mut().slider_width = 90.0_f32.min((ui.available_width() - 12.0).max(24.0));
-        let response =
-            ui.add(egui::Slider::new(&mut model.prefs.volume, 0.0..=1.0).show_value(false));
-        if response.changed() {
+        let size = Vec2::new(
+            90.0_f32.min((ui.available_width() - 12.0).max(24.0)),
+            ui.spacing().interact_size.y,
+        );
+        let (event, response) = theme::thin_slider_sized(
+            ui,
+            palette,
+            ui.id().with("volume"),
+            "Volumen",
+            model.prefs.volume,
+            size,
+            Some(0.05),
+        );
+        if let theme::SliderEvent::Dragging(value) | theme::SliderEvent::Committed(value) = event {
+            model.prefs.volume = value;
             if let Some(engine) = &model.audio {
                 engine.set_volume(model.prefs.volume);
             }
@@ -435,11 +453,39 @@ impl DoremiApp {
                             "Seleccionar",
                             118.0,
                         ) {
-                            self.model
-                                .as_mut()
-                                .unwrap()
-                                .start_context(rows.to_vec(), index);
-                            self.navigate(Page::Player);
+                            #[cfg(any(
+                                target_os = "linux",
+                                target_os = "android",
+                                target_os = "windows"
+                            ))]
+                            if media.id.provider.as_str() == "musicbrainz" {
+                                let model = self.model.as_mut().unwrap();
+                                model.music.selected = true;
+                                model.music.open(doremi_core::media::CatalogEntry {
+                                    media: media.clone(),
+                                    kind: doremi_core::media::EntityKind::Recording,
+                                    artists: vec![],
+                                });
+                                self.navigate(Page::Search);
+                            } else {
+                                self.model
+                                    .as_mut()
+                                    .unwrap()
+                                    .start_context(rows.to_vec(), index);
+                                self.navigate(Page::Player);
+                            }
+                            #[cfg(not(any(
+                                target_os = "linux",
+                                target_os = "android",
+                                target_os = "windows"
+                            )))]
+                            {
+                                self.model
+                                    .as_mut()
+                                    .unwrap()
+                                    .start_context(rows.to_vec(), index);
+                                self.navigate(Page::Player);
+                            }
                         }
                         if self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0) {
                             self.model

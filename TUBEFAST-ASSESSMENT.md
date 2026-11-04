@@ -1,5 +1,38 @@
 # Evaluación técnica: Tubefast, RustyPipe y yt-dlp
 
+## Revisión de producto — 2026-11-04
+
+Consulta remota nueva, sin ejecutar extractores ni copiar su implementación:
+
+| Candidato | Revisión actual examinada | Resultado verificable |
+|---|---|---|
+| Tubefast 0.7.1 | `928ebbb52b57c227a566a9680b3eccd208a14664` | `ytm.rs` mantiene búsqueda/browse/continuations, perfiles player y refresh de `master`; ahora elige Opus y ofrece AAC como fallback. La negativa todavía puede provocar refresh/visitor/reintento. No se importan esos caminos. |
+| yt-dlp 2026.10.26 | `412e7f0a4b0588fe884a02b344ac66a06538475b` | README: Python 3.11+, EJS y runtime JS para soporte YouTube completo. Fuente Unlicense; bundles PyInstaller GPLv3+. Los assets oficiales consultados contienen Windows x64 y Linux x64/ARM64, sin un APK/runtime Android intercambiable. |
+| RustyPipe | `c93bafd8416843fc68251f9ce8830a89504c185e` | `git ls-remote` devuelve la revisión anteriormente evaluada. Sigue como referencia GPL-3.0-only, sin decisión de incorporación. |
+
+Fuentes fijadas: [Tubefast ytm.rs](https://github.com/yigitbozyaka/tubefast/blob/928ebbb52b57c227a566a9680b3eccd208a14664/src/ytm.rs),
+[manifest](https://github.com/yigitbozyaka/tubefast/blob/928ebbb52b57c227a566a9680b3eccd208a14664/Cargo.toml),
+[yt-dlp README](https://github.com/yt-dlp/yt-dlp/blob/412e7f0a4b0588fe884a02b344ac66a06538475b/README.md),
+[release](https://github.com/yt-dlp/yt-dlp/releases/tag/2026.10.26).
+Tamaños publicados: Windows `yt-dlp.exe` 23.575.744 B, Linux x64
+41.166.968 B, Linux ARM64 40.789.792 B. No son memoria/latencia medidas,
+ni incluyen una integración Android, EJS/JS o reproducción de Doremi.
+No se descargaron ni instalaron componentes ejecutables.
+
+Decisión del primer corte de catálogo: usar metadatos de la
+[API pública MusicBrainz](https://musicbrainz.org/doc/MusicBrainz_API),
+con User-Agent, cuota de una solicitud por segundo, límites y cancelación.
+Una consulta real de «Moonlight Sonata» devolvió IDs, créditos y duraciones;
+no se probó audio musical por obtener esos datos. Este adaptador Rust usa
+las dependencias HTTP/TLS existentes y se comparte con Android/Windows.
+Los datos básicos tienen [CC0](https://musicbrainz.org/doc/About/Data_License);
+no se importan datos suplementarios. No sustituye una identidad Spotify ni
+YouTube, no da permiso de audio y no decide el resolutor musical definitivo.
+La comparación de latencia, CPU, memoria y streaming de los tres candidatos
+sigue pendiente de operaciones admisibles equivalentes; no hay cifras inventadas.
+
+La evaluación que sigue corresponde a las revisiones históricas indicadas.
+
 ## Conclusión
 
 **No integrar Tubefast en F1A ni cambiar de proveedor por una supuesta ventaja

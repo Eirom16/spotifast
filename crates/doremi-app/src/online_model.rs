@@ -91,7 +91,10 @@ impl Model {
         Ok(self.online.worker.as_ref().unwrap())
     }
     pub fn set_online_source(&mut self, selected: bool) {
-        if self.online.selected == selected {
+        let was_music = self.music.selected;
+        self.music.selected = false;
+        self.music.cancel();
+        if self.online.selected == selected && !was_music {
             return;
         }
         self.cancel_online_search();
