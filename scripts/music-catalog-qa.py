@@ -5,6 +5,8 @@ Not run in ordinary CI: this makes public API requests (one at a time).
 Screenshots and snapshots go only to the supplied evidence directory.
 """
 import argparse
+import ctypes
+import ctypes.util
 import json
 import os
 from pathlib import Path
@@ -73,12 +75,35 @@ def main():
             (output / f'{name}.json').write_text(json.dumps(state(), indent=2, ensure_ascii=False))
 
         def query(text):
+            # xdotool's temporary Unicode mapping can race winit's keymap
+            # update. Prepare it before input, exclusively on our Xvfb server.
+            non_ascii=sorted({ord(character) for character in text if ord(character)>127})
+            if non_ascii:
+                servers=subprocess.check_output(['pgrep','-a','-x','Xvfb'],text=True).splitlines()
+                display=env['DISPLAY'].split('.')[0]
+                assert any(display in line.split() for line in servers),'Unicode QA requires an isolated Xvfb display'
+                assert len(non_ascii)<=20
+                x11=ctypes.CDLL(ctypes.util.find_library('X11'))
+                x11.XOpenDisplay.argtypes=[ctypes.c_char_p];x11.XOpenDisplay.restype=ctypes.c_void_p
+                x11.XChangeKeyboardMapping.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_int,ctypes.POINTER(ctypes.c_ulong),ctypes.c_int]
+                x11.XSync.argtypes=[ctypes.c_void_p,ctypes.c_int]
+                x11.XCloseDisplay.argtypes=[ctypes.c_void_p]
+                connection=x11.XOpenDisplay(None)
+                assert connection
+                try:
+                    for offset,point in enumerate(non_ascii):
+                        keysym=ctypes.c_ulong(point if point<=255 else 0x01000000|point)
+                        x11.XChangeKeyboardMapping(connection,200+offset,1,ctypes.byref(keysym),1)
+                    x11.XSync(connection,0)
+                finally:
+                    x11.XCloseDisplay(connection)
+                time.sleep(.3)
             tap('query')
             xdo('key', '--clearmodifiers', 'ctrl+a')
             xdo('type', '--clearmodifiers', text)
             wait(lambda data: data['query'] == text)
-            data = wait(lambda data: data['music_catalog']['selected'] and not data['music_catalog']['waiting'] and data['music_catalog']['count'] is not None)
-            assert data['music_catalog']['error'] is None
+            data = wait(lambda data: data['music_catalog']['selected'] and not data['music_catalog']['waiting'] and (data['music_catalog']['count'] is not None or data['music_catalog']['error'] is not None))
+            assert data['music_catalog']['error'] is None, data['music_catalog']['error']
             return data
 
         tap('search')

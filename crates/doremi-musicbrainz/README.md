@@ -5,10 +5,11 @@ release track lists. No audio resolver, credentials, cookies or process runtime.
 MusicBrainz IDs retain their entity type and `musicbrainz` namespace.
 
 Requests use the official API, an identifying User-Agent, one process-wide
-request slot every 1.1 seconds, no redirects, 15-second total deadlines,
+request slot 1.1 seconds after completion/cancellation, no redirects, 15-second total deadlines,
 1 MiB responses, pages of 20 and offsets up to 1000. A release over 500 tracks
 is rejected explicitly. Eight cached pages (up to 160 entries), five-minute
-TTL, in memory only. Cancellation drops the request future; the host owns
+TTL, in memory only. Requests serialize across clients and respect Retry-After. No automatic retries.
+Cancellation drops the request future; the host owns
 bounded channels and generation checks. No external requests in unit tests.
 
 Only core metadata fields are retained. No tags, ratings, aliases, secrets or

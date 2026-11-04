@@ -10,7 +10,24 @@ use std::{collections::VecDeque, time::Duration};
 use tokio::time::{Instant, sleep_until, timeout};
 
 pub const PAGE_SIZE: usize = 20;
+static REQUEST_GATE: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
 static NEXT_REQUEST: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+// Release spacing after completion or cancellation, including DNS/TLS time.
+// This also serializes distinct clients inside this process.
+struct RequestSpacing {
+    delay: Duration,
+}
+impl Drop for RequestSpacing {
+    fn drop(&mut self) {
+        if let Ok(mut next) = NEXT_REQUEST.lock() {
+            if let Some(due) = Instant::now().checked_add(self.delay) {
+                *next = Some(due);
+            } else {
+                REQUEST_GATE.close();
+            }
+        }
+    }
+}
 const MAX_BYTES: usize = 1024 * 1024;
 const MAX_OFFSET: u32 = 1000;
 
@@ -68,13 +85,18 @@ impl Client {
         }
         let page = timeout(Duration::from_secs(15), async {
             // MusicBrainz requires at most one request per second per app.
-            let due = {
-                let mut next = NEXT_REQUEST.lock().map_err(|_| Error::Unavailable)?;
-                let due = next.unwrap_or_else(Instant::now).max(Instant::now());
-                *next = Some(due + Duration::from_millis(1100));
-                due
-            };
+            let _serial = REQUEST_GATE
+                .acquire()
+                .await
+                .map_err(|_| Error::Unavailable)?;
+            let due = NEXT_REQUEST
+                .lock()
+                .map_err(|_| Error::Unavailable)?
+                .unwrap_or_else(Instant::now);
             sleep_until(due).await;
+            let mut spacing = RequestSpacing {
+                delay: Duration::from_millis(1100),
+            };
             let mut response = self
                 .http
                 .get(format!("https://musicbrainz.org/ws/2/{path}"))
@@ -87,14 +109,14 @@ impl Client {
                 401 | 403 | 300..=399 => return Err(Error::AccessDenied),
                 404 | 410 => return Err(Error::Unavailable),
                 429 | 503 => {
-                    return Err(Error::RateLimited {
-                        retry_after_ms: response
-                            .headers()
-                            .get("retry-after")
-                            .and_then(|v| v.to_str().ok())
-                            .and_then(|v| v.parse::<u64>().ok())
-                            .and_then(|v| v.checked_mul(1000)),
-                    });
+                    let retry_after_ms = response
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .and_then(|v| v.checked_mul(1000));
+                    spacing.delay = Duration::from_millis(retry_after_ms.unwrap_or(3000).max(1100));
+                    return Err(Error::RateLimited { retry_after_ms });
                 }
                 _ => return Err(Error::Transport),
             }

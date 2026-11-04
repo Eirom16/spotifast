@@ -10,7 +10,7 @@ publish = false
 doremi-core = { path = "../doremi-core" }
 reqwest = { version = "0.12", default-features = false }
 serde_json = "1"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["time", "sync"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }

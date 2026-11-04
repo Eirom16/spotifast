@@ -5,6 +5,7 @@ use doremi_core::{
     media::{CatalogEntry, EntityKind},
 };
 use doremi_musicbrainz::{Client, Page as Results, Request};
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 type Completion = (u64, Result<Arc<Results>, ProviderError>);
@@ -17,15 +18,20 @@ struct Job {
 struct Worker {
     commands: mpsc::Sender<Job>,
     events: mpsc::Receiver<Completion>,
+    generation: Arc<AtomicU64>,
 }
 impl Worker {
     fn new() -> Result<Self, ProviderError> {
         let (commands, mut receive) = mpsc::channel::<Job>(2);
         let (send, events) = mpsc::channel(1);
+        let generation = Arc::new(AtomicU64::new(0));
+        let active = generation.clone();
         std::thread::Builder::new()
             .name("doremi-catalog".into())
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    // OS DNS can outlive a dropped future; keep that work bounded.
+                    .max_blocking_threads(1)
                     .enable_all()
                     .build()
                 else {
@@ -39,6 +45,15 @@ impl Worker {
                             job = receive.recv().await;
                             continue;
                         };
+                        if current.generation != active.load(Ordering::Acquire) {
+                            job = receive.recv().await;
+                            continue;
+                        }
+                        let cancelled = async {
+                            while current.generation == active.load(Ordering::Acquire) {
+                                tokio::time::sleep(Duration::from_millis(20)).await;
+                            }
+                        };
                         let result = async {
                             match &mut client {
                                 Ok(client) => client.fetch(&request).await.map(Arc::new),
@@ -48,6 +63,7 @@ impl Worker {
                         tokio::select! {
                             biased;
                             next = receive.recv() => {job = next;},
+                            _ = cancelled => {job=receive.recv().await;},
                             result = result => {
                                 current.ctx.request_repaint();
                                 tokio::select! {
@@ -65,7 +81,11 @@ impl Worker {
                 });
             })
             .map_err(|_| ProviderError::Unavailable)?;
-        Ok(Self { commands, events })
+        Ok(Self {
+            commands,
+            events,
+            generation,
+        })
     }
 }
 
@@ -77,6 +97,7 @@ pub(super) struct State {
     pub error: Option<ProviderError>,
     pub waiting: bool,
     request: Option<Request>,
+    retry_at: Option<Instant>,
     history: Vec<HistoryEntry>,
     generation: u64,
     pending: Option<(Option<Request>, Instant)>,
@@ -92,6 +113,7 @@ impl State {
             error: None,
             waiting: false,
             request: None,
+            retry_at: None,
             history: vec![],
             generation: 0,
             pending: None,
@@ -103,6 +125,9 @@ impl State {
             .generation
             .checked_add(1)
             .expect("catalog generation exhausted");
+        if let Some(worker) = &self.worker {
+            worker.generation.store(self.generation, Ordering::Release);
+        }
         self.waiting = request.is_some();
         self.error = None;
         self.request = request.clone();
@@ -129,12 +154,14 @@ impl State {
     }
     pub fn suspend(&mut self) {
         self.pending = None;
-        self.worker = None;
         self.waiting = false;
         self.generation = self
             .generation
             .checked_add(1)
             .expect("catalog generation exhausted");
+        if let Some(worker) = &self.worker {
+            worker.generation.store(self.generation, Ordering::Release);
+        }
     }
     pub fn open(&mut self, entry: CatalogEntry) {
         if self.history.len() == 8 {
@@ -167,6 +194,18 @@ impl State {
                 self.request = request;
             }
         }
+    }
+    pub fn retry(&mut self) {
+        if self.retry_at.is_none_or(|due| Instant::now() >= due)
+            && let Some(request) = self.request.clone()
+        {
+            self.dispatch(Some(request), Duration::ZERO);
+        }
+    }
+    pub fn can_retry(&self) -> bool {
+        self.request.is_some()
+            && !self.waiting
+            && self.retry_at.is_none_or(|due| Instant::now() >= due)
     }
     pub fn has_back(&self) -> bool {
         !self.history.is_empty()
@@ -205,7 +244,16 @@ impl State {
                     self.waiting = false;
                     match result {
                         Ok(page) => self.page = Some(page),
-                        Err(error) => self.error = Some(error),
+                        Err(error) => {
+                            self.error = Some(error);
+                            self.retry_at = match error {
+                                ProviderError::RateLimited { retry_after_ms } => Instant::now()
+                                    .checked_add(Duration::from_millis(
+                                        retry_after_ms.unwrap_or(3000).max(1100),
+                                    )),
+                                _ => None,
+                            };
+                        }
                     }
                 }
             }
@@ -233,6 +281,11 @@ impl State {
                 }
             }
         }
+        self.worker
+            .as_ref()
+            .unwrap()
+            .generation
+            .store(self.generation, Ordering::Release);
         let job = Job {
             generation: self.generation,
             request: request.clone(),
@@ -276,10 +329,26 @@ impl DoremiApp {
             ui.label("Consultando MusicBrainz…");
         }
         if let Some(error) = state.error {
-            ui.colored_label(
-                ui.visuals().error_fg_color,
-                format!("No se pudo consultar el catálogo: {error:?}"),
-            );
+            let retry = state.can_retry();
+            ui.colored_label(ui.visuals().error_fg_color,match error {
+                ProviderError::RateLimited {..}=>"El servicio está ocupado o ha limitado las consultas. Espera antes de reintentar.",
+                ProviderError::Timeout=>"La consulta tardó demasiado. Puedes volver a intentarlo.",
+                ProviderError::AccessDenied=>"El proveedor rechazó la consulta. No se utilizará otro método de acceso.",
+                ProviderError::Unavailable=>"El catálogo no está disponible en este momento.",
+                ProviderError::Cancelled=>"Consulta cancelada.",
+                ProviderError::Transport=>"No se pudo conectar con el catálogo. Revisa la conexión y vuelve a intentarlo.",
+                _=>"La respuesta del catálogo no pudo utilizarse. Vuelve a intentarlo más tarde.",
+            });
+            if error != ProviderError::AccessDenied {
+                let response = ui.add_enabled(retry, egui::Button::new("Reintentar"));
+                self.record("catalog-retry", &response);
+                if response.clicked() {
+                    self.model.as_mut().unwrap().music.retry();
+                }
+                if !retry {
+                    ui.ctx().request_repaint_after(Duration::from_millis(250));
+                }
+            }
         }
         if let Some(page) = page {
             if page.items.is_empty() {
@@ -372,7 +441,11 @@ mod tests {
         let current = state.generation;
         let (commands, _receive) = mpsc::channel(2);
         let (send, events) = mpsc::channel(1);
-        state.worker = Some(Worker { commands, events });
+        state.worker = Some(Worker {
+            commands,
+            events,
+            generation: Arc::new(AtomicU64::new(0)),
+        });
         let page = Arc::new(Results {
             items: vec![],
             offset: 0,

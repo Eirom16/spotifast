@@ -146,7 +146,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-musicbrainz: dependencies` | `reqwest` | `default-features=False; version=0.12` |
 | `crates/doremi-musicbrainz: dependencies` | `serde_json` | `1` |
-| `crates/doremi-musicbrainz: dependencies` | `tokio` | `features=['time']; version=1` |
+| `crates/doremi-musicbrainz: dependencies` | `tokio` | `features=['time', 'sync']; version=1` |
 | `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 
