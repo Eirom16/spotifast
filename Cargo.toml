@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player", "tools/provider-live-probe", "crates/doremi-commons"]
+members = [".", "crates/doremi-core", "tools/provider-harness", "crates/doremi-app", "crates/doremi-library", "crates/doremi-player", "tools/provider-live-probe", "crates/doremi-commons", "crates/doremi-ui"]
 default-members = [".", "crates/doremi-core"]
 resolver = "3"
 
@@ -35,6 +35,7 @@ path = "src/doremi-preview.rs"
 required-features = ["demo"]
 
 [dependencies]
+doremi-ui = { path = "crates/doremi-ui", features = ["theme-files"] }
 # Shared pure queue rules; no external source or platform dependencies.
 doremi-core = { path = "crates/doremi-core" }
 anyhow = "1"

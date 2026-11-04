@@ -1,6 +1,6 @@
 //! The now-playing bar along the bottom of the window.
 
-use egui::{Align, Color32, Frame, Layout, Margin, Rect, Sense, UiBuilder, Vec2, pos2, vec2};
+use egui::{Align, Color32, Layout, Rect, Sense, UiBuilder, Vec2, pos2, vec2};
 
 use crate::app::{App, NowPlaying};
 use crate::i18n::gettext;
@@ -46,78 +46,67 @@ pub(crate) fn end_tint_session(ctx: &egui::Context) {
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     let fill = eased_fill(ui.ctx(), palette.panel, app.now_playing_tint());
-    egui::Panel::bottom("player-bar")
-        .exact_size(theme::PLAYER_BAR_HEIGHT)
-        .resizable(false)
-        .show_separator_line(false)
-        .frame(
-            Frame::new()
-                .fill(fill)
-                .inner_margin(Margin::symmetric(16, 0)),
-        )
-        .show(ui, |ui| {
-            let rect = ui.max_rect();
-            let now = app.now_playing();
-            // The whole bar, margins included, behind everything else.
-            let behind = rect.expand2(vec2(16.0, 0.0));
-            if visualizer(app, ui, behind, now.as_ref()) {
-                theme::visualiser_frame(ui.ctx(), app.visualiser_fps());
+    doremi_ui::player_bar(ui, fill, theme::PLAYER_BAR_HEIGHT, |ui| {
+        let rect = ui.max_rect();
+        let now = app.now_playing();
+        // The whole bar, margins included, behind everything else.
+        let behind = rect.expand2(vec2(16.0, 0.0));
+        if visualizer(app, ui, behind, now.as_ref()) {
+            theme::visualiser_frame(ui.ctx(), app.visualiser_fps());
+        }
+        // Its empty space is the visualizer's control, as Winamp's
+        // visualizer was: a click moves to the next mode. The controls
+        // drawn after it take their own clicks.
+        if app.settings.player_bar_vis_click {
+            let empty = ui.interact(
+                behind,
+                ui.id().with("player-bar-visualizer"),
+                Sense::click(),
+            );
+            // An open tooltip stays while the pointer is inside its widget's
+            // rect, and this one spans the bar: offer it only while the empty
+            // space itself is hovered, not the controls over it.
+            let empty = if empty.hovered() {
+                empty
+                    .on_hover_text_at_pointer(gettext(app.locale, "Click to change the visualizer"))
+            } else {
+                empty
+            };
+            if empty.clicked() {
+                app.actions.push(Action::CyclePlayerBarVis);
             }
-            // Its empty space is the visualizer's control, as Winamp's
-            // visualizer was: a click moves to the next mode. The controls
-            // drawn after it take their own clicks.
-            if app.settings.player_bar_vis_click {
-                let empty = ui.interact(
-                    behind,
-                    ui.id().with("player-bar-visualizer"),
-                    Sense::click(),
-                );
-                // An open tooltip stays while the pointer is inside its widget's
-                // rect, and this one spans the bar: offer it only while the empty
-                // space itself is hovered, not the controls over it.
-                let empty = if empty.hovered() {
-                    empty.on_hover_text_at_pointer(gettext(
-                        app.locale,
-                        "Click to change the visualizer",
-                    ))
-                } else {
-                    empty
-                };
-                if empty.clicked() {
-                    app.actions.push(Action::CyclePlayerBarVis);
-                }
-            }
-            ui.painter().hline(
-                rect.x_range(),
-                rect.top() + 0.5,
-                egui::Stroke::new(1.0, palette.outline),
-            );
-            let width = rect.width();
-            let side = (width * 0.3).clamp(200.0, 420.0);
-            let cy = rect.center().y;
-            let left = Rect::from_min_max(rect.min, pos2(rect.left() + side, rect.bottom()));
-            let center = Rect::from_min_max(
-                pos2(rect.left() + side, rect.top()),
-                pos2(rect.right() - side, rect.bottom()),
-            );
+        }
+        ui.painter().hline(
+            rect.x_range(),
+            rect.top() + 0.5,
+            egui::Stroke::new(1.0, palette.outline),
+        );
+        let width = rect.width();
+        let side = (width * 0.3).clamp(200.0, 420.0);
+        let cy = rect.center().y;
+        let left = Rect::from_min_max(rect.min, pos2(rect.left() + side, rect.bottom()));
+        let center = Rect::from_min_max(
+            pos2(rect.left() + side, rect.top()),
+            pos2(rect.right() - side, rect.bottom()),
+        );
 
-            // egui's cross-axis centring is unreliable across nested layouts of
-            // mixed heights, so each region is placed in an explicit band that
-            // is sized to its content and centred on the bar's midline.
-            now_playing_block(app, ui, left, now.as_ref());
+        // egui's cross-axis centring is unreliable across nested layouts of
+        // mixed heights, so each region is placed in an explicit band that
+        // is sized to its content and centred on the bar's midline.
+        now_playing_block(app, ui, left, now.as_ref());
 
-            transport(app, ui, now.as_ref(), center);
+        transport(app, ui, now.as_ref(), center);
 
-            let right_band =
-                Rect::from_min_size(pos2(rect.right() - side, cy - 15.0), vec2(side, 30.0));
-            let mut right_ui = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(right_band)
-                    .layout(Layout::right_to_left(Align::Center)),
-            );
-            let transport_right = center.center().x + transport_width() / 2.0;
-            extras(app, &mut right_ui, now.as_ref(), transport_right);
-        });
+        let right_band =
+            Rect::from_min_size(pos2(rect.right() - side, cy - 15.0), vec2(side, 30.0));
+        let mut right_ui = ui.new_child(
+            UiBuilder::new()
+                .max_rect(right_band)
+                .layout(Layout::right_to_left(Align::Center)),
+        );
+        let transport_right = center.center().x + transport_width() / 2.0;
+        extras(app, &mut right_ui, now.as_ref(), transport_right);
+    });
 }
 
 /// Draws the chosen spectrum or waveform of the song playing on this

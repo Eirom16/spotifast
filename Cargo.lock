@@ -1557,6 +1557,7 @@ dependencies = [
  "doremi-core",
  "doremi-library",
  "doremi-player",
+ "doremi-ui",
  "eframe",
  "egui",
  "egui_glow",
@@ -1621,6 +1622,18 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+]
+
+[[package]]
+name = "doremi-ui"
+version = "0.1.0"
+dependencies = [
+ "egui",
+ "egui_extras",
+ "fastframe-fonts",
+ "fastframe-icons",
+ "fastframe-theme",
+ "serde",
 ]
 
 [[package]]
@@ -6278,6 +6291,7 @@ dependencies = [
  "ctr",
  "directories",
  "doremi-core",
+ "doremi-ui",
  "eframe",
  "egui",
  "egui_extras",

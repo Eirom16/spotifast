@@ -18,6 +18,7 @@ fi
 mkdir -p target/android-assets/licenses target/android-dist
 cp target/android-jni/native-source.json target/android-assets/
 cp LICENSE target/android-assets/licenses/MIT.txt
+cp assets/fonts/Inter-LICENSE.txt assets/icons/LICENSE.txt target/android-assets/licenses/
 cp assets/doremi/LICENSE target/android-assets/licenses/Doremi-assets-GPL-3.txt
 cp assets/doremi/PROVENANCE.md target/android-assets/licenses/
 cp assets/audio/LICENSE.txt target/android-assets/licenses/Audio-CC0.txt

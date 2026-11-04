@@ -7,9 +7,9 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod online;
-#[cfg(any(target_os = "linux", target_os = "android"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
@@ -17,6 +17,7 @@ use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
 mod local_media;
+mod presentation;
 mod saved;
 #[cfg(not(target_os = "android"))]
 mod wav_probe;
@@ -47,7 +48,7 @@ fn seek_slider(
 ) -> egui::Response {
     ui.push_id(identity, |ui| {
         ui.add_sized(
-            [ui.available_width(), TOUCH],
+            [ui.available_width(), ui.spacing().interact_size.y],
             egui::Slider::new(position, 0..=duration)
                 .text("Posición")
                 .show_value(false),
@@ -111,7 +112,7 @@ struct Model {
     // Source data, not a second queue. Only the explicit bounded CLI corpus
     // populates this cache; no arbitrary files or persisted transport URIs.
     prepared: Vec<(MediaId, Arc<Pcm>)>,
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     online: online_model::State,
 }
 
@@ -176,7 +177,7 @@ impl Model {
             wav_input: None,
             local_files: local_media::State::new(),
             prepared: Vec::new(),
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             online: online_model::State::new(),
         }
     }
@@ -457,7 +458,7 @@ impl Model {
         });
     }
     fn search(&mut self) {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if self.online.selected {
             self.schedule_online_search();
             return;
@@ -493,11 +494,11 @@ impl Model {
         self.revision += 1;
     }
     fn catalog_now(&self) -> Tick {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             Tick(self.online.origin.elapsed().as_millis() as u64)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             Tick(self.revision)
         }
@@ -505,16 +506,16 @@ impl Model {
     fn cancel_search(&mut self) {
         self.query.clear();
         self.catalog.cancel();
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         self.cancel_online_search();
         self.revision += 1;
     }
     fn online_candidate(&self, _id: &MediaId) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             online_model::candidate(_id)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             false
         }
@@ -525,48 +526,48 @@ impl Model {
         _id: &MediaId,
         _position: u64,
     ) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             self.begin_online_load(_request, _id, _position)
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             false
         }
     }
     fn cancel_online(&mut self, _request: Option<doremi_core::queue::RequestId>) {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         self.cancel_online_load(_request);
     }
     fn online_search_selected(&self) -> bool {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             self.online.selected
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             false
         }
     }
     fn source_diagnostics(&self) -> serde_json::Value {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             let mut state = self.online.snapshot();
             state["search_status"] =
                 serde_json::json!(format!("{:?}", self.catalog.search_status()));
             state
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             serde_json::json!({"search_source":"demo","phase":"unavailable"})
         }
     }
     fn search_feedback(&self) -> Option<(bool, String)> {
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             self.online.feedback(self.catalog.search_status())
         }
-        #[cfg(not(any(target_os = "linux", target_os = "android")))]
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         {
             None
         }
@@ -618,7 +619,6 @@ pub struct DoremiApp {
     pending_write: usize,
     storage_error: Option<StorageError>,
     controls: Vec<Control>,
-    logo: egui::TextureHandle,
     saved_state: Vec<u8>,
     pending: bool,
     last_persist: Instant,
@@ -643,20 +643,7 @@ impl DoremiApp {
             (model, persistence::Writer::new(directory))
         };
         model.enable_audio();
-        let image = image::load_from_memory(include_bytes!("../../../assets/doremi/Doremi.png"))
-            .unwrap()
-            .to_rgba8();
-        let size = [image.width() as usize, image.height() as usize];
-        let logo = ctx.load_texture(
-            "Doremi",
-            egui::ColorImage::from_rgba_unmultiplied(size, image.as_raw()),
-            Default::default(),
-        );
-        ctx.all_styles_mut(|style| {
-            style.spacing.item_spacing = egui::vec2(GAP, GAP);
-            style.spacing.button_padding = egui::vec2(12.0, 10.0);
-            style.spacing.interact_size.y = TOUCH;
-        });
+        doremi_ui::install(ctx);
         Self {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             model: Some(model),
@@ -664,7 +651,6 @@ impl DoremiApp {
             pending_write: 0,
             storage_error: None,
             controls: vec![],
-            logo,
             saved_state: vec![],
             pending: true,
             last_persist: Instant::now(),
@@ -685,69 +671,6 @@ impl DoremiApp {
             ],
         });
         response.clicked()
-    }
-    fn rows(&mut self, ui: &mut egui::Ui, rows: &[Media]) {
-        for (start, media) in rows.iter().enumerate() {
-            egui::Frame::group(ui.style()).show(ui, |ui| {
-                ui.set_width((ui.available_width() - 4.0).max(0.0));
-                ui.label(egui::RichText::new(&media.title).strong());
-                ui.small(if doremi_player::original_long::matches(&media.id) {
-                    "Audio local original · 2:00 · CC0".into()
-                } else if Builtin::from_media(&media.id).is_some() {
-                    "Audio local original · 0:08 · CC0".into()
-                } else if self
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .local_files
-                    .index
-                    .get(&media.id)
-                    .is_some()
-                {
-                    "Archivo de audio local".into()
-                } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
-                    "Tono de prueba online · 0:10 · CC0".into()
-                } else if demo_candidate(&media.id) {
-                    format!("demo:{} · 0:30 · sin audio", media.id.local())
-                } else {
-                    "Fuente no disponible en esta versión".into()
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if self.button(
-                        ui,
-                        &format!("select:{}", media.id.local()),
-                        "Seleccionar",
-                        118.0,
-                    ) {
-                        self.model
-                            .as_mut()
-                            .unwrap()
-                            .start_context(rows.to_vec(), start);
-                        self.model.as_mut().unwrap().page = Page::Player;
-                    }
-                    if self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0) {
-                        self.model
-                            .as_mut()
-                            .unwrap()
-                            .command(Command::Append(vec![media.clone()]));
-                    }
-                    let saved = self.model.as_ref().unwrap().library.contains(&media.id);
-                    if self.button(
-                        ui,
-                        &format!("save:{}", media.id.local()),
-                        if saved { "Guardada" } else { "Guardar" },
-                        90.0,
-                    ) {
-                        self.model.as_mut().unwrap().save_media(media.clone());
-                    }
-                    if self.model.as_ref().unwrap().page == Page::Library
-                        && self.button(ui, &format!("forget:{}", media.id.local()), "Quitar", 90.0)
-                    {
-                        self.model.as_mut().unwrap().remove_saved(&media.id);
-                    }
-                });
-            });
-        }
     }
     fn persist(&mut self, ctx: &egui::Context) {
         if self.pending_write > 0 {
@@ -878,7 +801,7 @@ impl DoremiApp {
         }
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_local(&ctx);
-        #[cfg(any(target_os = "linux", target_os = "android"))]
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         self.model.as_mut().unwrap().poll_online(&ctx);
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
@@ -890,202 +813,264 @@ impl DoremiApp {
         }
         self.controls.clear();
         let prefs = &self.model.as_ref().unwrap().prefs;
-        let accent = if prefs.green {
-            egui::Color32::from_rgb(30, 215, 96)
-        } else {
-            egui::Color32::from_rgb(153, 102, 232)
-        };
-        let mut visuals = if prefs.light {
-            egui::Visuals::light()
-        } else {
-            egui::Visuals::dark()
-        };
-        visuals.selection.bg_fill = accent;
-        visuals.hyperlink_color = accent;
-        ctx.set_visuals(visuals);
-        egui::Panel::top("brand").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.image((self.logo.id(), egui::vec2(40.0, 40.0)));
-                ui.heading("Doremi");
-                ui.colored_label(accent, "Preview nativa");
-            });
-            if let Some(error) = self
-                .model
-                .as_ref()
-                .unwrap()
-                .storage_warning
-                .or(self.storage_error.map(StorageError::message))
-            {
-                ui.colored_label(ui.visuals().error_fg_color, error);
-            }
-        });
-        egui::Panel::bottom("navigation").show(ui, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let width = ((ui.available_width() - 4.0 * GAP) / 5.0).floor().max(48.0);
-                for (page, name, label) in [
-                    (Page::Home, "home", "Inicio"),
-                    (Page::Search, "search", "Buscar"),
-                    (Page::Library, "library", "Biblio."),
-                    (Page::Queue, "queue", "Cola"),
-                    (Page::Settings, "settings", "Ajustes"),
-                ] {
-                    if self.button(ui, name, label, width) {
-                        let model = self.model.as_mut().unwrap();
-                        model.page = page;
-                        model.revision += 1;
-                    }
-                }
-            });
-        });
-        egui::CentralPanel::default().show(ui, |ui| {
-            let page=self.model.as_ref().unwrap().page;
-            egui::ScrollArea::vertical().id_salt(format!("page:{page:?}")).show(ui, |ui| {
-                ui.set_min_width(ui.available_width());
-                match page {
-                    Page::Home => {
-                        ui.heading("Tu música, a tu ritmo");ui.label(if cfg!(any(target_os="linux",target_os="android")) {"Audio local y demostración. Commons experimental desde Buscar."}else{"Catálogo de prueba local. Sin Spotify ni conexión."});
-                        if self.model.as_ref().unwrap().queue.current().is_some() && self.button(ui,"player","Abrir reproductor",220.0) {
-                            let model=self.model.as_mut().unwrap();model.page=Page::Player;model.revision+=1;
-                        }
-                        if self.button(ui,"local-audio","Probar audio original",240.0) {
-                            let model=self.model.as_mut().unwrap();
-                            model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);
-                            model.page=Page::Player;
-                        }
-                        if self.button(ui,"long-audio","Probar WAV de 2 minutos",260.0) {
-                            let model=self.model.as_mut().unwrap();model.start_context(vec![doremi_player::original_long::media(),Builtin::Chord.media()],0);model.page=Page::Player;
-                        }
-                        self.rows(ui,&songs());
-                    }
-                    Page::Search => {
-                        ui.heading("Buscar");
-                        #[cfg(any(target_os="linux",target_os="android"))]
-                        {
-                            let width=((ui.available_width()-GAP)/2.0).floor().max(TOUCH);
-                            ui.horizontal_wrapped(|ui| {
-                                if self.button(ui,"source-demo","Demostración",width) {self.model.as_mut().unwrap().set_online_source(false);}
-                                if self.button(ui,"source-commons","Commons · CC0",width) {self.model.as_mut().unwrap().set_online_source(true);}
-                            });
-                            ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Guardar añade un favorito, sin descargar audio."}else{"Fuente: demostración offline"});
-                        }
-                        let online=self.model.as_ref().unwrap().online_search_selected();
-                        let response = ui.add_sized([ui.available_width(), TOUCH], egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query).hint_text(if online {"Busca sine, 440 o 880"}else{"Busca en la demostración"}).char_limit(128));
-                        self.controls.push(Control { name: "query".into(), rect: [response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y] });
-                        if response.changed() { self.model.as_mut().unwrap().search(); }
-                        if self.button(ui,"cancel-search","Cancelar búsqueda",200.0) {
-                            self.model.as_mut().unwrap().cancel_search();
-                        }
-                        let results = self.model.as_ref().unwrap().catalog.results().to_vec();
-                        if let Some((error,message))=self.model.as_ref().unwrap().search_feedback() {
-                            if error {ui.colored_label(ui.visuals().error_fg_color,message);}else {ui.label(message);}
-                        } else {ui.label(format!("{} resultados {}", results.len(),if online {"CC0 de Commons"}else{"de demostración"}));}
-                        self.rows(ui, &results);
-                    }
-                    Page::Library => {
-                        ui.heading("Biblioteca");
-                        let library=self.model.as_ref().unwrap().library.clone();
-                        ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
-                        if !self.model.as_ref().unwrap().write_library {ui.small("Solo lectura: el archivo anterior se conserva.");}
-                        #[cfg(any(target_os = "linux", target_os = "android"))]
-                        {
-                            if self.model.as_ref().unwrap().local_files.pending() {
-                                ui.label("Importación en curso…");
-                                if self.button(ui,"cancel-import","Cancelar importación",220.0) {self.model.as_mut().unwrap().cancel_local_import();}
-                            } else if self.button(ui,"import-wav","Importar audio",220.0) {self.model.as_mut().unwrap().open_local(None,&ctx);}
-                            if !self.model.as_ref().unwrap().local_files.pending() && let Some((error,message))=self.model.as_ref().unwrap().local_files.feedback {
-                                let response=if error {ui.colored_label(ui.visuals().error_fg_color,message)} else {ui.label(message)};
-                                self.controls.push(Control{name:"import-feedback".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
-                            }
-                            #[cfg(target_os = "linux")]
-                            ui.small("WAV PCM16, FLAC y MP3 mono o estéreo. También puedes arrastrarlos a Doremi.");
-                            #[cfg(target_os = "android")]
-                            ui.small("WAV PCM16, FLAC y MP3 locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
-                        }
-                        self.rows(ui, library.items());
-                    }
-                    Page::Queue => {
-                        ui.heading("Cola");
-                        if self.button(ui,"clear","Vaciar cola manual",210.0) { self.model.as_mut().unwrap().command(Command::ClearManual); }
-                        ui.label("Las canciones que siguen, en orden.");
-                        let entries=self.model.as_ref().unwrap().queue.upcoming().cloned().collect::<Vec<_>>();
-                        let manual=self.model.as_ref().unwrap().queue.manual().iter().map(|e|e.id).collect::<Vec<_>>();
-                        for entry in entries {
-                            ui.strong(&entry.media.title);
-                            if let Some(index)=manual.iter().position(|id|*id==entry.id) {
-                                ui.small("Añadida por ti");
-                                ui.horizontal_wrapped(|ui| {
-                                    if self.button(ui,&format!("remove:{index}"),"Quitar",90.0) { self.model.as_mut().unwrap().command(Command::Remove(entry.id)); }
-                                    if index>0 && self.button(ui,&format!("up:{index}"),"Subir",90.0) { self.model.as_mut().unwrap().command(Command::Move{entry:entry.id,gap:index-1}); }
-                                });
-                            } else {ui.small("Continuación");}
-                            ui.separator();
-                        }
-                    }
-                    Page::Settings => {
-                        ui.heading("Configuración"); ui.label("Acento");
-                        ui.horizontal_wrapped(|ui| {
-                            for (name, label, value) in [("purple","Morado",false),("green","Verde",true)] {
-                                if self.button(ui,name,label,130.0) { let model = self.model.as_mut().unwrap(); model.prefs.green = value; model.revision += 1; }
-                            }
-                        });
-                        ui.label("Tema"); ui.horizontal_wrapped(|ui| {
-                            for (name,label,value) in [("dark","Oscuro",false),("light","Claro",true)] {
-                                if self.button(ui,name,label,130.0) { let model = self.model.as_mut().unwrap(); model.prefs.light = value; model.revision += 1; }
-                            }
-                        });
-                        ui.label(if cfg!(any(target_os="linux",target_os="android")) {"Datos propios de Doremi. Commons es opcional y no requiere cuenta."}else{"Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."});
-                    }
-                    Page::Player => {
-                        if self.model.as_ref().unwrap().real_audio() {
-                            let online=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().online_candidate(&entry.media.id));
-                            let file=self.model.as_ref().unwrap().queue.current().is_some_and(|entry|self.model.as_ref().unwrap().local_files.index.get(&entry.media.id).is_some());
-                            ui.heading(if online {"Audio CC0 · Commons"}else{"Audio local"}); ui.label(if online {"Tonos de Ubershmekel · CC0 · experimental"}else if file {"Audio local de tu biblioteca"}else{"Muestras originales de Doremi · CC0"});
-                            #[cfg(target_os = "android")]
-                            ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
-                            let model = self.model.as_mut().unwrap();
-                            let duration = model.queue.current().and_then(|e|e.media.duration_ms).unwrap_or(0);
-                            let mut position = model.queue.position_ms();
-                            ui.label(format!("{}:{:02} / {}:{:02}",position/60000,position/1000%60,duration/60000,duration/1000%60));
-                            let identity=egui::Id::new(("seek",model.queue.current().map(|entry|(entry.id.as_u64(),&entry.media.id))));
-                            let response=seek_slider(ui,identity,&mut position,duration);
-                            self.controls.push(Control{name:"seek".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
-                            if response.changed() { model.command(Command::Seek(position)); }
-                            let response=ui.add_sized([ui.available_width(), TOUCH],egui::Slider::new(&mut model.prefs.volume,0.0..=1.0).text("Volumen").show_value(false));
-                            self.controls.push(Control{name:"volume".into(),rect:[response.rect.min.x,response.rect.min.y,response.rect.max.x,response.rect.max.y]});
-                            if response.changed() { if let Some(engine)=&model.audio {engine.set_volume(model.prefs.volume);} model.revision+=1; }
-                        } else if self.model.as_ref().unwrap().queue.current().is_some_and(|entry|demo_candidate(&entry.media.id)) {
-                            ui.heading("Reproducción de demostración"); ui.label("Simulación de controles. Esta selección no produce audio.");
-                        } else { ui.heading("Reproducción no disponible"); ui.label("Esta fuente no puede reproducirse en esta versión."); }
-                    }
-                }
-                ui.separator();
-                let title = self.model.as_ref().unwrap().queue.current().map(|e| e.media.title.clone()).unwrap_or_else(|| "Ninguna canción seleccionada".into());
-                ui.strong(title);
-                ui.horizontal_wrapped(|ui| {
-                    for (name,label,command) in [("previous","Anterior",Command::Previous),("pause","Pausa",Command::Pause),("play",if self.model.as_ref().unwrap().real_audio() {"Play"} else {"Play demo"},Command::Play),("next","Siguiente",Command::Next),("stop","Cancelar",Command::Cancel)] {
-                        if self.button(ui,name,label,100.0) { self.model.as_mut().unwrap().command(command); }
-                    }
-                });
-                ui.horizontal_wrapped(|ui| {
-                    if self.button(ui,"shuffle","Shuffle",110.0) {
-                        let queue = &self.model.as_ref().unwrap().queue;
-                        let order = if queue.shuffled() { Order::Sequential } else { shuffled(queue.context().len(), queue.current().and_then(|current|queue.context().iter().position(|entry|entry.id==current.id))) };
-                        self.model.as_mut().unwrap().command(Command::SetOrder(order));
-                    }
-                    if self.button(ui,"repeat","Repeat",110.0) {
-                        let repeat = match self.model.as_ref().unwrap().queue.repeat() { Repeat::Off => Repeat::Context, Repeat::Context => Repeat::Track, Repeat::Track => Repeat::Off };
-                        self.model.as_mut().unwrap().command(Command::SetRepeat(repeat));
-                    }
-                });
-                let model = self.model.as_ref().unwrap();
-                ui.label(format!("Estado: {:?} · Repeat {:?} · Shuffle {}",model.queue.playback(),model.queue.repeat(),model.queue.shuffled()));
-                ui.small(&model.notice);
-
-            });
-        });
+        let palette = doremi_ui::palette(prefs.light, prefs.green);
+        let mut style = (*ctx.global_style()).clone();
+        doremi_ui::apply_to_style(&mut style, &palette);
+        if ctx.content_rect().width() < 760.0 {
+            style.spacing.interact_size.y = TOUCH;
+        }
+        ctx.set_global_style(style);
+        self.shell(ui, &palette);
         self.persist(&ctx);
     }
+
+    fn page_content(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
+        let page = self.model.as_ref().unwrap().page;
+        match page {
+            Page::Home => {
+                ui.heading("Tu música, a tu ritmo");
+                ui.label(
+                    if cfg!(any(
+                        target_os = "linux",
+                        target_os = "android",
+                        target_os = "windows"
+                    )) {
+                        "Audio local y demostración. Commons experimental desde Buscar."
+                    } else {
+                        "Catálogo de prueba local. Sin Spotify ni conexión."
+                    },
+                );
+                if self.model.as_ref().unwrap().queue.current().is_some()
+                    && self.button(ui, "player", "Abrir reproductor", 220.0)
+                {
+                    let model = self.model.as_mut().unwrap();
+                    model.page = Page::Player;
+                    model.revision += 1;
+                }
+                if self.button(ui, "local-audio", "Probar audio original", 240.0) {
+                    let model = self.model.as_mut().unwrap();
+                    model.start_context(vec![Builtin::Scale.media(), Builtin::Chord.media()], 0);
+                    model.page = Page::Player;
+                }
+                if self.button(ui, "long-audio", "Probar WAV de 2 minutos", 260.0) {
+                    let model = self.model.as_mut().unwrap();
+                    model.start_context(
+                        vec![
+                            doremi_player::original_long::media(),
+                            Builtin::Chord.media(),
+                        ],
+                        0,
+                    );
+                    model.page = Page::Player;
+                }
+                self.rows(ui, &songs());
+            }
+            Page::Search => {
+                ui.heading("Buscar");
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                {
+                    let width = ((ui.available_width() - GAP) / 2.0).floor().max(TOUCH);
+                    ui.horizontal_wrapped(|ui| {
+                        if self.button(ui, "source-demo", "Demostración", width) {
+                            self.model.as_mut().unwrap().set_online_source(false);
+                        }
+                        if self.button(ui, "source-commons", "Commons · CC0", width) {
+                            self.model.as_mut().unwrap().set_online_source(true);
+                        }
+                    });
+                    ui.small(if self.model.as_ref().unwrap().online.selected {"Fuente: Commons · dos tonos CC0 de prueba. Guardar añade un favorito, sin descargar audio."}else{"Fuente: demostración offline"});
+                }
+                let online = self.model.as_ref().unwrap().online_search_selected();
+                let response = ui.add_sized(
+                    [ui.available_width(), TOUCH],
+                    egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
+                        .id(egui::Id::new("catalog-query"))
+                        .hint_text(if online {
+                            "Busca sine, 440 o 880"
+                        } else {
+                            "Busca en la demostración"
+                        })
+                        .char_limit(128),
+                );
+                self.controls.push(Control {
+                    name: "query".into(),
+                    rect: [
+                        response.rect.min.x,
+                        response.rect.min.y,
+                        response.rect.max.x,
+                        response.rect.max.y,
+                    ],
+                });
+                if response.changed() {
+                    self.model.as_mut().unwrap().search();
+                }
+                if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
+                    self.model.as_mut().unwrap().cancel_search();
+                }
+                let results = self.model.as_ref().unwrap().catalog.results().to_vec();
+                if let Some((error, message)) = self.model.as_ref().unwrap().search_feedback() {
+                    if error {
+                        ui.colored_label(ui.visuals().error_fg_color, message);
+                    } else {
+                        ui.label(message);
+                    }
+                } else {
+                    ui.label(format!(
+                        "{} resultados {}",
+                        results.len(),
+                        if online {
+                            "CC0 de Commons"
+                        } else {
+                            "de demostración"
+                        }
+                    ));
+                }
+                self.rows(ui, &results);
+            }
+            Page::Library => {
+                ui.heading("Biblioteca");
+                let library = self.model.as_ref().unwrap().library.clone();
+                ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
+                if !self.model.as_ref().unwrap().write_library {
+                    ui.small("Solo lectura: el archivo anterior se conserva.");
+                }
+                #[cfg(any(target_os = "linux", target_os = "android"))]
+                {
+                    if self.model.as_ref().unwrap().local_files.pending() {
+                        ui.label("Importación en curso…");
+                        if self.button(ui, "cancel-import", "Cancelar importación", 220.0) {
+                            self.model.as_mut().unwrap().cancel_local_import();
+                        }
+                    } else if self.button(ui, "import-wav", "Importar audio", 220.0) {
+                        self.model.as_mut().unwrap().open_local(None, &ctx);
+                    }
+                    if !self.model.as_ref().unwrap().local_files.pending()
+                        && let Some((error, message)) =
+                            self.model.as_ref().unwrap().local_files.feedback
+                    {
+                        let response = if error {
+                            ui.colored_label(ui.visuals().error_fg_color, message)
+                        } else {
+                            ui.label(message)
+                        };
+                        self.controls.push(Control {
+                            name: "import-feedback".into(),
+                            rect: [
+                                response.rect.min.x,
+                                response.rect.min.y,
+                                response.rect.max.x,
+                                response.rect.max.y,
+                            ],
+                        });
+                    }
+                    #[cfg(target_os = "linux")]
+                            ui.small("WAV PCM16, FLAC y MP3 mono o estéreo. También puedes arrastrarlos a Doremi.");
+                    #[cfg(target_os = "android")]
+                            ui.small("WAV PCM16, FLAC y MP3 locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
+                }
+                self.rows(ui, library.items());
+            }
+            Page::Queue => {
+                ui.heading("Cola");
+                if self.button(ui, "clear", "Vaciar cola manual", 210.0) {
+                    self.model.as_mut().unwrap().command(Command::ClearManual);
+                }
+                ui.label("Las canciones que siguen, en orden.");
+                let entries = self
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .queue
+                    .upcoming()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let manual = self
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .queue
+                    .manual()
+                    .iter()
+                    .map(|e| e.id)
+                    .collect::<Vec<_>>();
+                for entry in entries {
+                    ui.strong(&entry.media.title);
+                    if let Some(index) = manual.iter().position(|id| *id == entry.id) {
+                        ui.small("Añadida por ti");
+                        ui.horizontal_wrapped(|ui| {
+                            if self.button(ui, &format!("remove:{index}"), "Quitar", 90.0) {
+                                self.model
+                                    .as_mut()
+                                    .unwrap()
+                                    .command(Command::Remove(entry.id));
+                            }
+                            if index > 0 && self.button(ui, &format!("up:{index}"), "Subir", 90.0) {
+                                self.model.as_mut().unwrap().command(Command::Move {
+                                    entry: entry.id,
+                                    gap: index - 1,
+                                });
+                            }
+                        });
+                    } else {
+                        ui.small("Continuación");
+                    }
+                    ui.separator();
+                }
+            }
+            Page::Settings => {
+                ui.heading("Configuración");
+                ui.label("Acento");
+                ui.horizontal_wrapped(|ui| {
+                    for (name, label, value) in
+                        [("purple", "Morado", false), ("green", "Verde", true)]
+                    {
+                        if self.button(ui, name, label, 130.0) {
+                            let model = self.model.as_mut().unwrap();
+                            model.prefs.green = value;
+                            model.revision += 1;
+                        }
+                    }
+                });
+                ui.label("Tema");
+                ui.horizontal_wrapped(|ui| {
+                    for (name, label, value) in
+                        [("dark", "Oscuro", false), ("light", "Claro", true)]
+                    {
+                        if self.button(ui, name, label, 130.0) {
+                            let model = self.model.as_mut().unwrap();
+                            model.prefs.light = value;
+                            model.revision += 1;
+                        }
+                    }
+                });
+                ui.label(if cfg!(any(target_os = "linux", target_os = "android", target_os = "windows")) {
+                    "Datos propios de Doremi. Commons es opcional y no requiere cuenta."
+                } else {
+                    "Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."
+                });
+            }
+            Page::Player => {
+                let model = self.model.as_ref().unwrap();
+                let title = model
+                    .queue
+                    .current()
+                    .map(|e| e.media.title.as_str())
+                    .unwrap_or("Ninguna canción seleccionada");
+                ui.heading(title);
+                ui.label(if model.real_audio() {
+                    "Reproducción nativa"
+                } else {
+                    "Esta selección es una demostración sin audio."
+                });
+                ui.label(&model.notice);
+                #[cfg(target_os = "android")]
+                ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
+            }
+        }
+    }
 }
+
 #[cfg(not(target_os = "android"))]
 impl eframe::App for DoremiApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1095,7 +1080,7 @@ impl eframe::App for DoremiApp {
 impl Drop for DoremiApp {
     fn drop(&mut self) {
         if let Some(mut model) = self.model.take() {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             model.suspend_online();
             // The Android system picker pauses the Activity. Keep its explicit
             // import intent while suspending playback and the GL renderer.
@@ -1273,7 +1258,7 @@ mod tests {
         );
     }
     use doremi_core::queue::Playback;
-    #[cfg(any(target_os = "linux", target_os = "android"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     #[test]
     fn source_picker_uses_equal_touch_boxes_and_fits_narrow_and_landscape_views() {
         let _guard = UI_TEST_LOCK.lock().unwrap();

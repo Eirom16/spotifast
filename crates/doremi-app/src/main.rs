@@ -53,15 +53,26 @@ fn main() -> eframe::Result {
     let directory = std::env::var_os("DOREMI_DATA_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| {
-            std::env::var_os("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_default()
-                .join(".local/share/doremi/native-dev")
+            #[cfg(windows)]
+            let base = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from);
+            #[cfg(not(windows))]
+            let base = std::env::var_os("HOME")
+                .map(|home| std::path::PathBuf::from(home).join(".local/share"));
+            base.unwrap_or_else(std::env::temp_dir)
+                .join("doremi/native-dev")
         });
     let result = eframe::run_native(
         "Doremi Native Dev",
         eframe::NativeOptions {
-            viewport: eframe::egui::ViewportBuilder::default().with_inner_size([440.0, 800.0]),
+            viewport: eframe::egui::ViewportBuilder::default()
+                .with_inner_size([1240.0, 800.0])
+                .with_min_inner_size([360.0, 640.0])
+                .with_icon(
+                    eframe::icon_data::from_png_bytes(include_bytes!(
+                        "../../../assets/doremi/Doremi.png"
+                    ))
+                    .expect("original Doremi icon"),
+                ),
             ..Default::default()
         },
         Box::new(move |cc| Ok(Box::new(doremi_app::DoremiApp::new(cc, directory)))),

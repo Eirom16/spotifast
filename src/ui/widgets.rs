@@ -101,19 +101,7 @@ pub(super) fn paint_cover_with_thumbnail(
             .thumbnail
             .is_some_and(|url| paint_cover_url(ui, at(url), art, sources.align_thumbnail));
     if !loaded {
-        let painter = ui.painter();
-        let fill = if palette.dark {
-            palette.surface_hover
-        } else {
-            palette.surface_active
-        };
-        if radius >= rect.width() / 2.0 - 0.5 {
-            painter.circle_filled(rect.center(), rect.width() / 2.0, fill);
-        } else {
-            painter.rect_filled(rect, corner, fill);
-        }
-        let icon_size = (rect.width() * 0.42).clamp(12.0, 64.0);
-        theme::paint_icon(ui, fallback, rect, icon_size, palette.dim);
+        doremi_ui::cover_placeholder(ui, palette, rect, radius, fallback);
     }
 }
 
