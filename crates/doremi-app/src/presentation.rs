@@ -427,9 +427,11 @@ impl DoremiApp {
                         egui::Popup::menu(&response).show(|ui| {
                             if self.button(ui, "stop", "Detener", 160.0) {
                                 self.model.as_mut().unwrap().command(Command::Cancel);
+                                ui.close();
                             }
                             if self.button(ui, "player", "Reproductor", 160.0) {
                                 self.navigate(Page::Player);
+                                ui.close();
                             }
                             ui.horizontal(|ui| self.volume(ui, palette));
                         });

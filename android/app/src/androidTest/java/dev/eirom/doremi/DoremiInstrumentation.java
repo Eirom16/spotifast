@@ -145,6 +145,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             scrollPage(data,rect.getDouble(1)<page.getDouble(1));data=state();rect=controlRect(data,name);
             if(rect==null) throw new AssertionError("Control disappeared while scrolling: "+name);
         }
+        JSONArray page=data.optJSONArray("page_rect");
+        if(!fixed && page!=null && (rect.getDouble(1)<page.getDouble(1) || rect.getDouble(3)>page.getDouble(3))) throw new AssertionError("Control did not scroll into its page: "+name);
+        lastAction="tap:"+name;
         JSONArray viewport=data.getJSONArray("viewport");
         if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) || rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1)) throw new AssertionError("Control outside Doremi viewport: "+name);
         final int[] origin=new int[2];
@@ -620,7 +623,7 @@ public final class DoremiInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK,result);return;
             }
             // Existing development data is retained. Normalize modes through controls.
-            tap("search");tap("cancel-search");
+            tap("search");tap("source-demo");tap("cancel-search");
             if(state().optBoolean("shuffle")) tap("shuffle");
             while(!state().optString("repeat").equals("Off")) tap("repeat");
             tap("home");

@@ -31,10 +31,20 @@ def wait(predicate,seconds=12):
   time.sleep(.15)
  raise AssertionError('Doremi state did not arrive')
 def tap(name):
+ initial=state()
+ if not any(c['name']==name for c in initial['controls']) and initial['page']=='Home' and name in {'local-audio','long-audio'}:tap('demo-examples')
  s=wait(lambda s:any(c['name']==name for c in s['controls']))
  focus=adb('shell','dumpsys','window','windows').decode()
  assert any('mCurrentFocus=' in l and PKG+'/' in l for l in focus.splitlines())
  rect=next(c['rect'] for c in s['controls'] if c['name']==name);scale=s['pixels_per_point']
+ for _ in range(30):
+  page=s.get('page_rect',[0,0,*s['viewport']])
+  if name in {'home','search','library','queue','settings','play','pause','next','previous','stop','seek','volume'} or page[1]<=rect[1]<rect[3]<=page[3]:break
+  focus=adb('shell','dumpsys','window','windows').decode();assert any('mCurrentFocus=' in line and PKG+'/' in line for line in focus.splitlines())
+  above=rect[1]<page[1];height=page[3]-page[1];x=round((page[0]+page[2])/2*scale+origin[0]);start=round((page[1]+height*(.25 if above else .8))*scale+origin[1]);end=round((page[1]+height*(.8 if above else .25))*scale+origin[1])
+  adb('shell','input','swipe',str(x),str(start),str(x),str(end),'250');time.sleep(.2);s=state();rect=next(c['rect'] for c in s['controls'] if c['name']==name)
+
+ if name not in {'home','search','library','queue','settings','play','pause','next','previous','stop','seek','volume'}:assert page[1]<=rect[1]<rect[3]<=page[3],name
  assert 0<=rect[0]<rect[2]<=s['viewport'][0] and 0<=rect[1]<rect[3]<=s['viewport'][1],name
  adb('shell','input','tap',str(round((rect[0]+rect[2])/2*scale+origin[0])),str(round((rect[1]+rect[3])/2*scale+origin[1])))
  time.sleep(.35)

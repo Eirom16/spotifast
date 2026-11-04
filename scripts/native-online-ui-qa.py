@@ -101,6 +101,9 @@ def start():
 
 
 def tap(name):
+    initial=state()
+    if not any(c["name"]==name for c in initial["controls"]) and initial["page"]=="Home" and name in {"long-audio","local-audio"}:
+        tap("demo-examples")
     data = wait(lambda data: any(control["name"] == name for control in data["controls"]))
     rect = next(control["rect"] for control in data["controls"] if control["name"] == name)
     left, top, right, bottom = rect

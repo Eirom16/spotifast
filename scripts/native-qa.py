@@ -41,9 +41,12 @@ def main():
             wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
         wait(lambda s:bool(s['controls']))
         def tap(name):
-            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume'}
+            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume','player-more'}
             for attempt in range(45):
-                data=state(); control=next(c for c in data['controls'] if c['name']==name)
+                data=state()
+                if not any(c['name']==name for c in data['controls']) and name in {'stop','player','volume'}:
+                    tap('player-more');data=state()
+                control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
                 if name in fixed or top<=y1<y2<=bottom:
