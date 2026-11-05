@@ -38,6 +38,32 @@ YouTube, no da permiso de audio y no decide el resolutor musical definitivo.
 La comparación de latencia, CPU, memoria y streaming de los tres candidatos
 sigue pendiente de operaciones admisibles equivalentes; no hay cifras inventadas.
 
+### Candidato adicional: Audius público
+
+La [documentación oficial](https://docs.audius.co/) describe búsqueda y streaming
+para reproductores de terceros; la [API](https://docs.audius.co/api/) ofrece
+lecturas públicas sin credenciales en la mayoría de endpoints. Una consulta
+funcional de dos resultados, sin autenticación, devolvió uno disponible y otro
+marcado como eliminado/no streamable, aunque su campo access.stream era true.
+Un adaptador debe rechazar cualquier negativa: no basta un único flag positivo.
+No se ejecutó audio, benchmark, registro de cuenta ni integración de producto.
+
+Las [API Terms](https://audius.co/documents/ApiTerms.pdf), de 2 julio 2025,
+exigen facilitar esos términos y la política de privacidad a los usuarios,
+limitan el caché de contenido/datos a la sesión y prohíben benchmarking del
+servicio. Por ello no se añade este servicio al harness comparativo propuesto
+abajo ni se asume que su metadata pueda persistirse como MusicBrainz. Una
+integración requerirá resolver el almacenamiento de referencias propias,
+rehidratación de metadata y limpieza de memoria/cachés al terminar la sesión.
+
+La [Open Music License](https://audius.org/open-music-license.pdf) distingue
+reproductores, licencias alternativas y atribución. Los
+[controles del artista](https://help.audius.co/product/editing-your-release)
+permiten restringir streaming por API: se deben respetar al buscar y volver
+a resolver al seleccionar, junto con borrado, gating y denegaciones HTTP.
+Esto abre un candidato nativo con música reproducible; aún no constituye una
+decisión de proveedor ni prueba de compatibilidad del motor progresivo.
+
 La evaluación que sigue corresponde a las revisiones históricas indicadas.
 
 ## Conclusión
