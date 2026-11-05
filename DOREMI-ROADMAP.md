@@ -355,8 +355,9 @@ importar automáticamente el perfil Spotifast.
 
 Primer corte de playlists propias en `8315fad`: CRUD desde la UI compartida,
 duplicados/orden, snapshots y JSON v1 atómico separado de favoritos/cola.
-Recorrido Linux con música CC0 y restauración tras reinicio aprobado; CI y
-prueba física Android del corte pendientes en DOREMI-PRODUCT-REPORT.md.
+Recorridos Linux y Android físico con música CC0 y restauración tras reinicio
+aprobados; CI corregida y actualización de artifacts pendientes, detalladas en
+DOREMI-PRODUCT-REPORT.md.
 Límites iniciales: 32 listas/256 entradas totales. No cierra el gate de 10.000
 entradas, el historial completo ni el resto de F3b.
 

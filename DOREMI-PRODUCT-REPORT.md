@@ -69,22 +69,30 @@ Windows nativo, macOS, ambas ABI Android y artifacts verificados del mismo SHA.
 El fallo Clippy Windows de 41969111007 se corrigió con cfg; no se silenció.
 
 CI de playlists [42095842479](https://github.com/Eirom16/spotifast/actions/runs/42095842479),
-**8315fad: en curso**. Valida los paquetes modificados en Linux/Windows, GUI,
-Rustdoc y APK ARMv7/ARM64; añade pruebas de biblioteca/Commons a Windows. No
-repite el build del legado, que no cambió en este corte.
+**8315fad: fallida**. APK ARMv7/ARM64 aprobada; Windows detectó un sync de
+directorio Unix aplicado en el adaptador de copia existente. Se corrigió en
+e0d1744 sin omitir la prueba: flush de archivo en todas las plataformas y sync
+de directorios Unix, como el writer previo. Linux agotó 20 minutos descargando
+paquetes, antes de tests; d56ac45 amplía a 35 min y evita recomendaciones APT.
+
+Validación corregida [42118302950](https://github.com/Eirom16/spotifast/actions/runs/42118302950),
+**d56ac45: en curso**, con los tres jobs. Incluye paquetes modificados, Windows,
+GUI Linux, Rustdoc y ambas ABI Android. El legado no cambió en este corte.
 
 Linux: launcher aún en artifact 10f80b5, abierto en CachyOS Wayland sin autoplay,
 con manifiesto/checksums y datos conservados. Falta actualizarlo al artifact nuevo.
 La música/playlists actuales se verificaron en los builds locales descritos.
 
-Android: SM-J701M, API 28/ARMv7. APK **3201c4b instalada** conservando datos.
-Con ece1375 se observaron PCM parcial, pausa/seek/reanudar, favoritos, mini-player,
-Atrás y recreación antes de fallar en horizontal. Los intentos 3201c4b conservaron
-el hash de la biblioteca normal: uno falló por timeout; otro por un toque de QA
-sobre contenido aún desplazándose. El driver ahora exige rectángulo estable y
-comprueba el guardado antes de continuar. **Faltan APK 8315fad y PASS físico del
-recorrido completo**, incluidos nombres, playlists y reapertura sin búsqueda.
-Las pruebas usan files/qa/<nombre> y restauran el perfil normal; no borran datos.
+Android: **8315fad instalada y recorrido completo PASS físico** en SM-J701M,
+API 28/ARMv7. PNG/JSON propios revisados: mini-player, claro/oscuro, búsqueda y
+nombres Unicode, guardar, PCM antes del archivo completo (197.167/4.260.399 B),
+pausa/seek/reanudar, Atrás, recreación y controles horizontales. Playlists:
+crear, añadir duplicados, seleccionar el segundo, ordenar/quitar, renombrar y
+cancelar eliminación sin alterar la cola. Reapertura en proceso nuevo: playlist
+restaurada y música nativa positiva sin buscar otra vez. Sin captura acústica.
+La biblioteca normal mantuvo exactamente su hash antes/después; el perfil QA
+está separado y se restauró el lanzamiento normal. Los fallos previos de timeout,
+toque de prueba y desconexión USB se conservan, sin atribuirles PASS.
 
 Windows: artifact 3201c4b descargado y checksums verificados; tests/build/CLI y
 Clippy nativos aprobados. GUI/audio smoke fallaron por OpenGL insuficiente y
@@ -93,12 +101,14 @@ NoDevice. Sin prueba física Windows; no se atribuye a Windows el resultado Linu
 Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-04/
 y /home/eirom/.local/share/doremi/product-qa/2026-11-05/. Esta última incluye
 playlists-real-music-bounded/, playlists-final-desktop/, playlists-phone-{360,393,430}/,
-android-mobile-{ece1375,3201c4b}/ y windows-3201c4b/. Los fallos se conservan.
+android-mobile-{ece1375,3201c4b}/, android-playlists-8315fad/device-reconnected/
+y windows-3201c4b/. Los fallos se conservan.
 No se repitieron las suites físicas extensas de formatos locales.
 
 ## Pendiente
 
-Cerrar CI/instalación/validación física del corte nuevo; ampliar el catálogo
+Cerrar la CI corregida y actualizar el launcher Linux con su artifact;
+comprobar la actualización Android del mismo código. Ampliar el catálogo
 reproducible y artwork. Siguen pendientes historial completo, cuenta opcional
 compatible, EQ/DSP/visualizadores, integración multimedia y background Android.
 Audius sigue investigado, sin integrar; sus condiciones de caché/sesión y acceso
