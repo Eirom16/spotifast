@@ -26,6 +26,7 @@ cp assets/audio/manifest.json target/android-assets/licenses/Audio-manifest.json
 cp crates/doremi-player/licenses/* target/android-assets/licenses/
 cp crates/doremi-player/tests/fixtures/SOURCE.md target/android-assets/licenses/Symphonia-source-and-fixture.md
 cp tools/provider-live-probe/corpus.json target/android-assets/licenses/Commons-CC0-corpus.json
+cp crates/doremi-commons/music-corpus.json target/android-assets/licenses/Commons-CC0-music-corpus.json
 git rev-parse HEAD > target/android-assets/SOURCE_COMMIT
 gradle -p android --no-daemon assembleDebug assembleDebugAndroidTest
 cp target/android-gradle/app/outputs/apk/debug/*.apk target/android-dist/

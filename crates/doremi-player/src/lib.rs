@@ -17,7 +17,9 @@ use doremi_core::media::{Media, MediaId, ProviderId};
 #[cfg(feature = "ogg-vorbis")]
 pub use ogg::{MAX_OGG_BYTES, decode_ogg, decode_ogg_cancellable};
 #[cfg(feature = "native-output")]
-pub use output::{Engine, EngineError, EngineEvent, Metrics};
+pub use output::{Cancellation, Engine, EngineError, EngineEvent, Metrics, StreamFactory};
+#[cfg(feature = "ogg-vorbis")]
+pub mod ogg_stream;
 
 pub const MAX_SAMPLES: usize = 1_000_000;
 pub const DURATION_MS: u64 = 8000;

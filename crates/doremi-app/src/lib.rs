@@ -460,6 +460,14 @@ impl Model {
                     EngineEvent::Ended(r) => self.event(Event::Ended(r)),
                     EngineEvent::Failed(r, error) => {
                         self.notice = format!("La salida de audio falló: {error:?}");
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "android",
+                            target_os = "windows"
+                        ))]
+                        if let Some(message) = self.online.failure_message() {
+                            self.notice = message.into();
+                        }
                         self.event(Event::Failed(r));
                     }
                 }
@@ -746,7 +754,7 @@ impl DoremiApp {
         }
         let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
             "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
-            "streaming":m.streaming,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
+            "streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -945,7 +953,7 @@ impl DoremiApp {
                     ui.small(if model.music.selected {
                         "Fuente: MusicBrainz · catálogo público; no proporciona audio."
                     } else if model.online.selected {
-                        "Fuente: Commons · dos tonos CC0 de prueba."
+                        "Fuente: Commons · selección CC0: Chopin por Membeth y dos tonos."
                     } else {
                         "Fuente: demostración offline · sin audio."
                     });
@@ -976,7 +984,7 @@ impl DoremiApp {
                     egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
                         .id(egui::Id::new("catalog-query"))
                         .hint_text(if online {
-                            "Busca sine, 440 o 880"
+                            "Busca Chopin, Membeth o sine"
                         } else {
                             "Busca música por nombre o artista"
                         })
@@ -1152,10 +1160,16 @@ impl DoremiApp {
                     .map(|e| e.media.title.as_str())
                     .unwrap_or("Ninguna canción seleccionada");
                 ui.heading(title);
-                ui.label(if model.real_audio() {
-                    "Reproducción nativa"
-                } else {
+                ui.label(if !model.real_audio() {
                     "Esta selección es una demostración sin audio."
+                } else if model.queue.playback() == Playback::Loading {
+                    "Preparando audio…"
+                } else if model.queue.playback() == Playback::Failed {
+                    "No se pudo reproducir esta selección."
+                } else if model.queue.playback() == Playback::Paused {
+                    "En pausa"
+                } else {
+                    "Reproducción nativa"
                 });
                 ui.label(&model.notice);
                 #[cfg(target_os = "android")]
@@ -1245,7 +1259,7 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
             .as_ref()
             .and_then(Engine::metrics)
             .unwrap_or_default();
-        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"streaming":m.streaming,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
+        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
     }
     model.enable_audio();
     model.start_context(rows, 0);

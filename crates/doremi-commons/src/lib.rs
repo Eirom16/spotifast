@@ -1,6 +1,7 @@
 //! Explicit-ID, credential-free experiment. Download policy is an allowlist of
-//! two audited CC0 tones, not a general claim of rights over search results.
+//! two audited CC0 tones and one explicitly selected CC0 music recording.\n//! This is not a general claim of rights over search results.
 pub mod http;
+pub mod progressive;
 use doremi_core::{
     catalog::{AudioFormat, LeaseBasis, ProviderError, StreamInfo, TemporaryResource, Tick},
     media::{Media, MediaId, ProviderId},
@@ -89,7 +90,12 @@ fn parse(page: &Value) -> Result<Info, ProviderError> {
     let byte_len = info["size"]
         .as_u64()
         .ok_or(ProviderError::InvalidResponse)?;
-    let duration_ms = audited_duration(&id);
+    let music = id == progressive::ID;
+    let duration_ms = if music {
+        Some(progressive::FRAMES * 1000 / u64::from(progressive::RATE))
+    } else {
+        audited_duration(&id)
+    };
     Ok(Info {
         media: Media {
             id: MediaId::new(
@@ -97,7 +103,11 @@ fn parse(page: &Value) -> Result<Info, ProviderError> {
                 id,
             )
             .map_err(|_| ProviderError::InvalidResponse)?,
-            title: title.clone(),
+            title: if music {
+                progressive::TITLE.to_owned()
+            } else {
+                title.clone()
+            },
             duration_ms,
         },
         title,
@@ -151,6 +161,14 @@ pub async fn search(
     if limit == 0 || limit > 10 {
         return Err(ProviderError::InvalidRequest);
     }
+    // This source is a small audited selection, not the whole Commons catalog.
+    // Validate its current provider metadata on each explicit matching search.
+    let words = query_text.to_lowercase();
+    let title = "chopin nocturno nocturne op opus 9 2 membeth es dur";
+    if !words.trim().is_empty() && words.split_whitespace().all(|word| title.contains(word)) {
+        let id = MediaId::new(ProviderId::new(PROVIDER).unwrap(), progressive::ID).unwrap();
+        return Ok(vec![resolve(client, &id).await?]);
+    }
     let text = format!("filetype:audio incategory:CC-Zero {query_text}");
     let json = query(client, "gsrsearch", &text, limit).await?;
     let Some(pages) = json["query"]["pages"].as_array() else {
@@ -173,7 +191,9 @@ pub async fn resolve(client: &Client, id: &MediaId) -> Result<Info, ProviderErro
     if id.provider.as_str() != PROVIDER {
         return Err(ProviderError::InvalidRequest);
     }
-    let (size, hash) = audited(id.local()).ok_or(ProviderError::AccessDenied)?;
+    let (size, hash) = audited(id.local())
+        .or_else(|| progressive::candidate(id).then_some((progressive::SIZE, progressive::HASH)))
+        .ok_or(ProviderError::AccessDenied)?;
     let json = query(client, "pageids", id.local(), 1).await?;
     let page = json["query"]["pages"]
         .as_array()
@@ -193,8 +213,16 @@ pub fn temporary(info: &Info, now: Tick) -> Result<TemporaryResource, ProviderEr
         StreamInfo {
             format: AudioFormat::OggVorbis,
             byte_len: Some(info.byte_len),
-            seekable: false,
-            usable_until: Tick(now.0.checked_add(30_000).ok_or(ProviderError::Exhausted)?),
+            seekable: progressive::candidate(&info.media.id),
+            usable_until: Tick(
+                now.0
+                    .checked_add(if progressive::candidate(&info.media.id) {
+                        600_000
+                    } else {
+                        30_000
+                    })
+                    .ok_or(ProviderError::Exhausted)?,
+            ),
             lease_basis: LeaseBasis::ConservativeHostLimit,
         },
     )

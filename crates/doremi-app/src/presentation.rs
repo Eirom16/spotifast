@@ -356,6 +356,14 @@ impl DoremiApp {
                     "No se pudo reproducir; abre el reproductor para ver el error"
                 } else if model.queue.playback() == Playback::Loading {
                     "Cargando audio…"
+                } else if model.queue.playback() == Playback::Playing
+                    && model
+                        .audio
+                        .as_ref()
+                        .and_then(Engine::metrics)
+                        .is_some_and(|metrics| metrics.buffering)
+                {
+                    "Buffering…"
                 } else if model.real_audio() {
                     "Audio nativo"
                 } else {
@@ -518,7 +526,7 @@ impl DoremiApp {
                             ui.small(if demo_candidate(&media.id) {
                                 "Demostración · sin audio"
                             } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
-                                "Commons · tono CC0"
+                                "Commons · audio CC0"
                             } else if media.id.provider.as_str() == "musicbrainz" {
                                 "MusicBrainz · metadatos"
                             } else {

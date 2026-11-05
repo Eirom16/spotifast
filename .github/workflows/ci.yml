@@ -148,6 +148,7 @@ jobs:
           cp assets/audio/LICENSE.txt target/native-binary/licenses/Audio-CC0.txt
           cp assets/audio/manifest.json target/native-binary/licenses/Audio-manifest.json
           cp tools/provider-live-probe/corpus.json target/native-binary/licenses/Commons-CC0-corpus.json
+          cp crates/doremi-commons/music-corpus.json target/native-binary/licenses/Commons-CC0-music-corpus.json
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-binary/licenses/Symphonia-source-and-fixture.md
           cp crates/doremi-player/licenses/* target/native-binary/licenses/
           python3 scripts/native-manifest.py target/native-binary/doremi target/native-binary/manifest.json
@@ -301,6 +302,7 @@ jobs:
           Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
           Copy-Item assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
           Copy-Item tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
+          Copy-Item crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & ./scripts/windows-native-smoke.ps1 -Binary target/native-dist/doremi.exe -Output target/native-dist/smoke

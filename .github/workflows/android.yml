@@ -119,6 +119,7 @@ jobs:
           cp assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
           cp assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
           cp tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
+          cp crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           cp crates/doremi-player/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           python3 scripts/native-manifest.py target/native-dist/doremi target/native-dist/manifest.json
@@ -167,6 +168,7 @@ jobs:
           Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
           Copy-Item assets/audio/manifest.json target/native-dist/licenses/Audio-manifest.json
           Copy-Item tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
+          Copy-Item crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & target/native-dist/doremi.exe --version

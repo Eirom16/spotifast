@@ -14,6 +14,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+pub(super) enum Prepared {
+    Pcm(Arc<Pcm>),
+    Stream(doremi_core::catalog::TemporaryResource),
+}
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Error {
@@ -43,7 +47,7 @@ pub(super) enum Completion {
         generation: u64,
         request: RequestId,
         media: MediaId,
-        result: Result<Arc<Pcm>, Error>,
+        result: Result<Prepared, Error>,
     },
 }
 pub(super) enum Job {
@@ -119,6 +123,7 @@ impl Worker {
             .spawn(move || {
                 // Client construction loads trust roots only on this worker.
                 match tokio::runtime::Builder::new_current_thread()
+                    .max_blocking_threads(1)
                     .enable_all()
                     .build()
                 {
@@ -278,6 +283,7 @@ async fn actor(
                                     rows.into_iter()
                                         .filter(|row| {
                                             commons::audited(row.media.id.local()).is_some()
+                                                || commons::progressive::candidate(&row.media.id)
                                         })
                                         .map(|row| row.media)
                                         .collect()
@@ -333,7 +339,16 @@ async fn source(
     cache: &Mutex<Vec<(MediaId, Arc<Pcm>)>>,
     origin: Instant,
     ctx: &egui::Context,
-) -> Result<Arc<Pcm>, Error> {
+) -> Result<Prepared, Error> {
+    if commons::progressive::candidate(media) {
+        state.phase(generation, 1, ctx);
+        let info = commons::resolve(&client?, media).await?;
+        if !commons::progressive::validate(&info) {
+            return Err(ProviderError::Unavailable.into());
+        }
+        let resource = commons::temporary(&info, Tick(origin.elapsed().as_millis() as u64))?;
+        return Ok(Prepared::Stream(resource));
+    }
     if let Some(pcm) = cache
         .lock()
         .unwrap()
@@ -341,7 +356,7 @@ async fn source(
         .find(|(id, _)| id == media)
         .map(|(_, pcm)| pcm.clone())
     {
-        return Ok(pcm);
+        return Ok(Prepared::Pcm(pcm));
     }
     let client = client?;
     state.phase(generation, 1, ctx);
@@ -364,7 +379,7 @@ async fn source(
     }
     buffers.push((media.clone(), pcm.clone()));
     state.phase(generation, 4, ctx);
-    Ok(pcm)
+    Ok(Prepared::Pcm(pcm))
 }
 
 #[cfg(test)]

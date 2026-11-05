@@ -170,6 +170,17 @@ pub trait FrameReader {
     fn seek_frame(&mut self, frame: u64) -> Result<(), DecodeError>;
     fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError>;
 }
+impl<T: FrameReader + ?Sized> FrameReader for Box<T> {
+    fn info(&self) -> Info {
+        (**self).info()
+    }
+    fn seek_frame(&mut self, frame: u64) -> Result<(), DecodeError> {
+        (**self).seek_frame(frame)
+    }
+    fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
+        (**self).read_frame()
+    }
+}
 impl<R: Read + Seek> FrameReader for Wav<R> {
     fn info(&self) -> Info {
         Wav::info(self)

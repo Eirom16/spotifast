@@ -1,5 +1,5 @@
 //! Host intent tracking only. Catalog and Queue remain the authoritative core.
-use super::online::{Completion, Job, Worker};
+use super::online::{Completion, Job, Prepared, Worker};
 use super::*;
 use doremi_core::{
     catalog::{AudioFormat, ProviderError, SearchRequest, Status},
@@ -27,8 +27,15 @@ pub(super) struct State {
     search: Option<SearchIntent>,
     load: Option<LoadIntent>,
     phase_seen: &'static str,
+    network: Option<(RequestId, Arc<doremi_commons::progressive::Metrics>)>,
+    retired_network: Option<Arc<doremi_commons::progressive::Metrics>>,
 }
 impl State {
+    pub fn failure_message(&self) -> Option<&'static str> {
+        self.network
+            .as_ref()
+            .and_then(|(_, metrics)| metrics.message())
+    }
     pub fn new() -> Self {
         Self {
             selected: false,
@@ -39,6 +46,8 @@ impl State {
             search: None,
             load: None,
             phase_seen: "idle",
+            network: None,
+            retired_network: None,
         }
     }
     pub fn phase(&self) -> &'static str {
@@ -52,7 +61,7 @@ impl State {
             .unwrap_or("idle")
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some()})
+        serde_json::json!({"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":doremi_commons::progressive::SIZE,"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
     }
     pub fn feedback(&self, status: Status) -> Option<(bool, String)> {
         if !self.selected {
@@ -69,7 +78,8 @@ impl State {
 }
 pub(super) fn candidate(id: &MediaId) -> bool {
     id.provider.as_str() == doremi_commons::PROVIDER
-        && doremi_commons::audited(id.local()).is_some()
+        && (doremi_commons::audited(id.local()).is_some()
+            || doremi_commons::progressive::candidate(id))
 }
 impl Model {
     // Keep the owner/worker across Android Activity recreation, but fence all
@@ -157,7 +167,7 @@ impl Model {
                     deadline: Instant::now() + Duration::from_secs(12),
                     sent: false,
                 });
-                self.notice = "Preparando tono CC0 de Commons…".into();
+                self.notice = "Preparando audio CC0 de Commons…".into();
             }
             Err(error) => {
                 self.notice = format!("No se pudo iniciar la fuente: {error:?}");
@@ -167,6 +177,14 @@ impl Model {
         true
     }
     pub fn cancel_online_load(&mut self, request: Option<RequestId>) {
+        if self
+            .online
+            .network
+            .as_ref()
+            .is_some_and(|(active, _)| request.is_none_or(|request| request == *active))
+        {
+            self.online.retired_network = self.online.network.take().map(|(_, metrics)| metrics);
+        }
         if self
             .online
             .load
@@ -301,7 +319,55 @@ impl Model {
                     }
                     let load = self.online.load.take().unwrap();
                     match result {
-                        Ok(pcm) => {
+                        Ok(Prepared::Stream(resource)) => {
+                            let metrics = Arc::new(doremi_commons::progressive::Metrics::default());
+                            self.online.network = Some((request, metrics.clone()));
+                            let origin = self.online.origin;
+                            let factory: doremi_player::StreamFactory = Box::new(move |cancel| {
+                                let now = Tick(origin.elapsed().as_millis() as u64);
+                                let reader = doremi_commons::progressive::Reader::open(
+                                    resource,
+                                    now,
+                                    move || cancel.cancelled(),
+                                    metrics,
+                                )
+                                .map_err(|_| EngineError::Input)?;
+                                let info = doremi_player::wav_stream::Info {
+                                    rate: doremi_commons::progressive::RATE,
+                                    channels: 2,
+                                    frames: doremi_commons::progressive::FRAMES,
+                                };
+                                let mut source = doremi_player::ogg_stream::Vorbis::from_read_seek(
+                                    reader,
+                                    doremi_commons::progressive::SIZE,
+                                    info,
+                                )
+                                .map_err(EngineError::Decode)?;
+                                // Prime HTTP seeking before the PCM feed's
+                                // short prebuffer deadline, on this worker.
+                                doremi_player::wav_stream::FrameReader::seek_frame(
+                                    &mut source,
+                                    load.position * u64::from(doremi_commons::progressive::RATE)
+                                        / 1000,
+                                )
+                                .map_err(EngineError::Decode)?;
+                                Ok(Box::new(source))
+                            });
+                            if let Err(error) = self
+                                .audio
+                                .as_mut()
+                                .ok_or(EngineError::Closed)
+                                .and_then(|engine| {
+                                    engine.load_stream(request, factory, load.position)
+                                })
+                            {
+                                self.notice = format!("No se pudo preparar el stream: {error:?}");
+                                self.event(Event::Failed(request));
+                            } else {
+                                self.notice = "Buffering de música CC0…".into();
+                            }
+                        }
+                        Ok(Prepared::Pcm(pcm)) => {
                             if self.prepared.len() >= 2
                                 && !self.prepared.iter().any(|(id, _)| *id == media)
                             {
@@ -348,7 +414,7 @@ impl Model {
             self.online.phase_seen = phase;
             self.revision += 1;
             match phase {
-                "resolve" => self.notice = "Resolviendo tono CC0…".into(),
+                "resolve" => self.notice = "Resolviendo audio CC0…".into(),
                 "download" => self.notice = "Descargando tono CC0…".into(),
                 "decode" => self.notice = "Preparando audio CC0…".into(),
                 _ => {}
@@ -397,7 +463,7 @@ mod tests {
                 generation,
                 request,
                 media: media.id,
-                result: Ok(pcm),
+                result: Ok(Prepared::Pcm(pcm)),
             },
         );
         model.poll_online(&egui::Context::default());
@@ -433,7 +499,7 @@ mod tests {
                 generation,
                 request,
                 media: media.id,
-                result: Ok(pcm),
+                result: Ok(Prepared::Pcm(pcm)),
             },
         );
         model.poll_online(&egui::Context::default());

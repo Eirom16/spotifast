@@ -41,6 +41,7 @@ pub enum EngineEvent {
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Metrics {
+    pub buffering: bool,
     pub position_ms: u64,
     pub frames: u64,
     pub callbacks: u64,
@@ -60,6 +61,7 @@ pub struct Metrics {
 }
 #[derive(Default)]
 struct Stats {
+    buffering: AtomicBool,
     position: AtomicU64,
     frames: AtomicU64,
     callbacks: AtomicU64,
@@ -97,6 +99,22 @@ enum Source {
     File { path: PathBuf, wav_only: bool },
     OriginalLong(PathBuf),
     Opened { file: File, wav_only: bool },
+    Stream(StreamFactory),
+}
+/// Invoked only on the output worker. Construction may perform bounded IO.
+/// Capture cheap metadata only: rejected queued factories may be dropped by
+/// the caller. Open clients, descriptors and decoders inside the factory.
+pub type StreamFactory =
+    Box<dyn FnOnce(Cancellation) -> Result<Box<dyn FrameReader + Send>, EngineError> + Send>;
+#[derive(Clone)]
+pub struct Cancellation {
+    control: Arc<Control>,
+    epoch: u64,
+}
+impl Cancellation {
+    pub fn cancelled(&self) -> bool {
+        self.control.epoch.load(Ordering::Acquire) != self.epoch
+    }
 }
 enum Command {
     Load(Load),
@@ -169,6 +187,14 @@ impl Engine {
         position: u64,
     ) -> Result<(), EngineError> {
         self.enqueue(request, Source::Prepared(pcm), position)
+    }
+    pub fn load_stream(
+        &mut self,
+        request: RequestId,
+        factory: StreamFactory,
+        position: u64,
+    ) -> Result<(), EngineError> {
+        self.enqueue(request, Source::Stream(factory), position)
     }
     /// The output actor opens the selected regular WAV file; a separate worker
     /// decodes/resamples into a fixed-capacity buffer. The caller performs no IO.
@@ -290,6 +316,7 @@ impl Engine {
         let optional = |value: u64| (value > 0).then_some(value);
         let xruns = s.xruns.load(Ordering::Acquire);
         Some(Metrics {
+            buffering: s.buffering.load(Ordering::Acquire),
             position_ms: s.position.load(Ordering::Acquire),
             frames: s.frames.load(Ordering::Acquire),
             callbacks: s.callbacks.load(Ordering::Acquire),
@@ -570,7 +597,7 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         epoch: load.epoch,
         started: load.started,
     };
-    let (input, feed) = match source {
+    let (source, prepared) = match source {
         Source::Opened { file, wav_only } => {
             let source = if wav_only {
                 LocalFile::Wav(Box::new(Wav::open(file).map_err(EngineError::Decode)?))
@@ -582,37 +609,45 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
                 })
                 .map_err(EngineError::Decode)?
             };
-            let duration = source.info().duration_ms();
-            load.stats.streaming.store(true, Ordering::Release);
-            let (feed, consumer) =
-                feed::Feed::start(source, config.sample_rate, load.position, &state)?;
-            load.stats.bytes.store(
-                (feed::CAPACITY * 2 * std::mem::size_of::<f32>()) as u64,
-                Ordering::Release,
-            );
-            load.stats
-                .capacity
-                .store(feed::CAPACITY as u64, Ordering::Release);
-            (
-                Input::Streaming {
-                    consumer,
-                    frames: 0,
-                    rate: config.sample_rate,
-                    position: load.position.min(duration),
-                    duration,
-                },
-                Some(feed),
-            )
+            (Some(Box::new(source) as Box<dyn FrameReader + Send>), None)
         }
-        source => {
-            let pcm = match source {
-                Source::Prepared(pcm) => pcm,
-                _ => unreachable!(),
-            };
-            let cursor = Cursor::new(&pcm, config.sample_rate, load.position)
-                .map_err(EngineError::Decode)?;
-            (Input::Prepared { pcm, cursor }, None)
-        }
+        Source::Stream(factory) => (
+            Some(factory(Cancellation {
+                control: state.control.clone(),
+                epoch: state.epoch,
+            })?),
+            None,
+        ),
+        Source::Prepared(pcm) => (None, Some(pcm)),
+        _ => unreachable!(),
+    };
+    let (input, feed) = if let Some(source) = source {
+        let duration = source.info().duration_ms();
+        load.stats.streaming.store(true, Ordering::Release);
+        let (feed, consumer) =
+            feed::Feed::start(source, config.sample_rate, load.position, &state)?;
+        load.stats.bytes.store(
+            (feed::CAPACITY * 2 * std::mem::size_of::<f32>()) as u64,
+            Ordering::Release,
+        );
+        load.stats
+            .capacity
+            .store(feed::CAPACITY as u64, Ordering::Release);
+        (
+            Input::Streaming {
+                consumer,
+                frames: 0,
+                rate: config.sample_rate,
+                position: load.position.min(duration),
+                duration,
+            },
+            Some(feed),
+        )
+    } else {
+        let pcm = prepared.ok_or(EngineError::Input)?;
+        let cursor =
+            Cursor::new(&pcm, config.sample_rate, load.position).map_err(EngineError::Decode)?;
+        (Input::Prepared { pcm, cursor }, None)
     };
     if state.control.epoch.load(Ordering::Acquire) != load.epoch {
         return Err(EngineError::Closed);
@@ -675,6 +710,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                 let mut nonzero = 0_u64;
                 let silence = T::from_sample(0.0);
                 let mut stopped = false;
+                let mut buffering = false;
                 for frame in data.chunks_mut(channels) {
                     if stopped {
                         frame.fill(silence);
@@ -682,6 +718,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                     }
                     if let Step::Frame(sample) = match input.next_frame(gain) {
                         Step::Pending => {
+                            buffering = true;
                             stats.underruns.fetch_add(1, Ordering::Relaxed);
                             stopped = true;
                             Step::Pending
@@ -720,6 +757,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                     }
                 }
                 stats.nonzero.fetch_add(nonzero, Ordering::Relaxed);
+                stats.buffering.store(buffering, Ordering::Release);
                 if delivered > 0 && first_callback {
                     stats.first_callback.store(
                         started.elapsed().as_micros().max(1) as u64,

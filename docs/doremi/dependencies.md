@@ -132,7 +132,8 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `tools/provider-live-probe: dependencies` | `sha2` | `0.10` |
 | `tools/provider-live-probe: dependencies` | `tokio` | `features=['rt', 'time', 'net']; version=1` |
 | `crates/doremi-commons: dependencies` | `doremi-core` | `path=../doremi-core` |
-| `crates/doremi-commons: dependencies` | `reqwest` | `default-features=False; version=0.12` |
+| `crates/doremi-commons: dependencies` | `httpdate` | `1` |
+| `crates/doremi-commons: dependencies` | `reqwest` | `default-features=False; features=['blocking']; version=0.12` |
 | `crates/doremi-commons: dependencies` | `serde_json` | `1` |
 | `crates/doremi-commons: dependencies` | `sha1` | `0.10` |
 | `crates/doremi-commons/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |

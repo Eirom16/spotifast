@@ -1577,6 +1577,7 @@ name = "doremi-commons"
 version = "0.1.0"
 dependencies = [
  "doremi-core",
+ "httpdate",
  "reqwest",
  "serde_json",
  "sha1",

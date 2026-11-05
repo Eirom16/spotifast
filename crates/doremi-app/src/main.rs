@@ -40,7 +40,7 @@ fn main() -> eframe::Result {
         }
         [argument] if argument == "--help" => {
             println!(
-                "Doremi Native Dev: --version, --help, --audio-probe, --wav-audio-probe PATH. UI: MusicBrainz public music metadata, optional experimental Commons CC0 tones, local library and native player. MusicBrainz supplies no audio. Linux also supports --online-audio-probe. Development build; no stable release."
+                "Doremi Native Dev: --version, --help, --audio-probe, --wav-audio-probe PATH. UI: MusicBrainz public music metadata, selected Commons CC0 music with progressive native playback and test tones, local library and native player. MusicBrainz supplies no audio. Linux also supports --online-audio-probe. Development build; no stable release."
             );
             return Ok(());
         }
