@@ -892,6 +892,7 @@ impl DoremiApp {
     }
 
     fn page_content(&mut self, ui: &mut egui::Ui) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         let ctx = ui.ctx().clone();
         let page = self.model.as_ref().unwrap().page;
         match page {
@@ -1362,7 +1363,14 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
         for light in [false, true] {
-            for size in [[360.0, 640.0], [393.0, 852.0], [430.0, 932.0]] {
+            for size in [
+                [360.0, 640.0],
+                [393.0, 852.0],
+                [430.0, 932.0],
+                [640.0, 360.0],
+                [682.65625, 360.0],
+                [720.0, 360.0],
+            ] {
                 let model = app.model.as_mut().unwrap();
                 model.queue = Queue::new(SessionId(90));
                 model.page = Page::Home;

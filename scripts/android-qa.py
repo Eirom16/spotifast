@@ -125,6 +125,8 @@ def main():
             assert any('mCurrentFocus=' in line and PACKAGE+'/' in line for line in focus.splitlines()), 'No touch outside Doremi'
             data=state()
             def present(key): return any(c['name']==key for c in state()['controls'])
+            if not present(name) and data['page']=='Home' and name.startswith(('select:','add:','save:')):
+                tap('demo-examples')
             if not present(name) and name.startswith(('add:','forget:','save-again:')):
                 tap('row-more:'+name.split(':',1)[1])
             if not present(name) and data['viewport'][0]<760 and name in {'previous','stop','shuffle','repeat','seek','volume'}:

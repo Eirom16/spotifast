@@ -194,7 +194,8 @@ public final class DoremiInstrumentation extends Instrumentation {
         foreground();JSONArray page=data.getJSONArray("page_rect");final int[] origin=new int[2];
         runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point"),top=(float)page.getDouble(1),height=(float)(page.getDouble(3)-top);
-        float x=origin[0]+(float)(page.getDouble(0)+page.getDouble(2))*scale/2;
+        // Start in the page gutter; a drag beginning on a seek slider is its own gesture.
+        float x=origin[0]+((float)page.getDouble(0)+4f)*scale;
         float from=origin[1]+(top+height*(upward?.25f:.8f))*scale,to=origin[1]+(top+height*(upward?.8f:.25f))*scale;
         long started=SystemClock.uptimeMillis();MotionEvent down=MotionEvent.obtain(started,started,MotionEvent.ACTION_DOWN,x,from,0);sendOwnPointerSync(down);down.recycle();
         for(int step=1;step<=6;step++) {SystemClock.sleep(30);MotionEvent move=MotionEvent.obtain(started,SystemClock.uptimeMillis(),MotionEvent.ACTION_MOVE,x,from+(to-from)*step/6,0);sendOwnPointerSync(move);move.recycle();}

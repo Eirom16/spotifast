@@ -29,7 +29,7 @@ def digest(data):
 
 
 def normal_library():
-    read = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat',
+    read = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'cat',
                            'files/library-v1.json'], capture_output=True, timeout=30)
     if read.returncode == 0:
         return digest(read.stdout)
@@ -53,6 +53,7 @@ def main():
     manifest = json.loads((args.artifact/'manifest.json').read_text())
     assert adb('get-state').decode().strip() == 'device'
     before = normal_library()
+    (output/'normal-library-before.json').write_text(json.dumps({'sha256':before})+'\n')
     private = f'files/qa/{args.profile}/'
     exists = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'test', '-e', private],
                             capture_output=True, timeout=30)
@@ -62,34 +63,43 @@ def main():
     assert installed.startswith('package:') and '\n' not in installed and installed.endswith('/base.apk')
     assert digest(adb('exec-out', 'cat', installed.removeprefix('package:'))) == digest(apk.read_bytes())
     adb('install', '-r', '-t', str(args.artifact/'app-debug-androidTest.apk'))
-    with verifier['qa_session'](args.profile):
-        log = adb('shell', 'am', 'instrument', '-w', '-e', 'mode', 'music-ui',
-                  '-e', 'profile', args.profile,
-                  f'{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation')
-        (output/'instrumentation.log').write_bytes(log)
-        latest = json.loads(adb('exec-out', 'run-as', PACKAGE, 'cat', private+'qa-state.json'))
-        (output/'latest-state.json').write_text(json.dumps(latest, indent=2)+'\n')
-        own_log = adb('logcat', '-d', f"--pid={int(latest['pid'])}", '-t', '1000').decode(errors='replace')
-        (output/'own-process.log').write_text(own_log)
-        # Keep reached captures on failure, without substituting older evidence.
-        for name in (*CAPTURES, 'qa-failure'):
-            snapshot = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat',
-                                       private+name+'.json'], capture_output=True, timeout=30)
-            if snapshot.returncode:
-                continue
-            assert json.loads(snapshot.stdout)['pid'] == latest['pid']
-            (output/(name+'.json')).write_bytes(snapshot.stdout)
-            png = adb('exec-out', 'run-as', PACKAGE, 'cat', private+name+'.png')
-            assert png.startswith(b'\x89PNG\r\n\x1a\n')
-            (output/(name+'.png')).write_bytes(png)
-        assert log.decode().startswith('PASS: ') and 'FAIL:' not in log.decode(), log.decode()
-        assert not re.search(r'FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR|shutdown.*timed out', own_log, re.IGNORECASE), 'Inspect own-process.log'
-        for name in ('qa-music-first-pcm', 'qa-mobile-checks'):
-            (output/(name+'.json')).write_bytes(adb('exec-out', 'run-as', PACKAGE, 'cat', private+name+'.json'))
-        checks = json.loads((output/'qa-mobile-checks.json').read_text())
-        assert checks['result'] == 'pass' and 0 < checks['first_pcm_received_bytes'] < checks['total_bytes']
-        assert all((output/(name+'.png')).is_file() for name in CAPTURES)
-    assert normal_library() == before, 'Normal-profile library changed'
+    try:
+        with verifier['qa_session'](args.profile):
+            log = adb('shell', 'am', 'instrument', '-w', '-e', 'mode', 'music-ui',
+                      '-e', 'profile', args.profile,
+                      f'{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation')
+            (output/'instrumentation.log').write_bytes(log)
+            latest = json.loads(adb('shell', 'run-as', PACKAGE, 'cat', private+'qa-state.json'))
+            (output/'latest-state.json').write_text(json.dumps(latest, indent=2)+'\n')
+            own_log = adb('logcat', '-d', f"--pid={int(latest['pid'])}", '-t', '1000').decode(errors='replace')
+            (output/'own-process.log').write_text(own_log)
+            # ADB exec-out does not carry the remote exit status. Use shell for
+            # optional JSON, so a missing later capture cannot hide the real failure.
+            for name in (*CAPTURES, 'qa-failure'):
+                snapshot = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'cat',
+                                           private+name+'.json'], capture_output=True, timeout=30)
+                if snapshot.returncode:
+                    continue
+                assert json.loads(snapshot.stdout)['pid'] == latest['pid']
+                (output/(name+'.json')).write_bytes(snapshot.stdout)
+                png = adb('exec-out', 'run-as', PACKAGE, 'cat', private+name+'.png')
+                assert png.startswith(b'\x89PNG\r\n\x1a\n')
+                (output/(name+'.png')).write_bytes(png)
+            for name in ('qa-music-first-pcm', 'qa-mobile-checks'):
+                saved = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'cat',
+                                        private+name+'.json'], capture_output=True, timeout=30)
+                if saved.returncode == 0:
+                    json.loads(saved.stdout)
+                    (output/(name+'.json')).write_bytes(saved.stdout)
+            assert log.decode().startswith('PASS: ') and 'FAIL:' not in log.decode(), log.decode()
+            assert not re.search(r'FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR|shutdown.*timed out', own_log, re.IGNORECASE), 'Inspect own-process.log'
+            checks = json.loads((output/'qa-mobile-checks.json').read_text())
+            assert checks['result'] == 'pass' and 0 < checks['first_pcm_received_bytes'] < checks['total_bytes']
+            assert all((output/(name+'.png')).is_file() for name in CAPTURES)
+    finally:
+        after = normal_library()
+        (output/'normal-library-preserved.json').write_text(json.dumps({'before':before,'after':after,'preserved':after==before})+'\n')
+        assert after == before, 'Normal-profile library changed'
     device = {key: adb('shell', 'getprop', key).decode().strip() for key in
               ('ro.product.model', 'ro.build.version.sdk', 'ro.product.cpu.abilist')}
     summary = dict(result='pass', source_commit=args.commit,

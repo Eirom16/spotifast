@@ -527,6 +527,15 @@ impl DoremiApp {
     }
 
     pub(super) fn mobile_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+        let width = self.page_rect[2] - self.page_rect[0];
+        let height = self.page_rect[3] - self.page_rect[1];
+        if width >= 616.0
+            && width > height
+            && self.model.as_ref().unwrap().queue.current().is_some()
+        {
+            self.mobile_player_landscape(ui, palette, height);
+            return;
+        }
         if self.can_go_back()
             && self.icon_control(
                 ui,
@@ -582,6 +591,68 @@ impl DoremiApp {
         if failed {
             ui.colored_label(palette.danger, notice);
         }
+        self.mobile_player_controls(ui, palette);
+        #[cfg(target_os = "android")]
+        ui.weak("La reproducción se pausa al salir de Doremi.");
+    }
+
+    fn mobile_player_landscape(&mut self, ui: &mut egui::Ui, palette: &Palette, height: f32) {
+        let model = self.model.as_ref().unwrap();
+        let title = model.queue.current().unwrap().media.title.clone();
+        let caption = playback_caption(model);
+        let failed = model.queue.playback() == Playback::Failed;
+        let notice = model.notice.clone();
+        ui.spacing_mut().item_spacing.y = 8.0;
+        ui.columns(2, |columns| {
+            if self.icon_control(
+                &mut columns[0],
+                palette,
+                "player-back",
+                Icon::ChevronDown,
+                "Volver",
+                true,
+            ) {
+                self.go_back();
+            }
+            columns[0].vertical_centered(|ui| {
+                let art = (height - TOUCH - 16.0)
+                    .clamp(96.0, 200.0)
+                    .min(ui.available_width());
+                let (rect, response) =
+                    ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
+                theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
+                self.record("player-art", &response);
+            });
+            columns[1].vertical_centered(|ui| {
+                let mut text = egui::text::LayoutJob::simple(
+                    title,
+                    theme::bold(20.0),
+                    palette.text,
+                    ui.available_width(),
+                );
+                text.wrap.max_rows = 2;
+                text.halign = Align::Center;
+                ui.add(egui::Label::new(text));
+                ui.label(
+                    RichText::new(caption)
+                        .font(theme::regular(13.0))
+                        .color(if failed {
+                            palette.danger
+                        } else {
+                            palette.secondary
+                        }),
+                );
+            });
+            self.mobile_player_controls(&mut columns[1], palette);
+        });
+        if failed {
+            ui.colored_label(palette.danger, notice);
+        }
+        #[cfg(target_os = "android")]
+        ui.weak("La reproducción se pausa al salir de Doremi.");
+    }
+
+    fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.progress_sized(ui, TOUCH);
         ui.horizontal(|ui| {
             let width = 4.0 * TOUCH + 64.0 + 4.0 * 8.0;
@@ -595,8 +666,6 @@ impl DoremiApp {
                 self.model.as_mut().unwrap().command(Command::Cancel);
             }
         });
-        #[cfg(target_os = "android")]
-        ui.weak("La reproducción se pausa al salir de Doremi.");
     }
 
     pub(super) fn open_library_entry(&mut self, rows: &[Media], index: usize) {
