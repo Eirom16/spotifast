@@ -83,7 +83,8 @@ jobs:
     # independently rejects every Rust input difference before packaging.
     if: ${{ !inputs.native_run }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # The prior run spent its entire 20-minute budget downloading native libraries.
+    timeout-minutes: 35
     env:
       CARGO_TARGET_DIR: target/native-cargo
     steps:
@@ -92,7 +93,7 @@ jobs:
       - name: Native UI libraries and isolated graphical QA
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick zenity
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick zenity
       - name: Host tests and lint, without the Spotifast dependency tree
         run: |
           cargo fmt --all --check
