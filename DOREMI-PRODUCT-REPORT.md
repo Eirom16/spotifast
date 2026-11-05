@@ -9,6 +9,11 @@ El objetivo completo sigue abierto; no hay release estable.
 - `doremi-ui` extrae paleta, Inter, iconos, navegación, controles, slider,
   contenedor de player y placeholder de las fuentes originales. El legado
   los reutiliza; conserva sus acciones, credenciales, DSP y visualizadores.
+- Cabeceras de colección extraídas de la vista original: el legado conserva
+  artwork, ampliación, enlaces, bidi e i18n mediante slots. Doremi las usa para
+  artista, álbum y grabación. Resultados en filas compactas con artista,
+  duración y guardado. Abrir metadatos desde Biblioteca o sidebar conserva
+  la reproducción; los contextos de audio omiten esos metadatos.
 - El host neutral compone sidebar desktop, navegación táctil, Inicio,
   Biblioteca, Cola, Ajustes y barra persistente sobre Queue/Engine existentes.
   Inicio prioriza Buscar/Biblioteca; las muestras permanecen en un desplegable.
@@ -42,8 +47,9 @@ IDs en búsquedas de otro sitio. Demo y los dos tonos Commons CC0 permanecen
 como fuentes separadas y explícitas. Commons aún descarga el recurso antes
 de decodificar: no es streaming progresivo. No se añaden formatos locales.
 
-La recuperación visual completa sigue pendiente: tablas, shelves, headers
-de álbum/artista/playlist, artwork, transiciones y demás capacidades del roadmap.
+La recuperación visual completa sigue pendiente: tablas completas, shelves,
+playlist, artwork, transiciones y demás capacidades del roadmap. Las cabeceras
+de artista/álbum ya comparten el componente original.
 Este corte no cierra P0 ni sustituye la Preview aprobada como evidencia final.
 Playlists propias, historial completo, cuenta opcional, EQ/DSP/visualizadores,
 integraciones multimedia y segundo plano Android siguen abiertos.
@@ -58,35 +64,54 @@ Revisión actual de Tubefast, yt-dlp/EJS y RustyPipe en `TUBEFAST-ASSESSMENT.md`
 
 ## Validación y correcciones en curso
 
-Nueva CI completa [41933320025](https://github.com/Eirom16/spotifast/actions/runs/41933320025),
-código `10f80b5`, en curso: quick y core Android aprobados; Linux, Windows,
-macOS y APK ejecutándose. Los commits documentales posteriores no cambian
-sus entradas Rust. Evidencia privada preservada con checksums fuera del árbol:
-`/home/eirom/.local/share/doremi/product-qa/2026-11-04/`.
+CI [41959750650](https://github.com/Eirom16/spotifast/actions/runs/41959750650),
+código 05e91b7, en curso: quick y núcleo Android aprobados. Incluye la
+corrección del enlace Rustdoc. No se presenta el conjunto como aprobado.
 
+28 tests del host, Clippy del host, circuito ligero y Rustdoc de UI/catálogo
+pasaron localmente. La geometría incluye 360, 384, 393, 430 y 440 puntos,
+paisaje y 384×332 con IME. Comprueba también etiquetas del timeline y título,
+no solo hitboxes; se corrigió una altura mínima de 48 pt heredada por una fila
+de progreso de 20 pt que recortaba las etiquetas en Android.
 
-26 tests del host y 3 del parser pasaron; también Clippy del host, circuito
-ligero, 7 tests de tooling y 27 de políticas. La geometría cubre ahora el tamaño
-384×332 observado con IME y rechaza solapamientos en controles de transporte.
-La compilación fría del test tomó 15 min 28 s; no es latencia de uso.
+GUI real Linux/XTest del código de 05e91b7: PASS en oscuro a 1240×800 y claro
+a 384×658. Grabación, Björk Unicode, grabaciones de artista, Kind of Blue/pistas,
+vacío, cancelación, guardar y reabrir sin alterar playback. Capturas antes/después
+y reportes con hash del ejecutable y driver en la evidencia persistente,
+carpetas hero-final-dark/ y hero-final-light-phone/. Son builds locales;
+no artifacts oficiales ni prueba física Android. El diseño móvil aún mantiene
+un player demasiado grande en navegación: pendiente mini-player/vista dedicada.
 
-CI completa [`41923094028`](https://github.com/Eirom16/spotifast/actions/runs/41923094028),
-SHA `6bbcfe3`: quick, tests completos, core/APK Android y build Windows pasaron.
-Clippy detectó un import usado solo por tests en el legado: corregido con
-`cfg(test)`, pendiente de repetir en CI. macOS fue cancelado; preview/QA Linux pasó. El gate agregado falló.
-No se presenta el conjunto como verde.
+CI anterior [41933320025](https://github.com/Eirom16/spotifast/actions/runs/41933320025),
+código 10f80b5: tests completos, ambos lints Clippy, núcleo/APK Android y builds
+nativos Windows/macOS pasaron. Rustdoc falló por un enlace sin formato (corregido
+en 5ea6954). La revisión gráfica Linux quedó cancelada; el gate agregado falló.
+No se rebajó ningún check.
 
-APK `af95d8d` mostró overflow de Ajustes; la corrección ya está comprobada
-físicamente en `6bbcfe3`. Con IME se detectó además intersección de volumen/play;
-se prepara barra compacta con menú de extras, comprobada por tests, pendiente
-verificar en la nueva APK. Los drivers conservan las aserciones y usan
-ahora el rectángulo completo del slider heredado y el área visible de la página.
+Artifacts Linux/Windows 10f80b5 descargados: manifiestos y conjunto completo
+de checksums verificados. Linux instalado con scripts/install-native-dev.py,
+conservando versiones/datos; launcher «Doremi Native Dev» actualizado y GUI
+abierta en CachyOS Wayland, viewport 1240×768, estado Stopped, sin autoplay.
+Linux SHA-256 b8ce2153a0cd385846a07aafc6402173f1c2c350edfd6d103307885b6f498813.
+Windows SHA-256 f3bda2af8ea4abf8da049a8cf5189655d2765b872f5e08cae7766d9272363c2c.
+Smoke Windows ejecutado: **sin GUI ni audio**; el runner devuelve OpenGL <2.0
+y NoDevice. Esto prueba build/tests/CLI, no playback ni hardware Windows.
 
-Se prepara smoke Windows de ventana/captura y audio nativo del runner, con
-perfil aislado y resultados separados; aún no ejecutado. El empaquetado genera
-checksums de ejecutable/licencias y el instalador acepta el nombre declarado
-`doremi`, preservando el alias anterior. Pendiente artifact/instalación Linux.
+La APK 10f80b5 se verificó e instaló mediante ADB antes del reinicio del
+entorno: consulta Moonlight Sonata con 20 resultados, biblioteca conservada,
+controles compactos sin intersección. SHA-256
+f929b18869d0655317b9e269029f94265a3270023c932d18f5f60652649d35f9.
+La captura mostró el recorte de etiquetas corregido después. Esa evidencia
+temporal se perdió al reiniciar; no sustituye una nueva prueba física del código
+05e91b7. ADB actualmente no detecta dispositivos.
 
-Siguiente: CI del nuevo corte, descargar/verificar artifacts e instalar Linux
-y APK; cerrar GUI/audio y compactación móvil del mismo código. Después,
-seguir extrayendo las vistas reales y conectar transporte progresivo autorizado.
+Evidencia persistente, incluidos artifacts/licencias y fallos:
+/home/eirom/.local/share/doremi/product-qa/2026-11-04/.
+El informe local previo del usuario y sus skills se conservan fuera de commits.
+
+Siguiente corte: mini-player/vista móvil dedicada y transporte progresivo
+autorizado sobre el motor existente. Se investiga también Audius como
+candidato público: una consulta real sin credenciales devolvió metadatos y
+flags de disponibilidad diferentes por pista. No se ha integrado ni reproducido
+su catálogo; revisión contractual/API pendiente. MusicBrainz continúa siendo
+metadatos, y Commons sigue limitado a sus dos tonos.
