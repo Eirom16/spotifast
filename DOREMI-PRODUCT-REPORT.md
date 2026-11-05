@@ -1,96 +1,106 @@
 # Doremi — avance de producto
 
-Rama feature/doremi-product-ui, desde ea71b92. Objetivo completo abierto,
-sin release estable ni cambios a main/upstream. Informe previo y skills locales
-del usuario preservados fuera de commits.
+Rama feature/doremi-product-ui, desde ea71b92. Objetivo completo abierto; sin
+release, merge a main ni cambios a upstream. Informe previo y skills locales
+del usuario conservados fuera de commits.
 
 ## Funcionalidad disponible
 
-- Presentación neutral con paleta, Inter, iconos, sidebar, slider, botones,
-  player y cabeceras de colección extraídos del legado. Artista/álbum/grabación
-  usan la cabecera compartida; el legado conserva artwork, bidi, i18n y enlaces.
-- Inicio, Buscar, Biblioteca, Cola, Ajustes y player comparten Queue/Engine.
-  Navegación táctil, claro/oscuro y acentos morado/verde.
+- Presentación neutral que reutiliza paleta, Inter, iconos, sidebar, filas,
+  sliders, player y cabeceras de colección del legado. Inicio, Buscar,
+  Biblioteca, Cola y Ajustes comparten Queue/Engine. La migración visual completa
+  y las funciones avanzadas del legado continúan pendientes.
 - MusicBrainz público: grabaciones, artistas, ediciones, grabaciones de artista,
-  pistas de álbum, paginación/caché acotadas, generaciones y guardado por ID.
-  **Solo metadatos:** no audio, carátulas ni sustitución por búsquedas de otro sitio.
-- Buscar → Commons → «Chopin» o «Membeth» devuelve una interpretación CC0
-  auditada del Nocturno op. 9 n.º 2, de casi cuatro minutos. La licencia, identidad,
-  tamaño y hash se verifican otra vez al seleccionar. No representa todo Commons.
-- El lector HTTP progresivo entrega bloques de 128 KiB autenticados antes de
-  decodificar. Symphonia, Feed/CPAL, cola, gain y cancelación son los existentes.
-  Seek por rangos y estado de buffering; UI/callback no hacen red ni decodifican.
-  Los dos tonos Commons mantienen su camino preparado. Demo permanece explícita
-  y sin audio. No se añadieron formatos locales.
+  canciones de álbum, paginación/caché acotadas y guardado por ID. Solo metadatos:
+  sin audio/artwork y sin sustituir una grabación por búsquedas en otro sitio.
+- Commons: selección auditada CC0 del Nocturno op. 9 n.º 2 por Membeth, más dos
+  tonos. Buscar «Chopin»/«Membeth» muestra la interpretación real. Esto todavía
+  no es un catálogo reproducible amplio. Demo sigue etiquetada y sin audio.
+- Música progresiva por rangos verificados de 128 KiB; Vorbis, Feed/CPAL y cola
+  existentes. Play/pause, seek, next/previous, buffering, cancelación y expiración.
+  Primer PCM sin esperar al archivo completo. UI/callback no hacen red/decodificación.
+- Móvil: navegación por iconos, mini-player condicional de 72 pt, player dedicado,
+  composición horizontal en dos columnas, filas de 56 pt con favoritos/menú y
+  Atrás al origen. Temas claro/oscuro y morado/verde; placeholders cuando falta art.
+- Playlists propias, código **8315fad**: crear/renombrar, añadir desde menús,
+  duplicados ordenados, selección de la aparición concreta, subir/bajar/quitar,
+  confirmar/cancelar eliminación y abrir desde Biblioteca/sidebar. Editarlas no
+  modifica favoritos ni la cola en curso. JSON v1 independiente, snapshots
+  inmutables, escritura privada exclusiva/atómica fuera de UI y conservación de
+  documentos futuros. Primer límite: 32 listas/256 entradas totales; no cierra
+  el gate de escala de F3b. Sin ampliar formatos/importadores locales.
+- Los campos de nombre comparten la ruta de editor con búsqueda; Android incluye
+  destino/generación para impedir que texto tardío cambie otro campo. El writer
+  conserva sus APIs anteriores y publica locators antes de referencias nuevas.
 
-## Evidencia y pruebas
+## Evidencia local
 
-Linux, build local probado en GUI mediante XTest y salida nativa: **PASS** para
-buscar música real, guardar ID, emitir PCM antes del archivo completo, pausa con
-reloj estable, seek HTTP en pausa a unos 120 s, reanudar, next a otro recurso CC0,
-previous a la música y cancelar salida/red. No hubo captura acústica.
+32 tests del host, 19 de biblioteca y 7 de Commons aprobados; Clippy focalizado,
+Rustdoc estricto, Java y circuito ligero aprobados. Los fixtures cubren rangos,
+200/403/429, alteraciones, caducidad durante IO, duplicados, namespace, snapshots,
+datos futuros, temporales desconocidos y fallo del índice antes de publicar refs.
 
-Primera observación con PCM no nulo: 197.167 bytes de audio recibidos de
-4.260.399 totales; buffer PCM 8.192 frames estéreo/65.536 bytes. El límite de
-buffers comprimidos propio es 262.146 bytes, además de buffers de HTTP/TLS y
-decoder; no se presenta como RSS total. El ejecutable exacto, driver y hash
-del build local están preservados en la carpeta gui-final de la evidencia.
-Son una prueba local de desarrollo, no un artifact oficial de CI.
+GUI XTest de playlists aprobada en escritorio y a 360×640, 393×852 y 430×932:
+nombre Unicode, añadir duplicados, seleccionar el segundo, reordenar/quitar,
+renombrar, conservar la cola, reabrir proceso sin IO automático, reproducir sin
+búsqueda y eliminar conservando favoritos/cola. Capturas claro/oscuro revisadas.
+El recorrido con Commons real también pasó con salida nativa positiva; sin
+captura acústica. Son builds locales, con hashes/driver en la evidencia, no
+artifacts oficiales de CI.
 
-Antes hubo un fallo real de seek por HTTP 429. Se conserva el fallo. El lector
-ahora termina tras cualquier error y no permite reintentos implícitos del
-demuxer; limita ritmo a una petición/s y respeta Retry-After numérico/fecha.
-El recorrido completo posterior pasó. También se corrigió el preroll Vorbis
-tras seek; sus muestras coinciden con el decoder de referencia.
+El stream anterior pasó seek HTTP pausado a unos 120 s, reanudar, siguiente a
+otro recurso CC0, anterior a música y cancelación. Primer PCM observado con
+197.167/4.260.399 bytes recibidos. PCM 65.536 B/8.192 frames; buffers comprimidos
+propios 262.146 B, además de HTTP/TLS/decoder. No se presenta como RSS total.
+Catálogo: Björk Unicode, artista/álbum, vacío, cancelación, guardar y reabrir sin
+alterar playback también se probaron en GUI.
 
-25 tests del player con todas sus features, 28 del host y 5 de Commons pasaron.
-Clippy de host/player/Commons con all-targets/all-features, Rustdoc estricto
-y circuito ligero pasaron. Los fixtures HTTP cubren 206, rango ignorado/200,
-403, 429, Content-Range incorrecto, bytes modificados, cancelación y caducidad.
-No ejecutan tráfico público en la CI ordinaria.
-
-UI de catálogo anterior: GUI Linux PASS a 1240×800 oscuro y 384×658 claro;
-Björk Unicode, artista, álbum, vacío, cancelación, guardar y reabrir sin alterar
-playback. Geometría comprobada también a 360, 393 y 430 pt, paisaje e IME.
-Persistencia y reglas de duplicados/cola continúan sobre el núcleo compartido.
+Se conservan fallos reales de 429/timeout y de geometría. El timeout de rangos
+pasó de 2 a 6 s, conexión 3 s, tras fallar sin recibir bytes. Sigue acotado y
+fuera de UI; cancelación puede drenar hasta ese límite. Cada error queda
+latcheado, sin retry implícito; ritmo máximo una petición/s y Retry-After
+numérico/fecha. Un fixture de 2,2 s y el recorrido real posterior pasaron.
 
 ## Plataformas y CI
 
-CI [41959750650](https://github.com/Eirom16/spotifast/actions/runs/41959750650),
-código 05e91b7: **todos los jobs aprobados**, incluidos lints/Rustdoc,
-tests completos, Linux gráfico, nuevo ejecutable Windows, macOS y APK.
+CI completa [42086375132](https://github.com/Eirom16/spotifast/actions/runs/42086375132),
+**3201c4b: todos los jobs aprobados**, incluidos tests/lints/Rustdoc, GUI Linux,
+Windows nativo, macOS, ambas ABI Android y artifacts verificados del mismo SHA.
+El fallo Clippy Windows de 41969111007 se corrigió con cfg; no se silenció.
 
-CI del stream [41964907308](https://github.com/Eirom16/spotifast/actions/runs/41964907308),
-código 00cf440: **en curso**. Debe completar la nueva matriz y producir artifacts
-del mismo código antes de instalar/verificar el stream en Android/Windows.
+CI de playlists [42095842479](https://github.com/Eirom16/spotifast/actions/runs/42095842479),
+**8315fad: en curso**. Valida los paquetes modificados en Linux/Windows, GUI,
+Rustdoc y APK ARMv7/ARM64; añade pruebas de biblioteca/Commons a Windows. No
+repite el build del legado, que no cambió en este corte.
 
-Linux instalado desde artifact 10f80b5 con manifiesto/checksums completos,
-conservando versiones y datos. Launcher «Doremi Native Dev» abierto en CachyOS
-Wayland, sin autoplay. Ese launcher aún debe actualizarse al artifact del stream.
+Linux: launcher aún en artifact 10f80b5, abierto en CachyOS Wayland sin autoplay,
+con manifiesto/checksums y datos conservados. Falta actualizarlo al artifact nuevo.
+La música/playlists actuales se verificaron en los builds locales descritos.
 
-Android: búsqueda MusicBrainz probada físicamente en SM-J701M, API 28/ARMv7;
-APK 10f80b5 instalada conservando biblioteca. El teléfono vuelve a estar conectado.
-**Stream y nueva UI móvil aún pendientes de APK/validación física.**
+Android: SM-J701M, API 28/ARMv7. APK **3201c4b instalada** conservando datos.
+Con ece1375 se observaron PCM parcial, pausa/seek/reanudar, favoritos, mini-player,
+Atrás y recreación antes de fallar en horizontal. Los intentos 3201c4b conservaron
+el hash de la biblioteca normal: uno falló por timeout; otro por un toque de QA
+sobre contenido aún desplazándose. El driver ahora exige rectángulo estable y
+comprueba el guardado antes de continuar. **Faltan APK 8315fad y PASS físico del
+recorrido completo**, incluidos nombres, playlists y reapertura sin búsqueda.
+Las pruebas usan files/qa/<nombre> y restauran el perfil normal; no borran datos.
 
-Windows: builds/tests/CLI del nuevo doremi.exe aprobados en runner nativo.
-El smoke 10f80b5 no pudo abrir GUI/audio: OpenGL insuficiente y NoDevice.
-No hay prueba física Windows ni se atribuye el resultado Linux a esa plataforma.
+Windows: artifact 3201c4b descargado y checksums verificados; tests/build/CLI y
+Clippy nativos aprobados. GUI/audio smoke fallaron por OpenGL insuficiente y
+NoDevice. Sin prueba física Windows; no se atribuye a Windows el resultado Linux.
 
-Evidencia persistente fuera del árbol:
-/home/eirom/.local/share/doremi/product-qa/2026-11-04/.
-El corte musical está en progressive-chopin/; capturas de catálogo en
-hero-final-dark/ y hero-final-light-phone/. Se conservan los fallos.
+Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-04/
+y /home/eirom/.local/share/doremi/product-qa/2026-11-05/. Esta última incluye
+playlists-real-music-bounded/, playlists-final-desktop/, playlists-phone-{360,393,430}/,
+android-mobile-{ece1375,3201c4b}/ y windows-3201c4b/. Los fallos se conservan.
+No se repitieron las suites físicas extensas de formatos locales.
 
-## Pendiente y siguiente corte
+## Pendiente
 
-La selección reproducible es pequeña. Faltan catálogo musical amplio, artwork,
-playlists propias, historial completo, cuenta opcional, EQ/DSP/visualizadores,
-integración multimedia y segundo plano Android; el inventario del legado
-permanece en el roadmap. Audius sigue como candidato investigado, sin integrar;
-sus condiciones de caché/sesión y controles de acceso requieren adaptación.
-
-Se aplica la skill local doremi-mobile-ui: el player expandido al navegar y la
-barra de cinco botones grandes siguen pendientes. Siguiente composición:
-navegación compacta con iconos, mini-player de contenido activo y player dedicado,
-preservando desktop y las intenciones existentes. Primero se descargará/verificará
-la APK del stream y se probará en el dispositivo disponible.
+Cerrar CI/instalación/validación física del corte nuevo; ampliar el catálogo
+reproducible y artwork. Siguen pendientes historial completo, cuenta opcional
+compatible, EQ/DSP/visualizadores, integración multimedia y background Android.
+Audius sigue investigado, sin integrar; sus condiciones de caché/sesión y acceso
+requieren adaptación. No hay integración YouTube ni promesa de acceso universal.
+El inventario del legado y los gates completos permanecen en el roadmap.
