@@ -118,11 +118,12 @@ impl DoremiApp {
                             for (index, media) in rows.iter().enumerate() {
                                 let response =
                                     ui.add(egui::Button::new(&media.title).frame(false).wrap());
+                                self.record(
+                                    &format!("sidebar-select:{}", media.id.local()),
+                                    &response,
+                                );
                                 if response.clicked() {
-                                    self.model
-                                        .as_mut()
-                                        .unwrap()
-                                        .start_context(rows.clone(), index);
+                                    self.open_library_entry(&rows, index);
                                 }
                             }
                         });
@@ -266,40 +267,49 @@ impl DoremiApp {
             .unwrap_or(0);
         let mut position = model.queue.position_ms();
         let response = ui
-            .horizontal(|ui| {
-                ui.small(time(position));
-                let identity = egui::Id::new((
-                    "seek",
-                    model
-                        .queue
-                        .current()
-                        .map(|entry| (entry.id.as_u64(), &entry.media.id)),
-                ));
-                let width = (ui.available_width() - 52.0).max(24.0);
-                let response = ui
-                    .add_enabled_ui(model.real_audio() && duration > 0, |ui| {
-                        ui.scope_builder(
-                            egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
-                                ui.cursor().min,
-                                Vec2::new(width, 20.0),
-                            )),
-                            |ui| {
-                                ui.spacing_mut().slider_width = width;
-                                ui.spacing_mut().interact_size.y = 20.0;
-                                seek_slider(ui, identity, &mut position, duration)
-                            },
-                        )
-                        .inner
-                    })
-                    .inner;
-                ui.small(time(duration));
-                response
+            .scope(|ui| {
+                // The progress row is 20 pt high. Mobile's 48 pt minimum applies
+                // to buttons; inheriting it here clips the labels below the bar.
+                ui.spacing_mut().interact_size.y = 20.0;
+                ui.horizontal(|ui| {
+                    let elapsed = ui.small(time(position));
+                    let identity = egui::Id::new((
+                        "seek",
+                        model
+                            .queue
+                            .current()
+                            .map(|entry| (entry.id.as_u64(), &entry.media.id)),
+                    ));
+                    let width = (ui.available_width() - 52.0).max(24.0);
+                    let response = ui
+                        .add_enabled_ui(model.real_audio() && duration > 0, |ui| {
+                            ui.scope_builder(
+                                egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(
+                                    ui.cursor().min,
+                                    Vec2::new(width, 20.0),
+                                )),
+                                |ui| {
+                                    ui.spacing_mut().slider_width = width;
+                                    ui.spacing_mut().interact_size.y = 20.0;
+                                    seek_slider(ui, identity, &mut position, duration)
+                                },
+                            )
+                            .inner
+                        })
+                        .inner;
+                    let total = ui.small(time(duration));
+                    (response, elapsed, total)
+                })
+                .inner
             })
             .inner;
+        let (response, elapsed, total) = response;
         if response.changed() {
             model.command(Command::Seek(position));
         }
         self.record("seek", &response);
+        self.record("elapsed-time", &elapsed);
+        self.record("total-time", &total);
     }
 
     fn volume(&mut self, ui: &mut egui::Ui, palette: &Palette) {
@@ -412,7 +422,9 @@ impl DoremiApp {
                         .current()
                         .map(|entry| entry.media.title.as_str())
                         .unwrap_or("Ninguna canción seleccionada");
-                    ui.add(egui::Label::new(RichText::new(title).size(13.0)).truncate());
+                    let response =
+                        ui.add(egui::Label::new(RichText::new(title).size(13.0)).truncate());
+                    self.record("playing-title", &response);
                     ui.horizontal(|ui| {
                         self.transport_controls(ui, palette, true);
                         let response = theme::icon_button(
@@ -463,6 +475,33 @@ impl DoremiApp {
         );
     }
 
+    pub(super) fn open_library_entry(&mut self, rows: &[Media], index: usize) {
+        let Some(media) = rows.get(index) else {
+            return;
+        };
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if media.id.provider.as_str() == "musicbrainz" {
+            let model = self.model.as_mut().unwrap();
+            model.music.selected = true;
+            model.music.open(doremi_core::media::CatalogEntry {
+                media: media.clone(),
+                kind: doremi_core::media::EntityKind::Recording,
+                artists: vec![],
+            });
+            self.navigate(Page::Search);
+            return;
+        }
+        let playable: Vec<_> = rows
+            .iter()
+            .filter(|item| item.id.provider.as_str() != "musicbrainz")
+            .cloned()
+            .collect();
+        if let Some(index) = playable.iter().position(|item| item.id == media.id) {
+            self.model.as_mut().unwrap().start_context(playable, index);
+            self.navigate(Page::Player);
+        }
+    }
+
     pub(super) fn rows(&mut self, ui: &mut egui::Ui, rows: &[Media]) {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
@@ -480,6 +519,8 @@ impl DoremiApp {
                                 "Demostración · sin audio"
                             } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
                                 "Commons · tono CC0"
+                            } else if media.id.provider.as_str() == "musicbrainz" {
+                                "MusicBrainz · metadatos"
                             } else {
                                 "Audio local"
                             });
@@ -492,41 +533,11 @@ impl DoremiApp {
                             "Seleccionar",
                             118.0,
                         ) {
-                            #[cfg(any(
-                                target_os = "linux",
-                                target_os = "android",
-                                target_os = "windows"
-                            ))]
-                            if media.id.provider.as_str() == "musicbrainz" {
-                                let model = self.model.as_mut().unwrap();
-                                model.music.selected = true;
-                                model.music.open(doremi_core::media::CatalogEntry {
-                                    media: media.clone(),
-                                    kind: doremi_core::media::EntityKind::Recording,
-                                    artists: vec![],
-                                });
-                                self.navigate(Page::Search);
-                            } else {
-                                self.model
-                                    .as_mut()
-                                    .unwrap()
-                                    .start_context(rows.to_vec(), index);
-                                self.navigate(Page::Player);
-                            }
-                            #[cfg(not(any(
-                                target_os = "linux",
-                                target_os = "android",
-                                target_os = "windows"
-                            )))]
-                            {
-                                self.model
-                                    .as_mut()
-                                    .unwrap()
-                                    .start_context(rows.to_vec(), index);
-                                self.navigate(Page::Player);
-                            }
+                            self.open_library_entry(rows, index);
                         }
-                        if self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0) {
+                        if media.id.provider.as_str() != "musicbrainz"
+                            && self.button(ui, &format!("add:{}", media.id.local()), "+ Cola", 90.0)
+                        {
                             self.model
                                 .as_mut()
                                 .unwrap()

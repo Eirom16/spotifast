@@ -47,7 +47,7 @@ pub(super) struct HeroImages<'a> {
 }
 
 /// The larger of the hero's two cover sizes.
-const HERO_ART: f32 = 212.0;
+const HERO_ART: f32 = doremi_ui::collection::HERO_ART;
 
 /// The artwork widths a page header asks for on this display: its own
 /// cover, and the card's, which the page was likely opened from and so is
@@ -98,93 +98,67 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
         .images
         .thumbnail
         .and_then(|uri| app.softened_covers.texture(ui.ctx(), &art, uri));
-    ui.add_space(12.0);
-    let cover_size = if ui.available_width() > 720.0 {
-        HERO_ART
-    } else {
-        160.0
-    };
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 24.0;
-        // Clicking the cover shows it enlarged (#586).
-        let enlarged = hero.images.enlarged.filter(|_| !hero.liked);
-        let (rect, response) = ui.allocate_exact_size(
-            Vec2::splat(cover_size),
-            if enlarged.is_some() {
-                Sense::click()
-            } else {
-                Sense::hover()
-            },
-        );
-        if let Some(url) = enlarged {
-            let label = gettext(app.locale, "Enlarge cover");
-            response.widget_info(|| {
-                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_ref())
-            });
-            theme::focus_ring(ui, &response);
-            if response
-                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                .clicked()
-            {
-                app.actions.push(Action::ShowDialog(Dialog::CoverArt {
-                    url: url.to_string(),
-                    shown: hero.images.image.map(str::to_string),
-                    title: hero.title.to_string(),
-                }));
-            }
-        }
-        let radius = if hero.round { cover_size / 2.0 } else { 6.0 };
-        widgets::paint_shadow(ui, &palette, rect, radius);
-        if hero.liked {
-            super::sidebar::liked_cover(ui, rect, radius);
-        } else {
-            widgets::paint_cover_with_thumbnail(
-                ui,
-                &palette,
-                widgets::CoverSources {
-                    requested: hero.images.image,
-                    previous: hero.images.previous,
-                    softened: softened.as_ref(),
-                    thumbnail: hero.images.thumbnail,
-                    align_thumbnail: hero.images.align_thumbnail,
-                },
+    doremi_ui::collection::hero(
+        ui,
+        &palette,
+        doremi_ui::collection::Hero {
+            kind: hero.kind.as_ref(),
+            title: hero.title,
+            description: hero.description.as_deref(),
+            round: hero.round,
+            cover_clickable: hero.images.enlarged.is_some() && !hero.liked,
+        },
+        |ui, slot| match slot {
+            doremi_ui::collection::HeroSlot::Cover {
                 rect,
                 radius,
-                if hero.round { Icon::User } else { Icon::Music },
-                Some(app.backend.art()),
-            );
-        }
-        ui.vertical(|ui| {
-            let width = ui.available_width();
-            ui.set_width(width);
-            ui.spacing_mut().item_spacing.y = 6.0;
-            ui.add_space(cover_size * 0.08);
-            theme::text(ui, hero.kind.as_ref(), theme::medium(12.5), palette.text);
-            let mut size = if cover_size > 200.0 { 56.0 } else { 40.0 };
-            loop {
-                let galley = ui.painter().layout_no_wrap(
-                    hero.title.to_string(),
-                    theme::bold(size),
-                    palette.text,
-                );
-                if galley.size().x <= width || size <= 22.0 {
-                    break;
+                response,
+            } => {
+                // Clicking the cover shows it enlarged (#586).
+                let enlarged = hero.images.enlarged.filter(|_| !hero.liked);
+                if let Some(url) = enlarged {
+                    let label = gettext(app.locale, "Enlarge cover");
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.as_ref())
+                    });
+                    theme::focus_ring(ui, response);
+                    if response
+                        .clone()
+                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                        .clicked()
+                    {
+                        app.actions.push(Action::ShowDialog(Dialog::CoverArt {
+                            url: url.to_string(),
+                            shown: hero.images.image.map(str::to_string),
+                            title: hero.title.to_string(),
+                        }));
+                    }
                 }
-                size -= 6.0;
+                widgets::paint_shadow(ui, &palette, rect, radius);
+                if hero.liked {
+                    super::sidebar::liked_cover(ui, rect, radius);
+                } else {
+                    widgets::paint_cover_with_thumbnail(
+                        ui,
+                        &palette,
+                        widgets::CoverSources {
+                            requested: hero.images.image,
+                            previous: hero.images.previous,
+                            softened: softened.as_ref(),
+                            thumbnail: hero.images.thumbnail,
+                            align_thumbnail: hero.images.align_thumbnail,
+                        },
+                        rect,
+                        radius,
+                        if hero.round { Icon::User } else { Icon::Music },
+                        Some(app.backend.art()),
+                    );
+                }
             }
-            theme::text(ui, hero.title, theme::bold(size), palette.text);
-            if let Some(description) = &hero.description
-                && !description.is_empty()
-            {
-                theme::text(
-                    ui,
-                    description.as_str(),
-                    theme::regular(13.5),
-                    palette.secondary,
-                );
+            doremi_ui::collection::HeroSlot::Text { text, font, color } => {
+                theme::text(ui, text, font, color);
             }
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
+            doremi_ui::collection::HeroSlot::Byline => {
                 if let Some(avatar) = &hero.avatar {
                     let size = 18.0;
                     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), Sense::hover());
@@ -218,10 +192,9 @@ pub(super) fn hero(app: &mut App, ui: &mut egui::Ui, hero: Hero<'_>) {
                         }
                     }
                 }
-            });
-        });
-    });
-    ui.add_space(20.0);
+            }
+        },
+    );
 }
 
 pub struct Actions<'a> {

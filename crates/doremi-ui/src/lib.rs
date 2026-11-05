@@ -1,6 +1,8 @@
 //! Presentation primitives extracted from Spotifast's real theme and sidebar.
 //! Copyright (c) Carmine Paolino. MIT; see the repository LICENSE.
 //! No catalog, player, filesystem, processes, or platform services run while drawing.
+pub mod collection;
+
 use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, pos2, vec2};
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -430,7 +432,27 @@ pub fn icon_button(
     hover: Color32,
     tooltip: &str,
 ) -> Response {
-    let edge = size + ICON_BUTTON_PAD;
+    icon_button_sized(
+        ui,
+        icon,
+        [size, size + ICON_BUTTON_PAD],
+        color,
+        hover,
+        tooltip,
+    )
+}
+
+/// A larger pointer/touch target without enlarging the original glyph.
+pub fn icon_button_sized(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    dimensions: [f32; 2],
+    color: Color32,
+    hover: Color32,
+    tooltip: &str,
+) -> Response {
+    let [size, edge] = dimensions;
+    let edge = edge.max(size);
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
@@ -640,6 +662,28 @@ pub fn cover_placeholder(
     }
     let icon_size = (rect.width() * 0.42).clamp(12.0, 64.0);
     paint_icon(ui, fallback, rect, icon_size, palette.dim);
+}
+
+/// The original track row selection/hover treatment, shared by neutral lists.
+pub fn row_background(ui: &egui::Ui, palette: &Palette, rect: Rect, selected: bool, hovered: bool) {
+    let fill = if selected {
+        Some(
+            palette
+                .secondary
+                .gamma_multiply(if hovered { 0.30 } else { 0.20 }),
+        )
+    } else if hovered {
+        Some(
+            palette
+                .surface_hover
+                .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
+        )
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    }
 }
 
 use egui::Ui;

@@ -913,6 +913,13 @@ impl DoremiApp {
                 self.record("demo-examples", &response.header_response);
             }
             Page::Search => {
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                if self.model.as_ref().unwrap().music.selected
+                    && self.model.as_ref().unwrap().music.detail.is_some()
+                {
+                    self.music_results(ui);
+                    return;
+                }
                 ui.heading("Buscar");
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 {
@@ -1296,6 +1303,49 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    #[test]
+    fn opening_saved_metadata_preserves_playback_and_audio_contexts_skip_it() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/metadata-routing-test-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let demo = songs();
+        let metadata = Media {
+            id: MediaId::new(
+                ProviderId::new("musicbrainz").unwrap(),
+                "recording:00000000-0000-4000-8000-000000000001",
+            )
+            .unwrap(),
+            title: "Saved public metadata".into(),
+            duration_ms: None,
+        };
+        let rows = vec![demo[0].clone(), metadata.clone(), demo[1].clone()];
+        app.open_library_entry(&rows, 0);
+        let before = app.model.as_ref().unwrap().queue.checkpoint();
+        app.open_library_entry(&rows, 1);
+        let model = app.model.as_ref().unwrap();
+        assert_eq!(model.page, Page::Search);
+        assert_eq!(model.music.detail.as_ref().unwrap().media.id, metadata.id);
+        assert_eq!(model.queue.checkpoint(), before);
+        app.open_library_entry(&rows, 2);
+        let model = app.model.as_ref().unwrap();
+        assert_eq!(model.page, Page::Player);
+        assert_eq!(model.queue.current().unwrap().media.id, demo[1].id);
+        assert!(
+            !model
+                .queue
+                .context()
+                .iter()
+                .any(|entry| entry.media.id == metadata.id)
+        );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn a_held_seek_does_not_transfer_to_the_next_occurrence() {
         let ctx = egui::Context::default();
@@ -1565,6 +1615,9 @@ mod tests {
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
             for size in [
+                [360.0, 640.0],
+                [393.0, 852.0],
+                [430.0, 932.0],
                 [384.0, 614.0],
                 [384.0, 332.0],
                 [682.0, 336.0],
@@ -1630,6 +1683,9 @@ mod tests {
                             "player",
                             "stop",
                             "player-more",
+                            "elapsed-time",
+                            "total-time",
+                            "playing-title",
                         ]
                         .contains(&control.name.as_str())
                     })
@@ -1643,6 +1699,12 @@ mod tests {
                         "{} {:?} at {:?}",
                         left.name,
                         left.rect,
+                        size
+                    );
+                    assert!(
+                        left.rect[3] <= navigation[0].rect[1],
+                        "{} runs into navigation at {:?}",
+                        left.name,
                         size
                     );
                     for right in &transport[index + 1..] {

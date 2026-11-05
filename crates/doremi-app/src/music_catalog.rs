@@ -238,8 +238,17 @@ impl State {
         self.page = None;
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let mut disconnected = false;
         if let Some(worker) = &mut self.worker {
-            while let Ok((generation, result)) = worker.events.try_recv() {
+            loop {
+                let (generation, result) = match worker.events.try_recv() {
+                    Ok(completion) => completion,
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        disconnected = true;
+                        break;
+                    }
+                };
                 if generation == self.generation {
                     self.waiting = false;
                     match result {
@@ -256,6 +265,14 @@ impl State {
                         }
                     }
                 }
+            }
+        }
+        if disconnected {
+            self.worker = None;
+            if self.waiting {
+                self.pending = None;
+                self.waiting = false;
+                self.error = Some(ProviderError::Unavailable);
             }
         }
         let Some((request, due)) = &self.pending else {
@@ -320,8 +337,7 @@ impl DoremiApp {
             return;
         }
         if let Some(detail) = detail {
-            ui.heading(&detail.media.title);
-            self.music_entry(ui, &detail, false);
+            self.music_detail(ui, &detail);
         }
         let state = &self.model.as_ref().unwrap().music;
         if state.waiting {
@@ -354,8 +370,8 @@ impl DoremiApp {
             if page.items.is_empty() {
                 ui.label("No hay resultados para esta consulta.");
             }
-            for item in &page.items {
-                self.music_entry(ui, item, true);
+            for (index, item) in page.items.iter().enumerate() {
+                ui.push_id(index, |ui| self.music_row(ui, item));
             }
             ui.horizontal_wrapped(|ui| {
                 if page.offset > 0 && self.button(ui, "catalog-previous", "Página anterior", 160.0)
@@ -368,70 +384,282 @@ impl DoremiApp {
             });
         }
     }
-    fn music_entry(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry, open: bool) {
-        egui::Frame::group(ui.style()).show(ui, |ui| {
-            ui.set_width((ui.available_width() - 4.0).max(0.0));
-            ui.strong(&entry.media.title);
-            ui.label(match entry.kind {
-                EntityKind::Recording => "Grabación",
-                EntityKind::Artist => "Artista",
-                EntityKind::Release => "Álbum / edición",
-            });
-            for credit in &entry.artists {
-                let response = ui.link(&credit.name);
-                self.record(&format!("catalog-artist:{}", credit.id.local()), &response);
-                if response.clicked() {
-                    self.model.as_mut().unwrap().music.open(CatalogEntry {
-                        media: Media {
-                            id: credit.id.clone(),
-                            title: credit.name.clone(),
-                            duration_ms: None,
-                        },
-                        kind: EntityKind::Artist,
-                        artists: vec![],
-                    });
+    fn music_detail(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry) {
+        use doremi_ui::{
+            self as theme, Icon,
+            collection::{self, Hero, HeroSlot},
+        };
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        collection::hero(
+            ui,
+            &palette,
+            Hero {
+                kind: kind_label(entry.kind),
+                title: &entry.media.title,
+                description: Some("MusicBrainz · metadatos públicos"),
+                round: entry.kind == EntityKind::Artist,
+                cover_clickable: false,
+            },
+            |ui, slot| match slot {
+                HeroSlot::Cover { rect, radius, .. } => theme::cover_placeholder(
+                    ui,
+                    &palette,
+                    rect,
+                    radius,
+                    if entry.kind == EntityKind::Artist {
+                        Icon::User
+                    } else {
+                        Icon::Music
+                    },
+                ),
+                HeroSlot::Text { text, font, color } => {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(text).font(font).color(color)).wrap(),
+                    );
                 }
-            }
-            if let Some(ms) = entry.media.duration_ms {
-                ui.small(format!("{}:{:02}", ms / 60000, ms / 1000 % 60));
-            }
-            ui.small(format!("MusicBrainz · {}", entry.media.id.local()));
-            ui.weak("Metadatos públicos · esta fuente no proporciona audio ni carátula.");
-            ui.horizontal_wrapped(|ui| {
-                if open
-                    && self.button(
-                        ui,
-                        &format!("catalog-open:{}", entry.media.id.local()),
-                        "Explorar",
-                        120.0,
-                    )
-                {
-                    self.model.as_mut().unwrap().music.open(entry.clone());
-                }
-                if entry.kind == EntityKind::Recording {
-                    let saved = self
-                        .model
-                        .as_ref()
-                        .unwrap()
-                        .library
-                        .contains(&entry.media.id);
-                    if self.button(
-                        ui,
-                        &format!("catalog-save:{}", entry.media.id.local()),
-                        if saved { "Guardada" } else { "Guardar" },
-                        120.0,
-                    ) {
-                        self.model.as_mut().unwrap().save_media(entry.media.clone());
+                HeroSlot::Byline => {
+                    for (index, credit) in entry.artists.iter().enumerate() {
+                        if index > 0 {
+                            ui.weak("•");
+                        }
+                        let response = ui.link(&credit.name);
+                        self.record(&format!("catalog-artist:{}", credit.id.local()), &response);
+                        if response.clicked() {
+                            self.model.as_mut().unwrap().music.open(CatalogEntry {
+                                media: Media {
+                                    id: credit.id.clone(),
+                                    title: credit.name.clone(),
+                                    duration_ms: None,
+                                },
+                                kind: EntityKind::Artist,
+                                artists: vec![],
+                            });
+                        }
+                    }
+                    if let Some(ms) = entry.media.duration_ms {
+                        ui.weak(duration(ms));
                     }
                 }
-            });
-        });
+            },
+        );
+        ui.weak("Esta fuente no proporciona audio ni carátula.");
+        ui.small(format!("ID de MusicBrainz: {}", entry.media.id.local()));
+        if entry.kind == EntityKind::Recording {
+            let saved = self
+                .model
+                .as_ref()
+                .unwrap()
+                .library
+                .contains(&entry.media.id);
+            if self.button(
+                ui,
+                &format!("catalog-save:{}", entry.media.id.local()),
+                if saved { "Guardada" } else { "Guardar" },
+                120.0,
+            ) {
+                self.model.as_mut().unwrap().save_media(entry.media.clone());
+            }
+        } else {
+            ui.add_space(12.0);
+            ui.label(
+                egui::RichText::new(if entry.kind == EntityKind::Artist {
+                    "Grabaciones"
+                } else {
+                    "Canciones"
+                })
+                .font(theme::bold(20.0)),
+            );
+        }
     }
+
+    fn music_row(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry) {
+        use doremi_ui::{self as theme, Icon};
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), theme::ROW_HEIGHT),
+            egui::Sense::hover(),
+        );
+        let can_save = entry.kind == EntityKind::Recording;
+        let body = egui::Rect::from_min_max(
+            rect.min,
+            egui::pos2(
+                rect.right() - if can_save { TOUCH } else { 0.0 },
+                rect.bottom(),
+            ),
+        );
+        let response = ui.interact(
+            body,
+            ui.id().with(("catalog-row", entry.media.id.local())),
+            egui::Sense::click(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                true,
+                format!("Explorar {}", entry.media.title),
+            )
+        });
+        if response.gained_focus() {
+            response.scroll_to_me(None);
+        }
+        theme::row_background(
+            ui,
+            &palette,
+            rect,
+            false,
+            response.hovered() || response.has_focus(),
+        );
+        theme::focus_ring(ui, &response);
+        self.record(
+            &format!("catalog-open:{}", entry.media.id.local()),
+            &response,
+        );
+        if ui.is_rect_visible(rect) {
+            let cover = egui::Rect::from_center_size(
+                egui::pos2(body.left() + 28.0, body.center().y),
+                egui::Vec2::splat(40.0),
+            );
+            theme::cover_placeholder(
+                ui,
+                &palette,
+                cover,
+                if entry.kind == EntityKind::Artist {
+                    20.0
+                } else {
+                    4.0
+                },
+                if entry.kind == EntityKind::Artist {
+                    Icon::User
+                } else {
+                    Icon::Music
+                },
+            );
+            let text = egui::Rect::from_min_max(
+                egui::pos2(cover.right() + 12.0, rect.top() + 7.0),
+                egui::pos2(body.right() - 8.0, rect.bottom()),
+            );
+            let mut content = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(text)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            content.spacing_mut().item_spacing.y = 2.0;
+            content.add(
+                egui::Label::new(
+                    egui::RichText::new(&entry.media.title)
+                        .font(theme::medium(14.0))
+                        .color(palette.text),
+                )
+                .truncate(),
+            );
+            let artists = entry
+                .artists
+                .iter()
+                .map(|credit| credit.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let mut subtitle = if artists.is_empty() {
+                kind_label(entry.kind).to_owned()
+            } else {
+                artists
+            };
+            if let Some(ms) = entry.media.duration_ms {
+                subtitle.push_str(&format!(" · {}", duration(ms)));
+            }
+            content.add(
+                egui::Label::new(
+                    egui::RichText::new(subtitle)
+                        .font(theme::regular(12.5))
+                        .color(palette.secondary),
+                )
+                .truncate(),
+            );
+        }
+        if can_save {
+            let saved = self
+                .model
+                .as_ref()
+                .unwrap()
+                .library
+                .contains(&entry.media.id);
+            let target = egui::Rect::from_center_size(
+                egui::pos2(rect.right() - TOUCH / 2.0, rect.center().y),
+                egui::Vec2::splat(TOUCH),
+            );
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(target).layout(
+                egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+            ));
+            let save = theme::icon_button_sized(
+                &mut child,
+                if saved {
+                    Icon::HeartFilled
+                } else {
+                    Icon::Heart
+                },
+                [20.0, TOUCH],
+                if saved {
+                    palette.accent
+                } else {
+                    palette.secondary
+                },
+                palette.text,
+                if saved {
+                    "Quitar de la biblioteca"
+                } else {
+                    "Guardar en la biblioteca"
+                },
+            );
+            self.record(&format!("catalog-save:{}", entry.media.id.local()), &save);
+            if save.clicked() {
+                let model = self.model.as_mut().unwrap();
+                if saved {
+                    model.remove_saved(&entry.media.id);
+                } else {
+                    model.save_media(entry.media.clone());
+                }
+            }
+        }
+        if response.clicked() {
+            self.model.as_mut().unwrap().music.open(entry.clone());
+        }
+    }
+}
+
+fn kind_label(kind: EntityKind) -> &'static str {
+    match kind {
+        EntityKind::Recording => "Grabación",
+        EntityKind::Artist => "Artista",
+        EntityKind::Release => "Álbum / edición",
+    }
+}
+fn duration(ms: u64) -> String {
+    format!("{}:{:02}", ms / 60000, ms / 1000 % 60)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_worker_that_exits_after_accepting_a_query_reports_unavailable() {
+        let mut state = State::new();
+        state.search("Moonlight Sonata");
+        state.pending = None; // The command was accepted by the worker.
+        let (commands, _receive) = mpsc::channel(2);
+        let (send, events) = mpsc::channel(1);
+        state.worker = Some(Worker {
+            commands,
+            events,
+            generation: Arc::new(AtomicU64::new(state.generation)),
+        });
+        drop(send); // Includes a runtime initialization failure on that thread.
+        state.poll(&egui::Context::default());
+        assert!(!state.waiting);
+        assert_eq!(state.error, Some(ProviderError::Unavailable));
+        assert!(state.worker.is_none());
+        assert!(state.can_retry(), "Recovery must remain a user action");
+    }
     #[test]
     fn a_replaced_or_cancelled_query_cannot_publish_old_results() {
         let mut state = State::new();

@@ -7,6 +7,7 @@ Screenshots and snapshots go only to the supplied evidence directory.
 import argparse
 import ctypes
 import ctypes.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('binary', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--size', type=int, nargs=2, metavar=('WIDTH', 'HEIGHT'))
+    parser.add_argument('--light', action='store_true')
     args = parser.parse_args()
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -27,6 +30,8 @@ def main():
     env.pop('WAYLAND_SOCKET', None)
     env['DOREMI_DATA_DIR'] = str(profile)
     log = (output / 'runtime.log').open('w')
+    binary_sha256 = hashlib.sha256(args.binary.resolve().read_bytes()).hexdigest()
+    script_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     process = subprocess.Popen([str(args.binary.resolve())], env=env, stdout=log, stderr=subprocess.STDOUT)
 
     def xdo(*args):
@@ -52,6 +57,9 @@ def main():
     try:
         window = xdo('search', '--sync', '--onlyvisible', '--pid', process.pid).splitlines()[0]
         xdo('windowfocus', '--sync', window)
+        if args.size:
+            xdo('windowsize', '--sync', window, *args.size)
+            wait(lambda data: all(abs(actual-expected) < 1 for actual, expected in zip(data['viewport'], args.size)))
         wait(lambda data: bool(data['controls']))
 
         def tap(name):
@@ -61,7 +69,7 @@ def main():
                 control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect'];scale=data['pixels_per_point']
                 left,top,right,bottom=data['page_rect']
-                if name in fixed or top<=y1<y2<=bottom:
+                if name in fixed or name.startswith('sidebar-select:') or top<=y1<y2<=bottom:
                     assert 0<=x1<x2<=data['viewport'][0],f'Control not visible: {name}'
                     xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
                     time.sleep(.35)
@@ -106,6 +114,10 @@ def main():
             assert data['music_catalog']['error'] is None, data['music_catalog']['error']
             return data
 
+        if args.light:
+            tap('settings')
+            tap('light')
+            wait(lambda data: data['light'])
         tap('search')
         wait(lambda data: data['page'] == 'Search')
         assert state()['music_catalog']['selected']
@@ -152,7 +164,17 @@ def main():
         tap('library')
         wait(lambda data: data['page'] == 'Library')
         capture('saved-recording')
-        (output / 'report.json').write_text(json.dumps({'result':'pass', 'platform':'Linux X11', 'recording':recording, 'input':'real XTest mouse/keyboard', 'audio':False, 'provider':'MusicBrainz metadata', 'checks':['recordings', 'artist recordings', 'release tracks', 'Unicode', 'empty results', 'cancel rejects late results', 'save stable ID']}, indent=2))
+        before = state()['current']
+        tap('select:' + recording)
+        wait(lambda data: data['page'] == 'Search' and data['music_catalog']['detail'] == recording)
+        assert state()['current'] == before, 'Opening saved metadata changed playback'
+        if state()['viewport'][0] >= 760:
+            tap('home')
+            tap('sidebar-select:' + recording)
+            wait(lambda data: data['page'] == 'Search' and data['music_catalog']['detail'] == recording)
+            assert state()['current'] == before, 'Sidebar metadata changed playback'
+        capture('reopened-saved-recording')
+        (output / 'report.json').write_text(json.dumps({'result':'pass', 'platform':'Linux X11', 'binary_sha256':binary_sha256, 'qa_script_sha256':script_sha256, 'recording':recording, 'input':'real XTest mouse/keyboard', 'audio':False, 'provider':'MusicBrainz metadata', 'checks':['recordings', 'artist recordings', 'release tracks', 'Unicode', 'empty results', 'cancel rejects late results', 'save stable ID', 'reopen saved metadata without changing playback']}, indent=2))
     except Exception:
         if window:
             subprocess.run(['import', '-window', window, str(output/'failure.png')], timeout=15, check=False)

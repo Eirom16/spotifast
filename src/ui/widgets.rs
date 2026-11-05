@@ -1559,25 +1559,7 @@ fn track_row_contents(
     let pending = played_copy && app.play_pending(row.item.uri());
     let playing = is_current && app.believed_playing();
     let hovered = ui.is_enabled() && (ui.rect_contains_pointer(rect) || response.has_focus());
-    if row.picked {
-        // Keep the existing translucent selection, using a neutral palette
-        // color so selecting a song does not mark it as playing.
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(6),
-            palette
-                .secondary
-                .gamma_multiply(if hovered { 0.30 } else { 0.20 }),
-        );
-    } else if hovered {
-        ui.painter().rect_filled(
-            rect,
-            CornerRadius::same(6),
-            palette
-                .surface_hover
-                .gamma_multiply(if palette.dark { 0.7 } else { 1.0 }),
-        );
-    }
+    doremi_ui::row_background(ui, &palette, rect, row.picked, hovered);
     // The row highlight also shows keyboard focus. Do not add an outline
     // when a mouse click gives the row focus for arrow-key navigation.
     let cols = columns(width, &row);
