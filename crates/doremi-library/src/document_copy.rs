@@ -139,12 +139,18 @@ fn store_with_limit(
                 let _ = fs::remove_dir(&destination);
                 return Err(Error::Input);
             }
-            File::open(&destination)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Error::Input)?;
-            File::open(root)
-                .and_then(|f| f.sync_all())
-                .map_err(|_| Error::Input)?;
+            // Directory fsync via File::open is a Unix operation. Keep the
+            // file sync above on every platform, as in the metadata writer;
+            // Windows cannot open a directory with ordinary file options.
+            #[cfg(unix)]
+            {
+                File::open(&destination)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|_| Error::Input)?;
+                File::open(root)
+                    .and_then(|f| f.sync_all())
+                    .map_err(|_| Error::Input)?;
+            }
         }
         Err(_) => {
             if !fs::symlink_metadata(&destination)
