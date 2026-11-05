@@ -686,6 +686,149 @@ pub fn row_background(ui: &egui::Ui, palette: &Palette, rect: Rect, selected: bo
     }
 }
 
+/// Neutral composition of the original compact track-row treatment.
+pub struct ListRow<'a> {
+    pub title: &'a str,
+    pub subtitle: &'a str,
+    pub round: bool,
+    pub actions: usize,
+    pub action_label: &'a str,
+}
+pub struct ListRowResponse {
+    pub body: Response,
+    rect: Rect,
+    actions: usize,
+}
+impl ListRowResponse {
+    pub fn action_rect(&self, index: usize) -> Rect {
+        assert!(index < self.actions);
+        let width = self.actions as f32 * 48.0 + self.actions.saturating_sub(1) as f32 * 8.0;
+        Rect::from_center_size(
+            pos2(
+                self.rect.right() - width + 24.0 + index as f32 * 56.0,
+                self.rect.center().y,
+            ),
+            Vec2::splat(48.0),
+        )
+    }
+}
+pub fn list_row(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    id: egui::Id,
+    row: ListRow<'_>,
+) -> ListRowResponse {
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+    let reserved = row.actions as f32 * 48.0 + row.actions.saturating_sub(1) as f32 * 8.0;
+    let body_rect = Rect::from_min_max(rect.min, pos2(rect.right() - reserved, rect.bottom()));
+    let body = ui.interact(body_rect, id, Sense::click());
+    body.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Button,
+            true,
+            format!("{} {}", row.action_label, row.title),
+        )
+    });
+    if body.gained_focus() {
+        body.scroll_to_me(None);
+    }
+    row_background(ui, palette, rect, false, body.hovered() || body.has_focus());
+    focus_ring(ui, &body);
+    if ui.is_rect_visible(rect) {
+        let cover =
+            Rect::from_center_size(pos2(rect.left() + 28.0, rect.center().y), Vec2::splat(40.0));
+        cover_placeholder(
+            ui,
+            palette,
+            cover,
+            if row.round { 20.0 } else { 4.0 },
+            if row.round { Icon::User } else { Icon::Music },
+        );
+        let text = Rect::from_min_max(
+            pos2(cover.right() + 12.0, rect.top() + 7.0),
+            pos2(body_rect.right() - 8.0, rect.bottom()),
+        );
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(text)
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        child.spacing_mut().item_spacing.y = 2.0;
+        child.add(
+            egui::Label::new(
+                egui::RichText::new(row.title)
+                    .font(medium(14.0))
+                    .color(palette.text),
+            )
+            .truncate(),
+        );
+        child.add(
+            egui::Label::new(
+                egui::RichText::new(row.subtitle)
+                    .font(regular(12.5))
+                    .color(palette.secondary),
+            )
+            .truncate(),
+        );
+    }
+    ListRowResponse {
+        body,
+        rect,
+        actions: row.actions,
+    }
+}
+
+/// Touch navigation uses the same icon family and theme as the desktop sidebar.
+pub fn mobile_nav(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Icon,
+    label: &str,
+    selected: bool,
+    width: f32,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label)
+    });
+    let glyph = Rect::from_center_size(pos2(rect.center().x, rect.top() + 18.0), vec2(44.0, 28.0));
+    if selected || response.hovered() || response.has_focus() {
+        ui.painter().rect_filled(
+            glyph,
+            CornerRadius::same(14),
+            if selected {
+                palette.accent.gamma_multiply(0.18)
+            } else {
+                palette.surface_hover
+            },
+        );
+    }
+    paint_icon(
+        ui,
+        icon,
+        glyph,
+        22.0,
+        if selected {
+            palette.accent
+        } else {
+            palette.secondary
+        },
+    );
+    ui.painter().text(
+        pos2(rect.center().x, rect.top() + 44.0),
+        egui::Align2::CENTER_CENTER,
+        label,
+        medium(11.0),
+        if selected {
+            palette.text
+        } else {
+            palette.secondary
+        },
+    );
+    focus_ring(ui, &response);
+    response
+}
+
 use egui::Ui;
 
 pub enum SliderEvent {

@@ -30,7 +30,19 @@ struct Renderer {
 static APPLICATION: OnceLock<GlobalRef> = OnceLock::new();
 static VM: OnceLock<JavaVM> = OnceLock::new();
 static ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
+static DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 thread_local! { static RENDERER: RefCell<Option<Renderer>> = const { RefCell::new(None) }; }
+
+// Java queues this intent on the existing GL owner; the main thread never waits.
+#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeBack")]
+pub extern "system" fn native_back(_: JNIEnv<'_>, _: JClass<'_>) {
+    RENDERER.with(|cell| {
+        if let Some(renderer) = cell.borrow_mut().as_mut() {
+            renderer.app.go_back();
+            renderer.ctx.request_repaint();
+        }
+    });
+}
 
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeInit")]
 pub extern "system" fn native_init(
@@ -49,6 +61,12 @@ pub extern "system" fn native_init(
         return 0;
     };
     let directory = PathBuf::from(String::from(directory));
+    // A retained model/writer belongs to exactly one private data profile.
+    // Switching QA profiles requires an explicit process restart by the harness.
+    if DATA_DIRECTORY.get_or_init(|| directory.clone()) != &directory {
+        log::error!("Doremi data profile cannot change within the same process");
+        return 0;
+    }
     let Ok(vm) = env.get_java_vm() else {
         return 0;
     };
@@ -127,7 +145,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())

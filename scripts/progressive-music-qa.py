@@ -58,6 +58,8 @@ def pointer(name, fraction=.5):
     xdo('mousemove','--window',window,round((a+(c-a)*fraction)*scale),round((b+d)*scale/2))
 
 def tap(name):
+    if name.startswith(('add:','forget:')) and not any(item['name']==name for item in state()['controls']):
+        tap('row-more:'+name.split(':',1)[1])
     pointer(name)
     xdo('click',1)
     time.sleep(.3)
@@ -111,7 +113,7 @@ try:
     tap('query')
     xdo('key','--clearmodifiers','ctrl+a')
     xdo('type','--clearmodifiers','440')
-    wait(lambda s:any(c['name']=='add:21923157' for c in s['controls']))
+    wait(lambda s:any(c['name']=='select:21923157' for c in s['controls']))
     tap('add:21923157')
     tap('player')
     tap('next')

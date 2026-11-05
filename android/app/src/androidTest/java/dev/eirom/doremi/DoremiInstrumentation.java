@@ -33,11 +33,15 @@ public final class DoremiInstrumentation extends Instrumentation {
     private long settledInstance=-1;
     private int settledWidth=-1,settledHeight=-1;
     private String mode="full";
+    private String profile="instrumentation";
     private String documentFolder="";
     private String documentTitle="Original Café estéreo",documentFilename="Original Café estéreo.wav";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} if(arguments!=null && "mp3".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café MP3 estéreo";documentFilename=documentTitle+".mp3";} start(); }
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); profile=arguments==null?"instrumentation":arguments.getString("profile","instrumentation"); if(!profile.matches("[a-z0-9][a-z0-9-]{0,47}")) throw new IllegalArgumentException("Invalid QA profile"); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} if(arguments!=null && "mp3".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café MP3 estéreo";documentFilename=documentTitle+".mp3";} start(); }
+    private File profileDirectory() { return new File(getTargetContext().getFilesDir(),"qa/"+profile); }
     private JSONObject state() throws Exception {
-        return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),"qa-state.json").toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        File path=new File(profileDirectory(),"qa-state.json");
+        if(!path.isFile()) return new JSONObject();
+        return new JSONObject(new String(Files.readAllBytes(path.toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
     private JSONObject until(Predicate<JSONObject> predicate) throws Exception {
         return until(8000,"fresh Rust state",predicate);
@@ -108,12 +112,12 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(!copied.await(3,TimeUnit.SECONDS)) throw new AssertionError("Doremi capture timed out: "+name);
             lastStatus=status[0];
             if(lastStatus==PixelCopy.SUCCESS) {
-                try(FileOutputStream file=new FileOutputStream(new File(getTargetContext().getFilesDir(),name+".png"))) {image[0].compress(Bitmap.CompressFormat.PNG,100,file);}
+                try(FileOutputStream file=new FileOutputStream(new File(profileDirectory(),name+".png"))) {image[0].compress(Bitmap.CompressFormat.PNG,100,file);}
                 image[0].recycle();
                 JSONObject snapshot=state();
                 snapshot.put("qa_surface_origin",new JSONArray().put(surfaceOrigin[0]).put(surfaceOrigin[1]));
                 snapshot.put("qa_content_origin",new JSONArray().put(contentOrigin[0]).put(contentOrigin[1]));
-                Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),snapshot.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Files.write(new File(profileDirectory(),name+".json").toPath(),snapshot.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 return;
             }
             if(image[0]!=null) image[0].recycle();
@@ -129,6 +133,31 @@ public final class DoremiInstrumentation extends Instrumentation {
         lastPointer.put("delivered",delivered);
         if(!delivered) throw new AssertionError("Doremi pointer injection was rejected");
     }
+    private void openPlayer() throws Exception {
+        if(!"Player".equals(state().optString("page"))) tap("player");
+        until(s -> "Player".equals(s.optString("page")));
+    }
+    private boolean fixedControl(JSONObject data,String name) {
+        if(java.util.Arrays.asList("home","search","library","queue","settings").contains(name)) return true;
+        if(name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:")) return true;
+        if(data.optJSONArray("viewport").optDouble(0)>=760) return java.util.Arrays.asList("play","pause","next","previous","stop","repeat","shuffle","seek","volume","player").contains(name);
+        return !"Player".equals(data.optString("page")) && java.util.Arrays.asList("play","pause","next","player").contains(name);
+    }
+    private JSONArray visibleRect(String name) throws Exception {
+        JSONObject data=state();JSONArray rect=controlRect(data,name);
+        if(rect==null) throw new AssertionError("Missing control: "+name);
+        for(int attempt=0;!fixedControl(data,name) && attempt<30;attempt++) {
+            JSONArray page=data.optJSONArray("page_rect");
+            if(page==null || (rect.getDouble(1)>=page.getDouble(1) && rect.getDouble(3)<=page.getDouble(3))) break;
+            scrollPage(data,rect.getDouble(1)<page.getDouble(1));data=state();rect=controlRect(data,name);
+            if(rect==null) throw new AssertionError("Control disappeared while scrolling: "+name);
+        }
+        JSONArray page=data.optJSONArray("page_rect");
+        if(!fixedControl(data,name) && page!=null && (rect.getDouble(1)<page.getDouble(1) || rect.getDouble(3)>page.getDouble(3))) throw new AssertionError("Control did not scroll into its page: "+name);
+        JSONArray viewport=data.getJSONArray("viewport");
+        if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) || rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1)) throw new AssertionError("Control outside Doremi viewport: "+name);
+        return rect;
+    }
     private void tap(String name) throws Exception { tap(name,500); }
     private void tap(String name,long settle) throws Exception {
         lastAction="tap:"+name;
@@ -137,19 +166,12 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(rect==null && "Home".equals(data.optString("page")) && (name.startsWith("add:") || name.startsWith("select:") || name.startsWith("save:") || name.equals("local-audio") || name.equals("long-audio"))) {
             tap("demo-examples");data=state();rect=controlRect(data,name);
         }
-        if(rect==null) throw new AssertionError("Missing control: "+name);
-        boolean fixed=java.util.Arrays.asList("home","search","library","queue","settings","play","pause","next","previous","stop","repeat","shuffle","seek","volume","player","player-more").contains(name);
-        for(int attempt=0;!fixed && attempt<30;attempt++) {
-            JSONArray page=data.optJSONArray("page_rect");
-            if(page==null || (rect.getDouble(1)>=page.getDouble(1) && rect.getDouble(3)<=page.getDouble(3))) break;
-            scrollPage(data,rect.getDouble(1)<page.getDouble(1));data=state();rect=controlRect(data,name);
-            if(rect==null) throw new AssertionError("Control disappeared while scrolling: "+name);
+        if(rect==null && (name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:"))) {
+            tap("row-more:"+name.substring(name.indexOf(':')+1));data=state();rect=controlRect(data,name);
         }
-        JSONArray page=data.optJSONArray("page_rect");
-        if(!fixed && page!=null && (rect.getDouble(1)<page.getDouble(1) || rect.getDouble(3)>page.getDouble(3))) throw new AssertionError("Control did not scroll into its page: "+name);
+        if(rect==null && java.util.Arrays.asList("previous","stop","repeat","shuffle","seek","volume").contains(name) && data.optJSONArray("viewport").optDouble(0)<760) { openPlayer(); }
+        rect=visibleRect(name);data=state();
         lastAction="tap:"+name;
-        JSONArray viewport=data.getJSONArray("viewport");
-        if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) || rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1)) throw new AssertionError("Control outside Doremi viewport: "+name);
         final int[] origin=new int[2];
         runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
@@ -181,9 +203,8 @@ public final class DoremiInstrumentation extends Instrumentation {
     private void slide(String name,float fraction) throws Exception {
         lastAction="slide:"+name+":"+fraction;
         foreground();
-        JSONObject data=state(); JSONArray controls=data.getJSONArray("controls");JSONArray rect=null;
-        for(int i=0;i<controls.length();i++) {JSONObject c=controls.getJSONObject(i);if(name.equals(c.getString("name"))) rect=c.getJSONArray("rect");}
-        if(rect==null) throw new AssertionError("Missing slider: "+name);
+        if(controlRect(state(),name)==null) openPlayer();
+        JSONArray rect=visibleRect(name);JSONObject data=state();
         final int[] origin=new int[2];runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
         float scale=(float)data.getDouble("pixels_per_point");
         // The shared Spotifast slider maps the complete recorded track rect.
@@ -202,7 +223,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
         SystemClock.sleep(400);long before=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(600);
-        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
         until(s -> s.optLong("instance")!=before && s.optString("query").equals("Lluvia"));
         tap("cancel-search");until(s -> s.optString("query").isEmpty());tap("query");
         runOnMainSync(() -> {
@@ -228,7 +249,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         resources.put("volume",sample.optDouble("volume"));resources.put("playback",sample.optString("playback"));
         resources.put("current_provider",sample.optString("current_provider"));
         resources.put("condition",sample.optJSONObject("audio_metrics").optBoolean("streaming")?"native output from bounded local-file decode buffer; no acoustic capture":"native output from fully prepared PCM; no acoustic capture");
-        Files.write(new File(getTargetContext().getFilesDir(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),name+".json").toPath(),resources.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void audio() throws Exception {
         tap("home");tap("local-audio");
@@ -268,7 +289,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
         long beforeBackground=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
-        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
         until(s -> s.optLong("instance")!=beforeBackground && s.optString("playback").equals("Paused"));
         settledForeground();
         tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
@@ -352,7 +373,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("play");until(4000,"online explicit resume after recreation",s -> onlinePlaying(s,"21923157"));
         long beforeBackground=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
-        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
+        runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
         until(s -> s.optLong("instance")!=beforeBackground && "Paused".equals(s.optString("playback")) && s.optLong("current_occurrence")==occurrence);
         capture("qa-online-background");
         tap("stop");tap("search");tap("source-demo");tap("cancel-search");
@@ -366,7 +387,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         return count;
     }
     private JSONObject privateDocument(String name) throws Exception {
-        return new JSONObject(new String(Files.readAllBytes(new File(getTargetContext().getFilesDir(),name).toPath()),java.nio.charset.StandardCharsets.UTF_8));
+        return new JSONObject(new String(Files.readAllBytes(new File(profileDirectory(),name).toPath()),java.nio.charset.StandardCharsets.UTF_8));
     }
     private void savedLibrary() throws Exception {
         JSONObject before=state();String original=before.getJSONArray("saved_media").toString();
@@ -374,7 +395,8 @@ public final class DoremiInstrumentation extends Instrumentation {
         String legacy=privateDocument("preferences-v1.json").optJSONArray("library").toString();
         tap("search");tap("source-commons");tap("query");text("sine",true);hideKeyboard();
         until(12000,"Commons metadata for favorite",s -> "Ready".equals(s.optJSONObject("online").optString("search_status")));
-        tap("save:21923157");tap("save:21923157");
+        if(savedCount(state(),"21923157")==0) tap("save:21923157");
+        tap("save-again:21923157");
         until(s -> savedCount(s,"21923157")==1);
         if(state().getJSONArray("saved_media").length()!=before.getJSONArray("saved_media").length()+(existed?0:1)) throw new AssertionError("Duplicate favorite or unrelated library edit");
         tap("library");capture("qa-library-saved");
@@ -401,13 +423,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(!legacy.equals(privateDocument("preferences-v1.json").optJSONArray("library").toString())) throw new AssertionError("Legacy favorite archive was changed");
         JSONObject checks=new JSONObject();checks.put("duplicate_save_unique",true);checks.put("removed_owned_fixture",!existed);
         checks.put("preserved_existing_favorite",existed);checks.put("legacy_archive_preserved",true);checks.put("durable_schema",1);
-        Files.write(new File(getTargetContext().getFilesDir(),"qa-library-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-library-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         tap("home");
     }
     private void restoredLibrary() throws Exception {
         JSONObject initial=state();
         if(savedCount(initial,"21923157")!=1 || initial.optJSONObject("online").optBoolean("worker_initialized") || !initial.isNull("audio_metrics") || "Playing".equals(initial.optString("playback"))) throw new AssertionError("Library restore started IO/audio or lost qualified favorite");
-        tap("home");tap("player");slide("volume",0.08f);
+        tap("home");openPlayer();slide("volume",0.08f);
         until(s -> s.optDouble("volume",0)>0.02 && s.optDouble("volume",1)<0.15);
         tap("library");capture("qa-library-restored");
         if(!"demo".equals(state().optJSONObject("online").optString("search_source")) || !"Idle".equals(state().optJSONObject("online").optString("search_status"))) throw new AssertionError("Saved playback must not require search results");
@@ -525,7 +547,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             // A new device, or a preceding failed suite, can retain a simulated
             // demo selection. Its player intentionally has no audio sliders.
             tap("local-audio");until(data -> "Playing".equals(data.optString("playback")));tap("pause");
-        } else {tap("player");}
+        } else {openPlayer();}
         slide("volume",0.08f);tap("library");
         if(!restore) {
             documentControl("import-wav");ownPickerNode("Invalid.wav");
@@ -557,7 +579,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
             if(recreated==null) throw new AssertionError("Document recreation did not return an Activity");activity=recreated;
             until(data -> data.optLong("instance")!=instance && data.optLong("current_occurrence")==occurrence && "Paused".equals(data.optString("playback")));
-            capture("qa-document-recreated");tap("home");tap("player");tap("play");
+            capture("qa-document-recreated");tap("home");openPlayer();tap("play");
             until(data -> "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
         }
         tap("pause");until(data -> "Paused".equals(data.optString("playback")));
@@ -571,15 +593,15 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(!saved.equals(state().getJSONArray("saved_media").toString()) || state().getJSONObject("local_import").getInt("files")!=files) throw new AssertionError("Repeated document created another identity/favorite");
             tap("settings");tap("light");tap("library");capture("qa-document-library-light");
             tap("settings");tap("dark");tap("library");capture("qa-document-library-dark");
-            tap("home");tap("player");tap("pause");
+            tap("home");openPlayer();tap("pause");
         }
         JSONObject index=privateDocument("local-files-v1.json");
         for(int i=0;i<index.getJSONArray("files").length();i++) {
             String path=index.getJSONArray("files").getJSONObject(i).getString("path");
-            if(!new File(path).getCanonicalPath().startsWith(new File(getTargetContext().getFilesDir(),"imported-documents").getCanonicalPath()+"/")) throw new AssertionError("Document locator escaped private storage");
+            if(!new File(path).getCanonicalPath().startsWith(new File(profileDirectory(),"imported-documents").getCanonicalPath()+"/")) throw new AssertionError("Document locator escaped private storage");
         }
         JSONObject checks=new JSONObject();checks.put("result","pass");checks.put("restored_process",restore);checks.put("id",id);checks.put("acoustic_capture",false);checks.put("state",state());
-        Files.write(new File(getTargetContext().getFilesDir(),restore?"qa-document-restore-checks.json":"qa-document-import-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),restore?"qa-document-restore-checks.json":"qa-document-import-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private InputConnection connection(View view) {
         if(view.onCheckIsTextEditor()) { InputConnection result=view.onCreateInputConnection(new EditorInfo()); if(result!=null) return result; }
@@ -602,16 +624,65 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(500);
         if(!text.equals(state().getString("query"))) throw new AssertionError("A late frame undid text input");
     }
+    private void musicUi() throws Exception {
+        if(hasControl(state(),"player") || hasControl(state(),"play") || !state().isNull("current")) throw new AssertionError("Fresh browsing screen must not show an empty mini-player");
+        capture("qa-mobile-empty");
+        // Adjust application gain on the existing silent demo, before any audio.
+        tap("demo-examples");tap("select:dawn");tap("pause");slide("volume",0.08f);
+        until(s -> s.optDouble("volume")>0.02 && s.optDouble("volume")<0.15);
+        tap("search");tap("source-commons");tap("query");text("Chopin",true);
+        capture("qa-mobile-ime");hideKeyboard();
+        until(20000,"selected CC0 music result",s -> hasControl(s,"select:26896924") && "Ready".equals(s.optJSONObject("online").optString("search_status")));
+        tap("save:26896924");tap("save-again:26896924");
+        until(s -> savedCount(s,"26896924")==1);capture("qa-mobile-results-dark");
+        tap("settings");tap("light");tap("search");capture("qa-mobile-results-light");
+        tap("settings");tap("dark");tap("search");tap("select:26896924",0);
+        JSONObject first=until(25000,"progressive music delivered to native callback",s -> onlinePlaying(s,"26896924") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+        JSONObject metrics=first.getJSONObject("audio_metrics"),network=first.getJSONObject("online").getJSONObject("network");
+        if(!metrics.getBoolean("streaming") || metrics.getLong("pcm_bytes")>65536 || network.getLong("received_bytes")<=0 || network.getLong("received_bytes")>=network.getLong("total_bytes")) throw new AssertionError("Music must produce bounded PCM before the complete encoded file arrives");
+        Files.write(new File(profileDirectory(),"qa-music-first-pcm.json").toPath(),first.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        capture("qa-mobile-playing");tap("pause");until(s -> "Paused".equals(s.optString("playback")));SystemClock.sleep(300);
+        long paused=state().getLong("position_ms");SystemClock.sleep(400);
+        if(state().getLong("position_ms")!=paused) throw new AssertionError("Paused stream clock advanced");
+        slide("seek",0.5f);until(30000,"paused HTTP seek",s -> "Paused".equals(s.optString("playback")) && s.optLong("position_ms")>=118000 && s.optLong("position_ms")<=121000);
+        capture("qa-mobile-seek");tap("play");until(30000,"native resume after HTTP seek",s -> onlinePlaying(s,"26896924") && s.optLong("position_ms")>120000);tap("pause");
+        tap("search");until(s -> hasControl(s,"player") && hasControl(s,"play") && hasControl(s,"next"));capture("qa-mobile-mini");
+        tap("player");until(s -> "Player".equals(s.optString("page")));
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);until(s -> "Search".equals(s.optString("page")));
+        tap("library");capture("qa-mobile-library");tap("select:26896924");until(s -> "Player".equals(s.optString("page")));tap("stop");until(s -> "Paused".equals(s.optString("playback")));
+        sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);until(s -> "Library".equals(s.optString("page")));
+        tap("player");long instance=state().getLong("instance"),occurrence=state().getLong("current_occurrence");
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
+        Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
+        if(recreated==null) throw new AssertionError("Mobile player recreation did not return");activity=recreated;
+        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics"));
+        settledForeground();capture("qa-mobile-recreated");
+        int original=activity.getRequestedOrientation();
+        runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
+        until(s -> s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1));
+        visibleRect("volume");capture("qa-mobile-landscape");
+        runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+        until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));settledForeground();
+        tap("stop");until(s -> "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics") && s.optJSONObject("online").isNull("network"));
+        SystemClock.sleep(2300);String retired=state().getJSONObject("online").optString("retired_network");SystemClock.sleep(500);
+        if(!retired.equals(state().getJSONObject("online").optString("retired_network"))) throw new AssertionError("Cancelled music continued network work");
+        runOnMainSync(() -> activity.setRequestedOrientation(original));capture("qa-mobile-cancelled");
+        JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));
+        Files.write(new File(profileDirectory(),"qa-mobile-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
-            Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("music-ui".equals(mode)) {
+                musicUi();result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("document-import".equals(mode) || "document-restore".equals(mode)) {
                 documentImport("document-restore".equals(mode));
                 result.putString("stream","PASS: explicitly selected private audio / real bounded native output / controls / identity / original favorites preserved\n");
@@ -669,7 +740,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             try {
                 capture("qa-failure");
                 lastPointer.put("last_action",lastAction);
-                Files.write(new File(getTargetContext().getFilesDir(),"qa-input-delivery.json").toPath(),lastPointer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Files.write(new File(profileDirectory(),"qa-input-delivery.json").toPath(),lastPointer.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
             } catch(Throwable diagnosticError) { error.addSuppressed(diagnosticError); }
             result.putString("stream","FAIL: "+lastAction+"\n"+android.util.Log.getStackTraceString(error)+"\n");finish(Activity.RESULT_CANCELED,result); }
     }

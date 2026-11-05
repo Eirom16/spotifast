@@ -34,6 +34,9 @@ public final class MainActivity extends Activity {
     private static native void nativeText(String text,long generation);
     private static native void nativeDestroy();
     private static native void nativeFocus(boolean granted);
+    private static native void nativeBack();
+    private volatile boolean canGoBack=false;
+    private String nativeDirectory;
     private static native void nativeDocument(long generation,String uri);
     private static final int OPEN_WAV=403;
     private long fileRequest=0;
@@ -162,6 +165,17 @@ public final class MainActivity extends Activity {
             .setWillPauseWhenDucked(true).setAcceptsDelayedFocusGain(false)
             .setOnAudioFocusChangeListener(change -> { if(change!=AudioManager.AUDIOFOCUS_GAIN) loseFocus(); }).build();
         setVolumeControlStream(AudioManager.STREAM_MUSIC);
+        // Development-only private QA profiles; never redirect a normal profile
+        // or accept a caller-supplied filesystem path.
+        nativeDirectory=getFilesDir().getAbsolutePath();
+        String qaProfile=getIntent().getStringExtra("dev.eirom.doremi.qa.profile");
+        if(qaProfile!=null) {
+            boolean debug=(getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE)!=0;
+            if(!debug || !qaProfile.matches("[a-z0-9][a-z0-9-]{0,47}")) {
+                Toast.makeText(this,"Perfil de pruebas no válido",Toast.LENGTH_LONG).show();finish();return;
+            }
+            nativeDirectory=new java.io.File(getFilesDir(),"qa/"+qaProfile).getAbsolutePath();
+        }
         scale=getResources().getDisplayMetrics().density;
         FrameLayout root=new FrameLayout(this);
         root.setOnApplyWindowInsetsListener((view,insets) -> {
@@ -200,7 +214,17 @@ public final class MainActivity extends Activity {
         root.addView(input,new FrameLayout.LayoutParams(1,1));
         surface.setFocusableInTouchMode(true); surface.requestFocus();
         setContentView(root); root.requestApplyInsets();
+        if(Build.VERSION.SDK_INT>=33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+            android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,this::handleBack);
+
     }
+    private void handleBack() {
+        if(resumed && surface!=null && canGoBack) {
+            surface.queueEvent(MainActivity::nativeBack);
+            surface.requestRender();
+        } else { finish(); }
+    }
+    @Override public void onBackPressed() { handleBack(); }
     @Override protected void onResume() {
         super.onResume(); resumed=true;
         IntentFilter filter=new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY);
@@ -209,7 +233,9 @@ public final class MainActivity extends Activity {
         if(surface!=null) { surface.onResume(); surface.requestRender(); }
     }
     @Override protected void onPause() {
-        resumed=false; unregisterReceiver(noisy); loseFocus(); surface.removeCallbacks(repaint);
+        resumed=false; unregisterReceiver(noisy); loseFocus();
+        if(surface==null) { super.onPause(); return; }
+        surface.removeCallbacks(repaint);
         CountDownLatch stopped=new CountDownLatch(1);
         surface.queueEvent(() -> { try { nativeDestroy(); renderer.ready=false; } finally { stopped.countDown(); } });
         try { if(!stopped.await(2,TimeUnit.SECONDS)) android.util.Log.e("Doremi","GL shutdown timeout"); }
@@ -226,7 +252,7 @@ public final class MainActivity extends Activity {
             // a native renderer after it has just been destroyed for pausing.
             if(!resumed) return;
             if(!ready) {
-                ready=nativeInit(getFilesDir().getAbsolutePath(),getApplicationContext(),inputGeneration);
+                ready=nativeInit(nativeDirectory,getApplicationContext(),inputGeneration);
                 if(!ready) { runOnUiThread(() -> Toast.makeText(MainActivity.this,"No se pudo iniciar OpenGL de Doremi",Toast.LENGTH_LONG).show()); return; }
             }
             if(documentResultReady) {
@@ -239,6 +265,7 @@ public final class MainActivity extends Activity {
                 JSONObject data=new JSONObject(output);
                 long requestedDocument=data.optLong("file_request",0);
                 boolean ime=data.optBoolean("ime");
+                boolean back=data.optBoolean("can_go_back");
                 boolean needsFocus=data.optBoolean("needs_focus");
                 boolean loadingAudio=data.optBoolean("loading_audio");
                 String query=data.optString("query");
@@ -246,6 +273,7 @@ public final class MainActivity extends Activity {
                 long acknowledgedGeneration=data.optLong("input_generation",0);
                 runOnUiThread(() -> {
                     if(!resumed) return;
+                    canGoBack=back;
                     requestDocument(requestedDocument);
                     updateFocus(needsFocus,loadingAudio);
                     updatingInput=true;

@@ -44,12 +44,16 @@ def main():
             fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume','player-more'}
             for attempt in range(45):
                 data=state()
-                if not any(c['name']==name for c in data['controls']) and name in {'stop','player','volume'}:
-                    tap('player-more');data=state()
+                if data['viewport'][0]<760 and data['page']!='Player' and name in {'previous','stop','shuffle','repeat','seek','volume'}:
+                    tap('player');data=state()
+                if not any(c['name']==name for c in data['controls']) and name.startswith(('add:','forget:','save-again:')):
+                    tap('row-more:'+name.split(':',1)[1]);data=state()
                 control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
-                if name in fixed or top<=y1<y2<=bottom:
+                is_menu=name.startswith(('add:','forget:','save-again:'))
+                is_fixed=name in {'home','search','library','queue','settings'} or (data['viewport'][0]>=760 and name in fixed) or (data['page']!='Player' and name in {'play','pause','next','player'})
+                if is_menu or is_fixed or top<=y1<y2<=bottom:
                     assert 0<=x1<x2<=data['viewport'][0],(name,control['rect'])
                     xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
                     time.sleep(.4)
@@ -74,6 +78,7 @@ def main():
         tap('home');wait(lambda s:s['page']=='Home')
         tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
         tap('select:rain');wait(lambda s:s['current']=='rain');capture('player')
+        tap('library');capture('mini-player-light');tap('player')
         tap('next');wait(lambda s:s['current']=='dawn' and len(s['manual'])==1)
         tap('next');wait(lambda s:s['current']=='dawn' and len(s['manual'])==0)
         tap('next');wait(lambda s:s['current']=='cafe')
@@ -82,6 +87,8 @@ def main():
         tap('repeat');wait(lambda s:s['repeat']=='Context')
         tap('stop');wait(lambda s:s['playback']=='Paused')
         capture('queue-sequence')
+        tap('settings');tap('dark');tap('player');capture('full-player-dark')
+        tap('home');capture('mini-player-dark')
         (output/'report.json').write_text(json.dumps({'result':'pass','platform':'Linux X11','input':'XTest mouse and keyboard','audio':False,'sequence':'rain -> manual dawn -> manual dawn -> cafe'},indent=2))
         print(output)
     finally:

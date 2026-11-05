@@ -119,6 +119,7 @@ struct Model {
     catalog: Catalog,
     prefs: Preferences,
     page: Page,
+    player_return: Page,
     query: String,
     notice: String,
     revision: u64,
@@ -189,6 +190,7 @@ impl Model {
             .unwrap(),
             prefs,
             page: Page::Home,
+            player_return: Page::Home,
             query: String::new(),
             notice: "Demostración sin audio. No es reproducción real.".into(),
             revision: 0,
@@ -764,7 +766,7 @@ impl DoremiApp {
         let state = serde_json::json!({
             "input":ctx.input(|input|serde_json::json!({"focused":input.raw.focused,"primary_down":input.pointer.primary_down(),"position":input.pointer.hover_pos().map(|point|[point.x,point.y])})),
             "local_import":model.local_files.snapshot(),"notice":model.notice,
-            "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "query": model.query,
+            "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "player_return":model.player_return, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
             "current_provider":model.queue.current().map(|e|e.media.id.provider.as_str()),"online":model.source_diagnostics(),
@@ -1002,6 +1004,21 @@ impl DoremiApp {
                 if response.changed() {
                     self.model.as_mut().unwrap().search();
                 }
+                if ui.ctx().content_rect().width() < 760.0 {
+                    let height = ui.ctx().content_rect().height();
+                    let resized = ui.ctx().data_mut(|data| {
+                        let id = egui::Id::new("search-viewport-height");
+                        let previous = data.get_temp::<f32>(id);
+                        data.insert_temp(id, height);
+                        previous.is_some_and(|previous| height < previous)
+                    });
+                    if response.gained_focus()
+                        || response.changed()
+                        || (resized && response.has_focus())
+                    {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
+                }
                 if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
                     self.model.as_mut().unwrap().cancel_search();
                 }
@@ -1153,6 +1170,12 @@ impl DoremiApp {
                 });
             }
             Page::Player => {
+                if ui.ctx().content_rect().width() < 760.0 {
+                    let prefs = &self.model.as_ref().unwrap().prefs;
+                    let palette = doremi_ui::palette(prefs.light, prefs.green);
+                    self.mobile_player(ui, &palette);
+                    return;
+                }
                 let model = self.model.as_ref().unwrap();
                 let title = model
                     .queue
@@ -1317,6 +1340,124 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn mobile_player_is_conditional_and_keeps_full_controls_reachable() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        fn render(app: &mut DoremiApp, ctx: &egui::Context, size: [f32; 2]) {
+            for _ in 0..3 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
+                        ..Default::default()
+                    },
+                    |ui| app.draw(ui),
+                );
+                output.textures_delta.clear();
+            }
+        }
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/mobile-player-layout-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for light in [false, true] {
+            for size in [[360.0, 640.0], [393.0, 852.0], [430.0, 932.0]] {
+                let model = app.model.as_mut().unwrap();
+                model.queue = Queue::new(SessionId(90));
+                model.page = Page::Home;
+                model.prefs.light = light;
+                render(&mut app, &ctx, size);
+                assert!(
+                    !app.controls
+                        .iter()
+                        .any(|control| ["play", "pause", "player", "seek"]
+                            .contains(&control.name.as_str())),
+                    "Empty browsing screen has a fake player"
+                );
+                let empty_height = app.page_rect[3] - app.page_rect[1];
+                let mut media = songs()[0].clone();
+                media.title="Una canción con un título largo, con acentos y créditos de una interpretación que debe seguir dejando espacio a todos los controles".into();
+                app.model.as_mut().unwrap().start_context(vec![media], 0);
+                app.model.as_mut().unwrap().command(Command::Pause);
+                render(&mut app, &ctx, size);
+                assert!(
+                    (empty_height - (app.page_rect[3] - app.page_rect[1]) - 72.0).abs() < 1.0,
+                    "Mini-player reserves the wrong height"
+                );
+                for name in ["player", "play", "next"] {
+                    let control = app
+                        .controls
+                        .iter()
+                        .find(|control| control.name == name)
+                        .unwrap();
+                    assert!(
+                        control.rect[2] - control.rect[0] >= TOUCH
+                            && control.rect[3] - control.rect[1] >= TOUCH
+                    );
+                }
+                app.navigate(Page::Library);
+                app.navigate(Page::Player);
+                render(&mut app, &ctx, size);
+                let names = [
+                    "play",
+                    "previous",
+                    "next",
+                    "shuffle",
+                    "repeat",
+                    "seek",
+                    "volume",
+                    "stop",
+                    "player-back",
+                ];
+                let controls: Vec<_> = names
+                    .iter()
+                    .map(|name| {
+                        app.controls
+                            .iter()
+                            .find(|control| control.name == *name)
+                            .unwrap()
+                    })
+                    .collect();
+                for (index, left) in controls.iter().enumerate() {
+                    assert!(
+                        left.rect[0] >= app.page_rect[0]
+                            && left.rect[2] <= app.page_rect[2]
+                            && left.rect[1] >= app.page_rect[1]
+                            && left.rect[3] <= app.page_rect[3],
+                        "{} {:?} outside page {:?} at {:?}",
+                        left.name,
+                        left.rect,
+                        app.page_rect,
+                        size
+                    );
+                    assert!(left.rect[3] - left.rect[1] >= TOUCH);
+                    for right in &controls[index + 1..] {
+                        assert!(
+                            left.rect[2] <= right.rect[0]
+                                || right.rect[2] <= left.rect[0]
+                                || left.rect[3] <= right.rect[1]
+                                || right.rect[3] <= left.rect[1],
+                            "{} overlaps {}",
+                            left.name,
+                            right.name
+                        );
+                    }
+                }
+                assert!(
+                    !app.controls.iter().any(|control| control.name == "player"),
+                    "Full player duplicates the mini-player"
+                );
+                let checkpoint = app.model.as_ref().unwrap().queue.checkpoint();
+                app.go_back();
+                assert_eq!(app.model.as_ref().unwrap().page, Page::Library);
+                assert_eq!(app.model.as_ref().unwrap().queue.checkpoint(), checkpoint);
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     #[test]
     fn opening_saved_metadata_preserves_playback_and_audio_contexts_skip_it() {
@@ -1539,6 +1680,8 @@ mod tests {
         let ctx = egui::Context::default();
         DoremiApp::shutdown();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.model.as_mut().unwrap().start_context(songs(), 0);
+        app.model.as_mut().unwrap().command(Command::Pause);
         app.model.as_mut().unwrap().page = Page::Home;
         let input = || egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
@@ -1626,6 +1769,9 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-layout-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.model.as_mut().unwrap().start_context(songs(), 0);
+        app.model.as_mut().unwrap().command(Command::Pause);
+        app.model.as_mut().unwrap().page = Page::Home;
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
             for size in [

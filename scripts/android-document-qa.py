@@ -30,7 +30,8 @@ def main():
     parser.add_argument("--format",choices=("wav","flac","mp3"),default="wav")
     parser.add_argument("--attempt",default="",help="New evidence suffix after a diagnosed terminal failure")
     args=parser.parse_args()
-    apk=runpy.run_path(str(ROOT/"scripts/android-qa.py"))["verify_payload"](args.artifact,args.commit)
+    verifier=runpy.run_path(str(ROOT/"scripts/android-qa.py"))
+    apk=verifier["verify_payload"](args.artifact,args.commit)
     assert re.fullmatch(r"[a-z0-9-]{0,32}",args.attempt)
     out=ROOT/"target/android-qa"/args.commit[:12]/("documents"+("-"+args.format if args.format!="wav" else "")+("-"+args.attempt if args.attempt else ""))
     out.mkdir(parents=True,exist_ok=False)
@@ -82,7 +83,7 @@ def main():
         adb("shell","am","force-stop",PACKAGE)
         log=adb("shell","am","instrument","-w","-e","mode",mode,"-e","documentFolder",folder,"-e","documentFormat",args.format,f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
         (evidence/"instrumentation.log").write_bytes(log)
-        latest=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa-state.json"))
+        latest=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa/instrumentation/qa-state.json"))
         (evidence/"latest-state.json").write_text(json.dumps(latest,indent=2)+"\n")
         own_log=adb("logcat","-d",f"--pid={int(latest['pid'])}","-t","1000").decode(errors="replace")
         (evidence/"own-process.log").write_text(own_log)
@@ -90,27 +91,28 @@ def main():
         assert not re.search(r"FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR|shutdown.*timed out",own_log,re.IGNORECASE)
         for name in captures:
             for suffix in ("json","png"):
-                data=adb("exec-out","run-as",PACKAGE,"cat",f"files/{name}.{suffix}")
+                data=adb("exec-out","run-as",PACKAGE,"cat",f"files/qa/instrumentation/{name}.{suffix}")
                 if suffix=="png":assert data.startswith(b"\x89PNG\r\n\x1a\n")
                 else:assert json.loads(data)["pid"]==latest["pid"]
                 (evidence/f"{name}.{suffix}").write_bytes(data)
         check_name="qa-document-import-checks.json" if mode=="document-import" else "qa-document-restore-checks.json"
-        checks=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/"+check_name))
+        checks=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa/instrumentation/"+check_name))
         assert checks["result"]=="pass"
         pids.append(latest["pid"])
         original_intact()
         return checks
-    imported=run("document-import",("qa-document-invalid","qa-document-playing","qa-document-library-light","qa-document-library-dark","qa-document-recreated"))
-    resources=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa-document-resources.json"))
-    assert resources["current_provider"]=="local-files" and resources["audio_metrics"]["nonzero_samples"]>0
-    (out/"document-resources.json").write_text(json.dumps(resources,indent=2)+"\n")
-    restored=run("document-restore",("qa-document-restored","qa-document-restored-audio"))
-    assert pids[0]!=pids[1] and imported["id"]==restored["id"]
-    index=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/local-files-v1.json"))
-    path=next(item["path"] for item in index["files"] if item["id"]==imported["id"])
-    assert re.fullmatch(r"/data/(?:user/0|data)/dev\.eirom\.doremi\.dev/files/imported-documents/[0-9a-f]{64}/source\.wav",path)
-    assert adb("exec-out","run-as",PACKAGE,"sha256sum",path).decode().split()[0]==expected_digest
-    (out/"summary.json").write_text(json.dumps(dict(result="pass",source_commit=args.commit,physical_device=True,format=args.format,device=device,captures=7,fresh_process=True,original_preserved=True,private_copy_sha256=expected_digest,resources=resources,imported=imported,restored=restored,acoustic_capture=False),indent=2)+"\n")
-    print(out)
+    with verifier["qa_session"]("instrumentation"):
+        imported=run("document-import",("qa-document-invalid","qa-document-playing","qa-document-library-light","qa-document-library-dark","qa-document-recreated"))
+        resources=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa/instrumentation/qa-document-resources.json"))
+        assert resources["current_provider"]=="local-files" and resources["audio_metrics"]["nonzero_samples"]>0
+        (out/"document-resources.json").write_text(json.dumps(resources,indent=2)+"\n")
+        restored=run("document-restore",("qa-document-restored","qa-document-restored-audio"))
+        assert pids[0]!=pids[1] and imported["id"]==restored["id"]
+        index=json.loads(adb("exec-out","run-as",PACKAGE,"cat","files/qa/instrumentation/local-files-v1.json"))
+        path=next(item["path"] for item in index["files"] if item["id"]==imported["id"])
+        assert re.fullmatch(r"/data/(?:user/0|data)/dev\.eirom\.doremi\.dev/files/qa/instrumentation/imported-documents/[0-9a-f]{64}/source\.wav",path)
+        assert adb("exec-out","run-as",PACKAGE,"sha256sum",path).decode().split()[0]==expected_digest
+        (out/"summary.json").write_text(json.dumps(dict(result="pass",source_commit=args.commit,physical_device=True,format=args.format,device=device,captures=7,fresh_process=True,original_preserved=True,private_copy_sha256=expected_digest,resources=resources,imported=imported,restored=restored,acoustic_capture=False),indent=2)+"\n")
+        print(out)
 
 if __name__=="__main__":main()

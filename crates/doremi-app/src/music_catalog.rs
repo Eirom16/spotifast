@@ -477,106 +477,37 @@ impl DoremiApp {
         use doremi_ui::{self as theme, Icon};
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        let (rect, _) = ui.allocate_exact_size(
-            egui::vec2(ui.available_width(), theme::ROW_HEIGHT),
-            egui::Sense::hover(),
-        );
         let can_save = entry.kind == EntityKind::Recording;
-        let body = egui::Rect::from_min_max(
-            rect.min,
-            egui::pos2(
-                rect.right() - if can_save { TOUCH } else { 0.0 },
-                rect.bottom(),
-            ),
-        );
-        let response = ui.interact(
-            body,
-            ui.id().with(("catalog-row", entry.media.id.local())),
-            egui::Sense::click(),
-        );
-        response.widget_info(|| {
-            egui::WidgetInfo::labeled(
-                egui::WidgetType::Button,
-                true,
-                format!("Explorar {}", entry.media.title),
-            )
-        });
-        if response.gained_focus() {
-            response.scroll_to_me(None);
+        let artists = entry
+            .artists
+            .iter()
+            .map(|credit| credit.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let mut subtitle = if artists.is_empty() {
+            kind_label(entry.kind).to_owned()
+        } else {
+            artists
+        };
+        if let Some(ms) = entry.media.duration_ms {
+            subtitle.push_str(&format!(" · {}", duration(ms)));
         }
-        theme::row_background(
+        let row = theme::list_row(
             ui,
             &palette,
-            rect,
-            false,
-            response.hovered() || response.has_focus(),
+            ui.id().with(("catalog-row", entry.media.id.local())),
+            theme::ListRow {
+                title: &entry.media.title,
+                subtitle: &subtitle,
+                round: entry.kind == EntityKind::Artist,
+                actions: usize::from(can_save),
+                action_label: "Explorar",
+            },
         );
-        theme::focus_ring(ui, &response);
         self.record(
             &format!("catalog-open:{}", entry.media.id.local()),
-            &response,
+            &row.body,
         );
-        if ui.is_rect_visible(rect) {
-            let cover = egui::Rect::from_center_size(
-                egui::pos2(body.left() + 28.0, body.center().y),
-                egui::Vec2::splat(40.0),
-            );
-            theme::cover_placeholder(
-                ui,
-                &palette,
-                cover,
-                if entry.kind == EntityKind::Artist {
-                    20.0
-                } else {
-                    4.0
-                },
-                if entry.kind == EntityKind::Artist {
-                    Icon::User
-                } else {
-                    Icon::Music
-                },
-            );
-            let text = egui::Rect::from_min_max(
-                egui::pos2(cover.right() + 12.0, rect.top() + 7.0),
-                egui::pos2(body.right() - 8.0, rect.bottom()),
-            );
-            let mut content = ui.new_child(
-                egui::UiBuilder::new()
-                    .max_rect(text)
-                    .layout(egui::Layout::top_down(egui::Align::Min)),
-            );
-            content.spacing_mut().item_spacing.y = 2.0;
-            content.add(
-                egui::Label::new(
-                    egui::RichText::new(&entry.media.title)
-                        .font(theme::medium(14.0))
-                        .color(palette.text),
-                )
-                .truncate(),
-            );
-            let artists = entry
-                .artists
-                .iter()
-                .map(|credit| credit.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let mut subtitle = if artists.is_empty() {
-                kind_label(entry.kind).to_owned()
-            } else {
-                artists
-            };
-            if let Some(ms) = entry.media.duration_ms {
-                subtitle.push_str(&format!(" · {}", duration(ms)));
-            }
-            content.add(
-                egui::Label::new(
-                    egui::RichText::new(subtitle)
-                        .font(theme::regular(12.5))
-                        .color(palette.secondary),
-                )
-                .truncate(),
-            );
-        }
         if can_save {
             let saved = self
                 .model
@@ -584,10 +515,7 @@ impl DoremiApp {
                 .unwrap()
                 .library
                 .contains(&entry.media.id);
-            let target = egui::Rect::from_center_size(
-                egui::pos2(rect.right() - TOUCH / 2.0, rect.center().y),
-                egui::Vec2::splat(TOUCH),
-            );
+            let target = row.action_rect(0);
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(target).layout(
                 egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
             ));
@@ -621,7 +549,7 @@ impl DoremiApp {
                 }
             }
         }
-        if response.clicked() {
+        if row.body.clicked() {
             self.model.as_mut().unwrap().music.open(entry.clone());
         }
     }
