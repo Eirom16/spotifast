@@ -124,7 +124,7 @@ try:
     capture('previous-music')
     tap('stop')
     wait(lambda s:s['playback']=='Paused' and s['audio_metrics'] is None and s['online']['network'] is None)
-    time.sleep(2.2)
+    time.sleep(state()['online']['request_timeout_ms']/1000+.3)
     retired = state()['online']['retired_network']
     assert retired is not None
     time.sleep(.4)

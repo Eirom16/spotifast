@@ -665,7 +665,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
         until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));settledForeground();
         tap("stop");until(s -> "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics") && s.optJSONObject("online").isNull("network"));
-        SystemClock.sleep(2300);String retired=state().getJSONObject("online").optString("retired_network");SystemClock.sleep(500);
+        SystemClock.sleep(state().getJSONObject("online").optLong("request_timeout_ms",2000)+300);String retired=state().getJSONObject("online").optString("retired_network");SystemClock.sleep(500);
         if(!retired.equals(state().getJSONObject("online").optString("retired_network"))) throw new AssertionError("Cancelled music continued network work");
         runOnMainSync(() -> activity.setRequestedOrientation(original));capture("qa-mobile-cancelled");
         JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));

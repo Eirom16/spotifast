@@ -29,6 +29,8 @@ pub const TITLE: &str = "Chopin · Nocturno op. 9 n.º 2 — Membeth";
 pub const FRAMES: u64 = 10_562_768;
 pub const RATE: u32 = 44_100;
 pub const CHUNK: usize = 131_072;
+/// Total per-range IO budget, including connect/TLS and a bounded body.
+pub const REQUEST_TIMEOUT_MS: u64 = 6_000;
 static CLIENT: OnceLock<Result<Client, ProviderError>> = OnceLock::new();
 static LAST_REQUEST: Mutex<Option<Instant>> = Mutex::new(None);
 static COOLDOWN: Mutex<Option<Instant>> = Mutex::new(None);
@@ -144,8 +146,8 @@ impl Reader {
             .get_or_init(|| {
                 Client::builder()
                     .user_agent(http::AGENT)
-                    .connect_timeout(Duration::from_secs(1))
-                    .timeout(Duration::from_secs(2))
+                    .connect_timeout(Duration::from_secs(3))
+                    .timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
                     .redirect(Policy::none())
                     .pool_max_idle_per_host(1)
                     .pool_idle_timeout(Duration::from_secs(15))
@@ -260,6 +262,10 @@ impl Reader {
         if (self.cancelled)() {
             return Err(io::ErrorKind::ConnectionAborted.into());
         }
+        if Instant::now() >= self.expires {
+            self.metrics.failure.store(9, Ordering::Release);
+            return Err(io::Error::other("Audio lease expired during IO"));
+        }
         if bytes.len() as u64 != end - at + 1
             || format!("{:x}", Sha1::digest(&bytes)) != self.hashes[at as usize / CHUNK]
         {
@@ -317,6 +323,14 @@ mod tests {
     use super::*;
     use std::{io::Write, net::TcpListener, thread};
     fn reader(status: u16, range: &str, tamper: bool) -> (Reader, thread::JoinHandle<()>) {
+        delayed_reader(status, range, tamper, Duration::ZERO)
+    }
+    fn delayed_reader(
+        status: u16,
+        range: &str,
+        tamper: bool,
+        delay: Duration,
+    ) -> (Reader, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let uri = format!("http://{}/owned.ogg", listener.local_addr().unwrap());
         let range = range.to_owned();
@@ -335,6 +349,7 @@ mod tests {
                 .unwrap();
             let mut request = [0; 4096];
             let _ = socket.read(&mut request);
+            thread::sleep(delay);
             let headers = format!(
                 "HTTP/1.1 {status} Test\r\nContent-Length: {CHUNK}\r\nContent-Range: {range}\r\nConnection: close\r\n\r\n"
             );
@@ -360,6 +375,56 @@ mod tests {
             },
             worker,
         )
+    }
+    #[test]
+    fn slow_authorized_response_fits_the_native_budget_and_a_deadline_latches_without_retry() {
+        let (mut source, server) = delayed_reader(
+            206,
+            "bytes 0-131071/4260399",
+            false,
+            Duration::from_millis(2200),
+        );
+        source.client = Client::builder()
+            .timeout(Duration::from_millis(REQUEST_TIMEOUT_MS))
+            .build()
+            .unwrap();
+        let mut target = [0; 32];
+        assert_eq!(source.read(&mut target).unwrap(), 32);
+        assert_eq!(target, [42; 32]);
+        server.join().unwrap();
+        let (mut source, server) = delayed_reader(
+            206,
+            "bytes 0-131071/4260399",
+            false,
+            Duration::from_millis(250),
+        );
+        source.client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        assert!(source.read(&mut target).is_err());
+        assert_eq!(source.metrics.failure.load(Ordering::Acquire), 1);
+        assert!(source.read(&mut target).is_err());
+        assert_eq!(source.metrics.requests.load(Ordering::Acquire), 1);
+        assert_eq!(source.metrics.bytes.load(Ordering::Acquire), 0);
+        server.join().unwrap();
+    }
+    #[test]
+    fn a_lease_expiring_during_a_response_cannot_publish_audio() {
+        let (mut source, server) = delayed_reader(
+            206,
+            "bytes 0-131071/4260399",
+            false,
+            Duration::from_millis(250),
+        );
+        source.expires = Instant::now() + Duration::from_millis(100);
+        let mut target = [0; 32];
+        assert!(source.read(&mut target).is_err());
+        assert_eq!(target, [0; 32]);
+        assert_eq!(source.metrics.failure.load(Ordering::Acquire), 9);
+        assert!(source.read(&mut target).is_err());
+        assert_eq!(source.metrics.requests.load(Ordering::Acquire), 1);
+        server.join().unwrap();
     }
     #[test]
     fn ranges_are_verified_before_any_byte_reaches_the_decoder() {

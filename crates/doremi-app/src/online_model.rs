@@ -61,7 +61,7 @@ impl State {
             .unwrap_or("idle")
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":doremi_commons::progressive::SIZE,"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
+        serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":doremi_commons::progressive::SIZE,"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
     }
     pub fn feedback(&self, status: Status) -> Option<(bool, String)> {
         if !self.selected {
