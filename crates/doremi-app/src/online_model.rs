@@ -61,7 +61,7 @@ impl State {
             .unwrap_or("idle")
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":doremi_commons::progressive::SIZE,"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
+        serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":metrics.total_bytes.load(std::sync::atomic::Ordering::Acquire),"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
     }
     pub fn feedback(&self, status: Status) -> Option<(bool, String)> {
         if !self.selected {
@@ -77,9 +77,7 @@ impl State {
     }
 }
 pub(super) fn candidate(id: &MediaId) -> bool {
-    id.provider.as_str() == doremi_commons::PROVIDER
-        && (doremi_commons::audited(id.local()).is_some()
-            || doremi_commons::progressive::candidate(id))
+    doremi_commons::candidate(id)
 }
 impl Model {
     // Keep the owner/worker across Android Activity recreation, but fence all
@@ -319,36 +317,36 @@ impl Model {
                     }
                     let load = self.online.load.take().unwrap();
                     match result {
-                        Ok(Prepared::Stream(resource)) => {
+                        Ok(Prepared::Stream(stream)) => {
+                            let (resource, grant) = *stream;
                             let metrics = Arc::new(doremi_commons::progressive::Metrics::default());
                             self.online.network = Some((request, metrics.clone()));
                             let origin = self.online.origin;
                             let factory: doremi_player::StreamFactory = Box::new(move |cancel| {
                                 let now = Tick(origin.elapsed().as_millis() as u64);
-                                let reader = doremi_commons::progressive::Reader::open(
+                                let info = doremi_player::wav_stream::Info {
+                                    rate: grant.rate(),
+                                    channels: grant.channels(),
+                                    frames: grant.frames(),
+                                };
+                                let byte_len = grant.byte_len();
+                                let reader = doremi_commons::progressive::Reader::open_stream(
                                     resource,
+                                    grant,
                                     now,
                                     move || cancel.cancelled(),
                                     metrics,
                                 )
                                 .map_err(|_| EngineError::Input)?;
-                                let info = doremi_player::wav_stream::Info {
-                                    rate: doremi_commons::progressive::RATE,
-                                    channels: 2,
-                                    frames: doremi_commons::progressive::FRAMES,
-                                };
                                 let mut source = doremi_player::ogg_stream::Vorbis::from_read_seek(
-                                    reader,
-                                    doremi_commons::progressive::SIZE,
-                                    info,
+                                    reader, byte_len, info,
                                 )
                                 .map_err(EngineError::Decode)?;
                                 // Prime HTTP seeking before the PCM feed's
                                 // short prebuffer deadline, on this worker.
                                 doremi_player::wav_stream::FrameReader::seek_frame(
                                     &mut source,
-                                    load.position * u64::from(doremi_commons::progressive::RATE)
-                                        / 1000,
+                                    load.position * u64::from(info.rate) / 1000,
                                 )
                                 .map_err(EngineError::Decode)?;
                                 Ok(Box::new(source))

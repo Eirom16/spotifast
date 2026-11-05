@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import runpy
+import shlex
 import subprocess
 import time
 
@@ -45,7 +46,12 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', required=True, help='New private profile name; never reuse a failed run')
     parser.add_argument('--playlists', action='store_true', help='Include own-playlist creation, editing and fresh-process playback')
+    parser.add_argument('--query', default='Chopin')
+    parser.add_argument('--id', default='26896924', help='Explicit Commons page ID')
+    parser.add_argument('--duration-ms', type=int, default=239518, help='Expected duration from independently inspected provider metadata')
     args = parser.parse_args()
+    assert re.fullmatch('[1-9][0-9]{0,19}', args.id) and 10000 < args.duration_ms <= 600000
+    assert 0 < len(args.query) <= 128
     assert re.fullmatch('[a-z0-9][a-z0-9-]{0,47}', args.profile)
     output = args.output.resolve()
     assert not output.is_relative_to(ROOT), 'Retain review screenshots outside the repository'
@@ -70,7 +76,8 @@ def main():
     try:
         with verifier['qa_session'](args.profile):
             log = adb('shell', 'am', 'instrument', '-w', '-e', 'mode', 'music-playlists' if args.playlists else 'music-ui',
-                      '-e', 'profile', args.profile,
+                      '-e', 'profile', args.profile, '-e', 'musicId', args.id,
+                      '-e', 'musicQuery', shlex.quote(args.query), '-e', 'musicDurationMs', str(args.duration_ms),
                       f'{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation')
             (output/'instrumentation.log').write_bytes(log)
             latest = json.loads(adb('shell', 'run-as', PACKAGE, 'cat', private+'qa-state.json'))
@@ -154,8 +161,8 @@ def main():
                 wait_for(lambda state:state['page']=='Playlist')
                 tap_restored('playlist-play')
             else:
-                tap_restored('select:26896924')
-            playing = wait_for(lambda state:state['current']=='26896924' and state['playback']=='Playing' and (state['audio_metrics'] or {}).get('nonzero_samples',0)>1000)
+                tap_restored('select:'+args.id)
+            playing = wait_for(lambda state:state['current']==args.id and state['playback']=='Playing' and (state['audio_metrics'] or {}).get('nonzero_samples',0)>1000)
             assert .02<playing['volume']<.15 and playing['audio_metrics']['streaming']
             assert playing['query']=='' and playing['online']['search_source']=='demo' and playing['online']['search_status']=='Idle', 'Restoration depended on a preceding search'
             (output/'restored-native-music.json').write_text(json.dumps(playing, indent=2)+'\n')
@@ -169,7 +176,7 @@ def main():
               ('ro.product.model', 'ro.build.version.sdk', 'ro.product.cpu.abilist')}
     summary = dict(result='pass', source_commit=args.commit,
                    native_source_commit=manifest['native_source_commit'], apk_sha256=digest(apk.read_bytes()),
-                   physical_device=True, device=device, normal_library_preserved=True,
+                   physical_device=True, device=device, normal_library_preserved=True, selected_id=args.id, query=args.query, fixed_block_audit=args.id=='26896924',
                    acoustic_capture=False, playlists=bool(args.playlists), fresh_process_restore=True, playback_without_search=True,
                    qa_script_sha256=digest(Path(__file__).read_bytes()), checks=checks)
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')

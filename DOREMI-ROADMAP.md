@@ -329,6 +329,14 @@ con salida nativa y XTest. Datos y límites en DOREMI-GOAL-REPORT.md. No cierra
 F3a completo: formatos arbitrarios, streaming, EQ e integración de sesiones
 siguen pendientes. Audibilidad acústica no capturada.
 
+El corte progresivo CC0 ya pasó en Linux y Android físico: Vorbis por rangos,
+primer PCM antes del archivo completo, pausa/seek/cambio/cancelación y biblioteca.
+El siguiente corte amplía la selección fija a resultados CC0/Own-work compatibles
+con metadatos y grants efímeros del proveedor. Mendelssohn 17687586 pasó el
+recorrido nativo Linux; CI y Android de esta ampliación siguen en validación.
+Los hashes por bloque de la selección auditada se conservan; los resultados
+nuevos usan identidad de objeto del proveedor sobre TLS. No cierra EQ/sesiones.
+
 Crear motor con fuente local y HTTP autorizada, symphonia/rodio/salida por
 puertos, sin Spirc. Seleccionar formatos que realmente se pueden decodificar,
 no descargar todo ni transcodificar por defecto. MP3/FLAC no cubren por sí
@@ -356,8 +364,8 @@ importar automáticamente el perfil Spotifast.
 Primer corte de playlists propias en `8315fad`: CRUD desde la UI compartida,
 duplicados/orden, snapshots y JSON v1 atómico separado de favoritos/cola.
 Recorridos Linux y Android físico con música CC0 y restauración tras reinicio
-aprobados; CI corregida y actualización de artifacts pendientes, detalladas en
-DOREMI-PRODUCT-REPORT.md.
+aprobados. CI corregida d56ac45 verde y artifacts instalados/verificados en
+Linux/Android; Windows sin hardware físico. Detalles en DOREMI-PRODUCT-REPORT.md.
 Límites iniciales: 32 listas/256 entradas totales. No cierra el gate de 10.000
 entradas, el historial completo ni el resto de F3b.
 

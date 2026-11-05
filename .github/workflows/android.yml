@@ -103,11 +103,11 @@ jobs:
           cargo clippy --locked -p doremi-library --all-targets -- -D warnings
           cargo test --locked -p doremi-musicbrainz --all-targets
           cargo test --locked -p doremi-app --all-targets
-          cargo test --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets
-          cargo clippy --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets -- -D warnings
+          cargo test --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3 --all-targets
+          cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3 --all-targets -- -D warnings
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings
           cargo build --locked -p doremi-app --bins
-          RUSTDOCFLAGS="-D warnings" cargo doc --locked -p doremi-library -p doremi-commons -p doremi-app --no-deps
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked -p doremi-library -p doremi-commons -p doremi-player -p doremi-app --no-deps
       - name: Real X11 navigation, keyboard and queue sequence
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -164,6 +164,10 @@ jobs:
           cargo test --locked -p doremi-musicbrainz --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-app --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3 --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3 --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -735,17 +735,27 @@ impl DoremiApp {
                 } else if demo_candidate(&media.id) {
                     "Demostración · sin audio"
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
-                    "Commons · audio CC0"
+                    "Commons · CC0"
                 } else {
                     "Audio local"
                 };
+                let duration = media
+                    .duration_ms
+                    .filter(|_| media.id.provider.as_str() == "wikimedia-commons");
+                let subtitle = duration.map_or_else(
+                    || subtitle.to_owned(),
+                    |ms| {
+                        let seconds = ms / 1000;
+                        format!("{}:{:02} · {subtitle}", seconds / 60, seconds % 60)
+                    },
+                );
                 let row = theme::list_row(
                     ui,
                     &palette,
                     ui.id().with("media-row"),
                     theme::ListRow {
                         title: &media.title,
-                        subtitle,
+                        subtitle: &subtitle,
                         round: false,
                         actions: 2,
                         action_label: "Seleccionar",

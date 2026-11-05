@@ -1,7 +1,7 @@
-//! Exact-byte CC0 recording, authenticated in 128 KiB HTTP ranges before decode.
-//! Complete-source audit/provenance and per-block hashes: music-corpus.json.
+//! Bounded CC0 audio ranges tied to live provider metadata and TLS identity.
+//! The fixed recording also verifies each block against music-corpus.json.
 //! No audio bytes, browser identity or persistent network cache are included.
-use crate::{Info, PROVIDER, http};
+use crate::{Info, PROVIDER, StreamGrant, http};
 use doremi_core::{
     catalog::{AudioFormat, ProviderError, TemporaryResource, Tick},
     media::MediaId,
@@ -47,6 +47,7 @@ pub struct Metrics {
     pub failure: AtomicU8,
     pub bytes: AtomicU64,
     pub requests: AtomicU64,
+    pub total_bytes: AtomicU64,
 }
 impl Metrics {
     pub fn message(&self) -> Option<&'static str> {
@@ -79,6 +80,9 @@ pub struct Reader {
     client: Client,
     uri: String,
     hashes: Vec<String>,
+    size: u64,
+    object_hash: Option<String>,
+    etag: Option<String>,
     position: u64,
     cached_at: u64,
     cached: Vec<u8>,
@@ -121,8 +125,31 @@ impl Reader {
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
         metrics: Arc<Metrics>,
     ) -> Result<Self, ProviderError> {
-        if !candidate(resource.media())
-            || resource.info().byte_len != Some(SIZE)
+        Self::open_internal(resource, None, now, cancelled, metrics)
+    }
+    pub fn open_stream(
+        resource: TemporaryResource,
+        grant: StreamGrant,
+        now: Tick,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self, ProviderError> {
+        Self::open_internal(resource, Some(grant), now, cancelled, metrics)
+    }
+    fn open_internal(
+        resource: TemporaryResource,
+        grant: Option<StreamGrant>,
+        now: Tick,
+        cancelled: impl Fn() -> bool + Send + Sync + 'static,
+        metrics: Arc<Metrics>,
+    ) -> Result<Self, ProviderError> {
+        if grant.as_ref().is_some_and(|grant| {
+            grant.media != *resource.media()
+                || grant.uri != resource.expose_uri()
+                || Some(grant.bytes) != resource.info().byte_len
+                || Instant::now() >= grant.expires
+        }) || (grant.is_none()
+            && (!candidate(resource.media()) || resource.info().byte_len != Some(SIZE)))
             || resource.info().format != AudioFormat::OggVorbis
             || !resource.info().seekable
             || resource.expose_headers().next().is_some()
@@ -134,12 +161,23 @@ impl Reader {
         if !http::allowed(&uri) || uri.host_str() != Some("upload.wikimedia.org") {
             return Err(ProviderError::AccessDenied);
         }
-        let data: serde_json::Value = serde_json::from_str(include_str!("../music-corpus.json"))
-            .map_err(|_| ProviderError::InvalidResponse)?;
-        let hashes: Vec<String> = serde_json::from_value(data["chunks"].clone())
-            .map_err(|_| ProviderError::InvalidResponse)?;
-        if hashes.len() != (SIZE as usize).div_ceil(CHUNK) {
-            return Err(ProviderError::InvalidResponse);
+        let size = resource
+            .info()
+            .byte_len
+            .ok_or(ProviderError::InvalidResponse)?;
+        let mut hashes = Vec::new();
+        if candidate(resource.media()) {
+            if size != SIZE || grant.as_ref().is_some_and(|grant| grant.hash != HASH) {
+                return Err(ProviderError::Unavailable);
+            }
+            let data: serde_json::Value =
+                serde_json::from_str(include_str!("../music-corpus.json"))
+                    .map_err(|_| ProviderError::InvalidResponse)?;
+            hashes = serde_json::from_value(data["chunks"].clone())
+                .map_err(|_| ProviderError::InvalidResponse)?;
+            if hashes.len() != (SIZE as usize).div_ceil(CHUNK) {
+                return Err(ProviderError::InvalidResponse);
+            }
         }
         // This constructor runs on the audio worker, outside any Tokio runtime.
         let client = CLIENT
@@ -155,10 +193,19 @@ impl Reader {
                     .map_err(http::error)
             })
             .clone()?;
+        metrics.total_bytes.store(size, Ordering::Release);
+        let resource_expiry =
+            Instant::now() + Duration::from_millis(resource.info().usable_until.0 - now.0);
+        let expires = grant
+            .as_ref()
+            .map_or(resource_expiry, |grant| resource_expiry.min(grant.expires));
         Ok(Self {
             client,
             uri: resource.expose_uri().to_owned(),
             hashes,
+            size,
+            object_hash: grant.map(|grant| grant.hash),
+            etag: None,
             position: 0,
             cached_at: u64::MAX,
             cached: Vec::new(),
@@ -166,7 +213,7 @@ impl Reader {
             metrics,
             failed: false,
             paced: true,
-            expires: Instant::now() + Duration::from_millis(resource.info().usable_until.0 - now.0),
+            expires,
         })
     }
     fn block(&mut self) -> io::Result<()> {
@@ -181,7 +228,7 @@ impl Reader {
         if self.cached_at == at {
             return Ok(());
         }
-        let end = (at + CHUNK as u64).min(SIZE) - 1;
+        let end = (at + CHUNK as u64).min(self.size) - 1;
         if self.paced {
             self.pace()?;
         }
@@ -238,7 +285,7 @@ impl Reader {
             }
             return Err(io::Error::other("HTTP range unavailable or denied"));
         }
-        let expected = format!("bytes {at}-{end}/{SIZE}");
+        let expected = format!("bytes {at}-{end}/{}", self.size);
         if response
             .headers()
             .get(CONTENT_RANGE)
@@ -254,6 +301,37 @@ impl Reader {
             self.metrics.failure.store(7, Ordering::Release);
             return Err(io::Error::other("Invalid HTTP range identity"));
         }
+        if let Some(hash) = &self.object_hash {
+            let identity = response
+                .headers()
+                .get("x-object-meta-sha1base36")
+                .and_then(|v| v.to_str().ok());
+            let etag = response
+                .headers()
+                .get("etag")
+                .and_then(|v| v.to_str().ok())
+                .filter(|value| {
+                    !value.is_empty() && value.len() <= 256 && !value.starts_with("W/")
+                });
+            let mime = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok());
+            if !identity.is_some_and(|value| object_hash_matches(value, hash))
+                || etag.is_none()
+                || self
+                    .etag
+                    .as_deref()
+                    .is_some_and(|previous| Some(previous) != etag)
+                || !matches!(mime, Some("application/ogg" | "audio/ogg"))
+            {
+                self.metrics.failure.store(7, Ordering::Release);
+                return Err(io::Error::other(
+                    "Provider object identity changed or unavailable",
+                ));
+            }
+            self.etag = etag.map(str::to_owned);
+        }
         let mut bytes = Vec::with_capacity(CHUNK + 1);
         response.take(CHUNK as u64 + 1).read_to_end(&mut bytes)?;
         self.metrics
@@ -267,7 +345,8 @@ impl Reader {
             return Err(io::Error::other("Audio lease expired during IO"));
         }
         if bytes.len() as u64 != end - at + 1
-            || format!("{:x}", Sha1::digest(&bytes)) != self.hashes[at as usize / CHUNK]
+            || (!self.hashes.is_empty()
+                && format!("{:x}", Sha1::digest(&bytes)) != self.hashes[at as usize / CHUNK])
         {
             self.metrics.failure.store(8, Ordering::Release);
             return Err(io::Error::other("Authenticated audio block mismatch"));
@@ -280,7 +359,7 @@ impl Reader {
 
 impl Read for Reader {
     fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
-        if target.is_empty() || self.position >= SIZE {
+        if target.is_empty() || self.position >= self.size {
             return Ok(0);
         }
         if self.failed {
@@ -301,10 +380,10 @@ impl Seek for Reader {
     fn seek(&mut self, from: SeekFrom) -> io::Result<u64> {
         let position = match from {
             SeekFrom::Start(n) => i128::from(n),
-            SeekFrom::End(n) => i128::from(SIZE) + i128::from(n),
+            SeekFrom::End(n) => i128::from(self.size) + i128::from(n),
             SeekFrom::Current(n) => i128::from(self.position) + i128::from(n),
         };
-        if !(0..=i128::from(SIZE)).contains(&position) {
+        if !(0..=i128::from(self.size)).contains(&position) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
         self.position = position as u64;
@@ -314,14 +393,61 @@ impl Seek for Reader {
 // Expose the normal Read/Seek interface without adding decoder dependencies here.
 impl Reader {
     pub fn byte_len(&self) -> u64 {
-        SIZE
+        self.size
     }
+}
+
+// Swift publishes the provider's object SHA-1 as a base36 integer. This binds
+// each TLS range response to live API metadata; it is not a per-block digest.
+fn object_hash_matches(value: &str, expected: &str) -> bool {
+    if value.is_empty()
+        || value.len() > 31
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_digit() || c.is_ascii_lowercase())
+    {
+        return false;
+    }
+    let mut bytes = [0u8; 20];
+    for digit in value.bytes() {
+        let mut carry = u16::from(if digit.is_ascii_digit() {
+            digit - b'0'
+        } else {
+            digit - b'a' + 10
+        });
+        for byte in bytes.iter_mut().rev() {
+            carry += u16::from(*byte) * 36;
+            *byte = carry as u8;
+            carry >>= 8;
+        }
+        if carry != 0 {
+            return false;
+        }
+    }
+    bytes
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>()
+        == expected
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{io::Write, net::TcpListener, thread};
+    #[test]
+    fn swift_object_identity_is_exact_and_overflow_safe() {
+        assert!(object_hash_matches("goezs4jsrmspoawopcrx6jfk77w1ebw", HASH));
+        for value in [
+            "",
+            "not-a-hash",
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            "0",
+            "GOEZS4JSRMSPOAWOPCRX6JFK77W1EBW",
+        ] {
+            assert!(!object_hash_matches(value, HASH));
+        }
+    }
     fn reader(status: u16, range: &str, tamper: bool) -> (Reader, thread::JoinHandle<()>) {
         delayed_reader(status, range, tamper, Duration::ZERO)
     }
@@ -331,9 +457,19 @@ mod tests {
         tamper: bool,
         delay: Duration,
     ) -> (Reader, thread::JoinHandle<()>) {
+        response_reader(status, range, tamper, delay, "")
+    }
+    fn response_reader(
+        status: u16,
+        range: &str,
+        tamper: bool,
+        delay: Duration,
+        extra_headers: &str,
+    ) -> (Reader, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let uri = format!("http://{}/owned.ogg", listener.local_addr().unwrap());
         let range = range.to_owned();
+        let extra_headers = extra_headers.to_owned();
         let mut body = vec![42; CHUNK];
         let hash = format!("{:x}", Sha1::digest(&body));
         if tamper {
@@ -351,7 +487,7 @@ mod tests {
             let _ = socket.read(&mut request);
             thread::sleep(delay);
             let headers = format!(
-                "HTTP/1.1 {status} Test\r\nContent-Length: {CHUNK}\r\nContent-Range: {range}\r\nConnection: close\r\n\r\n"
+                "HTTP/1.1 {status} Test\r\nContent-Length: {CHUNK}\r\nContent-Range: {range}\r\n{extra_headers}Connection: close\r\n\r\n"
             );
             let _ = socket.write_all(headers.as_bytes());
             let _ = socket.write_all(&body);
@@ -364,6 +500,9 @@ mod tests {
                     .unwrap(),
                 uri,
                 hashes: vec![hash],
+                size: SIZE,
+                object_hash: None,
+                etag: None,
                 position: 0,
                 cached_at: u64::MAX,
                 cached: vec![],
@@ -375,6 +514,48 @@ mod tests {
             },
             worker,
         )
+    }
+    #[test]
+    fn live_ranges_require_the_provider_identity_and_a_consistent_strong_etag() {
+        for (sha, etag, pinned, success) in [
+            ("goezs4jsrmspoawopcrx6jfk77w1ebw", "version1", None, true),
+            ("0", "version1", None, false),
+            ("", "version1", None, false),
+            ("goezs4jsrmspoawopcrx6jfk77w1ebw", "", None, false),
+            ("goezs4jsrmspoawopcrx6jfk77w1ebw", "W/version1", None, false),
+            (
+                "goezs4jsrmspoawopcrx6jfk77w1ebw",
+                "version2",
+                Some("version1"),
+                false,
+            ),
+        ] {
+            let headers = format!(
+                "Content-Type: application/ogg\r\nX-Object-Meta-Sha1base36: {sha}\r\nETag: {etag}\r\n"
+            );
+            let (mut input, server) = response_reader(
+                206,
+                "bytes 0-131071/4260399",
+                false,
+                Duration::ZERO,
+                &headers,
+            );
+            input.object_hash = Some(HASH.into());
+            input.hashes.clear();
+            input.etag = pinned.map(str::to_owned);
+            let mut bytes = [0; 8];
+            assert_eq!(input.read(&mut bytes).is_ok(), success);
+            if success {
+                assert_eq!(bytes, [42; 8]);
+                assert_eq!(input.etag.as_deref(), Some("version1"));
+            } else {
+                assert_eq!(bytes, [0; 8]);
+                assert_eq!(input.metrics.failure.load(Ordering::Acquire), 7);
+                assert!(input.read(&mut bytes).is_err());
+                assert_eq!(input.metrics.requests.load(Ordering::Acquire), 1);
+            }
+            server.join().unwrap();
+        }
     }
     #[test]
     fn slow_authorized_response_fits_the_native_budget_and_a_deadline_latches_without_retry() {
@@ -463,6 +644,9 @@ mod tests {
             client: Client::new(),
             uri: "http://127.0.0.1:1/".into(),
             hashes: vec![],
+            size: SIZE,
+            object_hash: None,
+            etag: None,
             position: 0,
             cached_at: u64::MAX,
             cached: vec![],

@@ -34,9 +34,17 @@ public final class DoremiInstrumentation extends Instrumentation {
     private int settledWidth=-1,settledHeight=-1;
     private String mode="full";
     private String profile="instrumentation";
+    private String musicId="26896924",musicQuery="Chopin";
+    private long musicDurationMs=239518;
     private String documentFolder="";
     private String documentTitle="Original Café estéreo",documentFilename="Original Café estéreo.wav";
-    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); profile=arguments==null?"instrumentation":arguments.getString("profile","instrumentation"); if(!profile.matches("[a-z0-9][a-z0-9-]{0,47}")) throw new IllegalArgumentException("Invalid QA profile"); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} if(arguments!=null && "mp3".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café MP3 estéreo";documentFilename=documentTitle+".mp3";} start(); }
+    @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); profile=arguments==null?"instrumentation":arguments.getString("profile","instrumentation"); if(!profile.matches("[a-z0-9][a-z0-9-]{0,47}")) throw new IllegalArgumentException("Invalid QA profile"); mode=arguments==null?"full":arguments.getString("mode","full"); documentFolder=arguments==null?"":arguments.getString("documentFolder",""); if(arguments!=null && "flac".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café FLAC estéreo";documentFilename=documentTitle+".flac";} if(arguments!=null && "mp3".equals(arguments.getString("documentFormat","wav"))) {documentTitle="Original Café MP3 estéreo";documentFilename=documentTitle+".mp3";} configureMusic(arguments);start(); }
+    private void configureMusic(Bundle arguments) {
+        if(arguments==null) return;
+        musicId=arguments.getString("musicId",musicId);musicQuery=arguments.getString("musicQuery",musicQuery);
+        musicDurationMs=Long.parseLong(arguments.getString("musicDurationMs",Long.toString(musicDurationMs)));
+        if(!musicId.matches("[1-9][0-9]{0,19}") || musicQuery.isEmpty() || musicQuery.length()>128 || musicDurationMs<=10000 || musicDurationMs>600000) throw new IllegalArgumentException("Invalid explicit music test selection");
+    }
     private File profileDirectory() { return new File(getTargetContext().getFilesDir(),"qa/"+profile); }
     private JSONObject state() throws Exception {
         File path=new File(profileDirectory(),"qa-state.json");
@@ -654,26 +662,26 @@ public final class DoremiInstrumentation extends Instrumentation {
         // Adjust application gain on the existing silent demo, before any audio.
         tap("demo-examples");tap("select:dawn");tap("pause");slide("volume",0.08f);
         until(s -> s.optDouble("volume")>0.02 && s.optDouble("volume")<0.15);
-        tap("search");tap("source-commons");tap("query");text("Chopin",true);
+        tap("search");tap("source-commons");tap("query");text(musicQuery,true);
         capture("qa-mobile-ime");hideKeyboard();
-        until(20000,"selected CC0 music result",s -> hasControl(s,"select:26896924") && "Ready".equals(s.optJSONObject("online").optString("search_status")));
-        tap("save:26896924");until(s -> savedCount(s,"26896924")==1);tap("save-again:26896924");
-        until(s -> savedCount(s,"26896924")==1);capture("qa-mobile-results-dark");
+        until(20000,"selected CC0 music result",s -> hasControl(s,"select:"+musicId) && "Ready".equals(s.optJSONObject("online").optString("search_status")));
+        tap("save:"+musicId);until(s -> savedCount(s,musicId)==1);tap("save-again:"+musicId);
+        until(s -> savedCount(s,musicId)==1);capture("qa-mobile-results-dark");
         tap("settings");tap("light");tap("search");capture("qa-mobile-results-light");
-        tap("settings");tap("dark");tap("search");tap("select:26896924",0);
-        JSONObject first=until(25000,"progressive music delivered to native callback",s -> onlinePlaying(s,"26896924") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+        tap("settings");tap("dark");tap("search");tap("select:"+musicId,0);
+        JSONObject first=until(25000,"progressive music delivered to native callback",s -> onlinePlaying(s,musicId) && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
         JSONObject metrics=first.getJSONObject("audio_metrics"),network=first.getJSONObject("online").getJSONObject("network");
         if(!metrics.getBoolean("streaming") || metrics.getLong("pcm_bytes")>65536 || network.getLong("received_bytes")<=0 || network.getLong("received_bytes")>=network.getLong("total_bytes")) throw new AssertionError("Music must produce bounded PCM before the complete encoded file arrives");
         Files.write(new File(profileDirectory(),"qa-music-first-pcm.json").toPath(),first.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
         capture("qa-mobile-playing");tap("pause");until(s -> "Paused".equals(s.optString("playback")));SystemClock.sleep(300);
         long paused=state().getLong("position_ms");SystemClock.sleep(400);
         if(state().getLong("position_ms")!=paused) throw new AssertionError("Paused stream clock advanced");
-        slide("seek",0.5f);until(30000,"paused HTTP seek",s -> "Paused".equals(s.optString("playback")) && s.optLong("position_ms")>=118000 && s.optLong("position_ms")<=121000);
-        capture("qa-mobile-seek");tap("play");until(30000,"native resume after HTTP seek",s -> onlinePlaying(s,"26896924") && s.optLong("position_ms")>120000);tap("pause");
+        slide("seek",0.5f);until(30000,"paused HTTP seek",s -> "Paused".equals(s.optString("playback")) && s.optLong("position_ms")>=musicDurationMs/2-1500 && s.optLong("position_ms")<=musicDurationMs/2+1500);
+        capture("qa-mobile-seek");tap("play");until(30000,"native resume after HTTP seek",s -> onlinePlaying(s,musicId) && s.optLong("position_ms")>musicDurationMs/2);tap("pause");
         tap("search");until(s -> hasControl(s,"player") && hasControl(s,"play") && hasControl(s,"next"));capture("qa-mobile-mini");
         tap("player");until(s -> "Player".equals(s.optString("page")));
         sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);until(s -> "Search".equals(s.optString("page")));
-        tap("library");capture("qa-mobile-library");tap("select:26896924");until(s -> "Player".equals(s.optString("page")));tap("stop");until(s -> "Paused".equals(s.optString("playback")));
+        tap("library");capture("qa-mobile-library");tap("select:"+musicId);until(s -> "Player".equals(s.optString("page")));tap("stop");until(s -> "Paused".equals(s.optString("playback")));
         sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);until(s -> "Library".equals(s.optString("page")));
         tap("player");long instance=state().getLong("instance"),occurrence=state().getLong("current_occurrence");
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
@@ -691,7 +699,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(state().getJSONObject("online").optLong("request_timeout_ms",2000)+300);String retired=state().getJSONObject("online").optString("retired_network");SystemClock.sleep(500);
         if(!retired.equals(state().getJSONObject("online").optString("retired_network"))) throw new AssertionError("Cancelled music continued network work");
         runOnMainSync(() -> activity.setRequestedOrientation(original));capture("qa-mobile-cancelled");
-        JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));
+        JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("selected_id",musicId).put("query",musicQuery).put("expected_duration_ms",musicDurationMs).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));
         Files.write(new File(profileDirectory(),"qa-mobile-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void playlistUi() throws Exception {
@@ -700,11 +708,11 @@ public final class DoremiInstrumentation extends Instrumentation {
         long id=state().getJSONArray("playlists").getJSONObject(0).getLong("id");capture("qa-playlist-empty");
         tap("library");
         long occurrence=state().getLong("current_occurrence");String context=state().getJSONArray("context_occurrences").toString();
-        tap("playlist-add:"+id+":26896924");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==1);
-        tap("playlist-add:"+id+":26896924");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==2);
+        tap("playlist-add:"+id+":"+musicId);until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==1);
+        tap("playlist-add:"+id+":"+musicId);until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==2);
         if(state().getLong("current_occurrence")!=occurrence || !context.equals(state().getJSONArray("context_occurrences").toString())) throw new AssertionError("Adding to a playlist changed the queue");
         tap("playlist-open:"+id);tap("playlist-select:1");
-        JSONObject playing=until(25000,"playlist music at the selected duplicate",s -> onlinePlaying(s,"26896924") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+        JSONObject playing=until(25000,"playlist music at the selected duplicate",s -> onlinePlaying(s,musicId) && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
         if(playing.getLong("current_occurrence")!=playing.getJSONArray("context_occurrences").getLong(1)) throw new AssertionError("Selected duplicate opened the first occurrence");
         capture("qa-playlist-playing");tap("pause");until(s -> "Paused".equals(s.optString("playback")));
         tap("library");tap("playlist-open:"+id);
@@ -712,7 +720,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("playlist-up:1");tap("playlist-remove:0");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==1);
         tap("playlist-edit");tap("playlist-rename");editorText("Café · lectura",false,"playlist-rename");hideKeyboard();tap("playlist-rename-save");
         until(s -> "Café · lectura".equals(s.optJSONArray("playlists").optJSONObject(0).optString("name")));
-        if(!"Chopin".equals(state().getString("query"))) throw new AssertionError("Playlist input changed the catalog query");
+        if(!musicQuery.equals(state().getString("query"))) throw new AssertionError("Playlist input changed the catalog query");
         tap("playlist-delete");tap("playlist-delete-cancel");
         if(state().getJSONArray("playlists").length()!=1) throw new AssertionError("Cancelling deletion removed the playlist");
         if(state().getLong("current_occurrence")!=occurrence || !context.equals(state().getJSONArray("context_occurrences").toString())) throw new AssertionError("Editing a playlist changed the queue");

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in native GUI/audio journey using the audited Commons CC0 music selection.
+"""Opt-in native GUI/audio journey using explicitly licensed Commons CC0 music.
 
 Public requests; never run automatically in PR CI. Uses an isolated profile and
 X11 display, at low application volume. Native callback evidence, no microphone.
@@ -16,7 +16,13 @@ import time
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('binary', type=Path)
 parser.add_argument('output', type=Path)
+parser.add_argument('--query', default='Chopin')
+parser.add_argument('--id', default='26896924', help='Explicit provider page ID, never a title substitution')
+parser.add_argument('--duration-ms', type=int, default=239518, help='Expected duration from independently inspected provider metadata')
+parser.add_argument('--size', type=int, nargs=2, metavar=('WIDTH','HEIGHT'))
 args = parser.parse_args()
+assert args.id.isascii() and args.id.isdecimal() and int(args.id)>0
+assert 10000 < args.duration_ms <= 600000
 output = args.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
 env = os.environ.copy()
@@ -79,17 +85,22 @@ try:
     window = xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0]
     xdo('windowfocus','--sync',window)
     wait(lambda s: bool(s['controls']))
+    if args.size:
+        xdo('windowsize','--sync',window,*args.size)
+        wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
+    if state()['viewport'][0]<760:
+        tap('demo-examples');tap('select:dawn');tap('pause')
     slide('volume',.08)
     wait(lambda s:.05 < s['volume'] < .11)
     tap('search')
     tap('source-commons')
     tap('query')
-    xdo('type','--clearmodifiers','Chopin')
-    wait(lambda s:any(c['name']=='select:26896924' for c in s['controls']))
+    xdo('type','--clearmodifiers',args.query)
+    wait(lambda s:any(c['name']=='select:'+args.id for c in s['controls']))
     capture('real-music-search')
-    tap('save:26896924')
-    wait(lambda s:any(item['provider']=='wikimedia-commons' and item['id']=='26896924' for item in s['saved_media']))
-    tap('select:26896924')
+    tap('save:'+args.id)
+    wait(lambda s:any(item['provider']=='wikimedia-commons' and item['id']==args.id for item in s['saved_media']))
+    tap('select:'+args.id)
     first = wait(lambda s:s['playback']=='Playing' and s['audio_metrics'] and s['audio_metrics']['nonzero_samples']>1000)
     assert first['audio_metrics']['streaming']
     assert first['audio_metrics']['pcm_bytes'] <= 65536
@@ -104,10 +115,11 @@ try:
     time.sleep(.4)
     assert state()['position_ms']==before
     slide('seek',.5)
-    wait(lambda s:s['playback']=='Paused' and 118000 <= s['position_ms'] <= 121000)
+    middle = args.duration_ms//2
+    wait(lambda s:s['playback']=='Paused' and middle-1500 <= s['position_ms'] <= middle+1500)
     capture('http-range-seek-paused')
     tap('play')
-    wait(lambda s:s['playback']=='Playing' and s['position_ms']>120000)
+    wait(lambda s:s['playback']=='Playing' and s['position_ms']>middle)
     # A second explicitly selected CC0 resource verifies the real shared queue.
     tap('search')
     tap('query')
@@ -120,7 +132,7 @@ try:
     wait(lambda s:s['current']=='21923157' and s['playback']=='Playing' and s['audio_metrics']['nonzero_samples']>0)
     capture('next-real-audio')
     tap('previous')
-    wait(lambda s:s['current']=='26896924' and s['playback']=='Playing' and s['audio_metrics']['nonzero_samples']>0)
+    wait(lambda s:s['current']==args.id and s['playback']=='Playing' and s['audio_metrics']['nonzero_samples']>0)
     capture('previous-music')
     tap('stop')
     wait(lambda s:s['playback']=='Paused' and s['audio_metrics'] is None and s['online']['network'] is None)
@@ -130,7 +142,22 @@ try:
     time.sleep(.4)
     assert state()['online']['retired_network'] == retired, 'Cancelled source continued network work'
     capture('cancelled')
-    report={'result':'pass','platform':'Linux X11/native audio callback','binary_sha256':binary_hash,'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'acoustic_capture':False,'provider':'Commons audited CC0 recording','first_observed_pcm_received_bytes':network['received_bytes'],'total_encoded_bytes':network['total_bytes'],'checks':['real music search','save provider identity','PCM before whole file','bounded PCM','paused clock','HTTP seek while paused','resume','next authorized resource','previous music','cancel clears native output and stops network work']}
+    old_pid = process.pid
+    process.terminate(); process.wait(timeout=8)
+    process = subprocess.Popen([str(args.binary.resolve())], env=env, stdout=log, stderr=subprocess.STDOUT)
+    window = xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0]
+    xdo('windowfocus','--sync',window)
+    if args.size:
+        xdo('windowsize','--sync',window,*args.size)
+        wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
+    restored = wait(lambda s:s['pid']!=old_pid and bool(s['controls']))
+    assert restored['playback']=='Paused' and not restored['online']['worker_initialized']
+    tap('library'); tap('select:'+args.id)
+    wait(lambda s:s['current']==args.id and s['playback']=='Playing' and s['audio_metrics'] and s['audio_metrics']['nonzero_samples']>1000)
+    capture('saved-music-new-process')
+    tap('stop')
+    wait(lambda s:s['audio_metrics'] is None and s['online']['network'] is None)
+    report={'result':'pass','platform':'Linux X11/native audio callback','binary_sha256':binary_hash,'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'acoustic_capture':False,'provider':'Commons CC0/Own-work Vorbis','selected_id':args.id,'query':args.query,'expected_duration_ms':args.duration_ms,'fixed_block_audit':args.id=='26896924','first_observed_pcm_received_bytes':network['received_bytes'],'total_encoded_bytes':network['total_bytes'],'checks':['real music search','save provider identity','PCM before whole file','bounded PCM','paused clock','HTTP seek while paused','resume','next authorized resource','previous music','cancel clears native output and stops network work','new process restores without IO','play saved ID without searching']}
     (output/'report.json').write_text(json.dumps(report,indent=2))
 except Exception:
     if window:

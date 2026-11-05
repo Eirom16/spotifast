@@ -33,6 +33,24 @@ del usuario conservados fuera de commits.
   destino/generación para impedir que texto tardío cambie otro campo. El writer
   conserva sus APIs anteriores y publica locators antes de referencias nuevas.
 
+## Ampliación en validación
+
+El código actual busca hasta diez resultados Commons CC0/Own-work compatibles,
+Ogg/Vorbis de hasta 10 min/32 MiB. Cada selección o reapertura resuelve de nuevo
+el ID; grant opaco efímero ligado a URL/tamaño/SHA-1, sin URLs persistidas.
+Rangos TLS exigen identidad de objeto y ETag coherente; eso no equivale a hashes
+por bloque. La ruta auditada anterior conserva sus hashes. Setup Vorbis se
+limita antes de construir el decoder. Duraciones reales visibles en las filas.
+
+Recorrido local PASS con Mendelssohn, ID 17687586, fuera de la lista fija:
+196.490/3.342.218 B al primer PCM nativo; pausa, seek, siguiente/anterior,
+cancelación y reapertura desde Biblioteca sin buscar otra vez. Sin captura
+acústica. También PASS a 360×640, con capturas revisadas; se corrigió la duración
+truncada en la fila. Evidencia generic-mendelssohn-local/, generic-mendelssohn-phone360/,
+generic-final-checks/ y generic-ui-final-checks/. Tests focalizados, Clippy, Rustdoc
+y build locales aprobados; Java compila y circuito ligero aprobado. CI y teléfono
+de esta ampliación pendientes; los artifacts instalados siguen en d56ac45.
+
 ## Evidencia local
 
 32 tests del host, 19 de biblioteca y 7 de Commons aprobados; Clippy focalizado,
@@ -76,12 +94,13 @@ de directorios Unix, como el writer previo. Linux agotó 20 minutos descargando
 paquetes, antes de tests; d56ac45 amplía a 35 min y evita recomendaciones APT.
 
 Validación corregida [42118302950](https://github.com/Eirom16/spotifast/actions/runs/42118302950),
-**d56ac45: en curso**, con los tres jobs. Incluye paquetes modificados, Windows,
+**d56ac45: los tres jobs aprobados**. Incluye paquetes modificados, Windows,
 GUI Linux, Rustdoc y ambas ABI Android. El legado no cambió en este corte.
 
-Linux: launcher aún en artifact 10f80b5, abierto en CachyOS Wayland sin autoplay,
-con manifiesto/checksums y datos conservados. Falta actualizarlo al artifact nuevo.
-La música/playlists actuales se verificaron en los builds locales descritos.
+Linux: launcher actualizado al artifact d56ac45, checksums/manifiesto verificados.
+Abierto en CachyOS Wayland sin autoplay ni IO de proveedor. Su binario exacto
+pasó el recorrido X11 de playlists, restauración y música nativa en perfil privado;
+SHA256 678251eaaffdeb662789d7a3720eab5f4678a6d76b3caee1f845e96499770747.
 
 Android: **8315fad instalada y recorrido completo PASS físico** en SM-J701M,
 API 28/ARMv7. PNG/JSON propios revisados: mini-player, claro/oscuro, búsqueda y
@@ -94,7 +113,11 @@ La biblioteca normal mantuvo exactamente su hash antes/después; el perfil QA
 está separado y se restauró el lanzamiento normal. Los fallos previos de timeout,
 toque de prueba y desconexión USB se conservan, sin atribuirles PASS.
 
-Windows: artifact 3201c4b descargado y checksums verificados; tests/build/CLI y
+Android se actualizó después a d56ac45: firma/ABI/manifiesto/checksums verificados,
+arranque nuevo pausado y biblioteca normal con el mismo hash. No se atribuye el
+recorrido físico completo de 8315fad a esta actualización de cfg/CI.
+
+Windows: artifact d56ac45 descargado y checksums verificados; tests/build/CLI y
 Clippy nativos aprobados. GUI/audio smoke fallaron por OpenGL insuficiente y
 NoDevice. Sin prueba física Windows; no se atribuye a Windows el resultado Linux.
 
@@ -102,14 +125,12 @@ Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-0
 y /home/eirom/.local/share/doremi/product-qa/2026-11-05/. Esta última incluye
 playlists-real-music-bounded/, playlists-final-desktop/, playlists-phone-{360,393,430}/,
 android-mobile-{ece1375,3201c4b}/, android-playlists-8315fad/device-reconnected/
-y windows-3201c4b/. Los fallos se conservan.
+y windows-3201c4b/, ci-d56ac45/. Los fallos se conservan.
 No se repitieron las suites físicas extensas de formatos locales.
 
 ## Pendiente
 
-Cerrar la CI corregida y actualizar el launcher Linux con su artifact;
-comprobar la actualización Android del mismo código. Ampliar el catálogo
-reproducible y artwork. Siguen pendientes historial completo, cuenta opcional
+Validar en CI/Android el siguiente corte de catálogo reproducible; añadir artwork. Siguen pendientes historial completo, cuenta opcional
 compatible, EQ/DSP/visualizadores, integración multimedia y background Android.
 Audius sigue investigado, sin integrar; sus condiciones de caché/sesión y acceso
 requieren adaptación. No hay integración YouTube ni promesa de acceso universal.

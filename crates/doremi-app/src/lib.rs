@@ -995,7 +995,7 @@ impl DoremiApp {
                     ui.small(if model.music.selected {
                         "Fuente: MusicBrainz · catálogo público; no proporciona audio."
                     } else if model.online.selected {
-                        "Fuente: Commons · selección CC0: Chopin por Membeth y dos tonos."
+                        "Fuente: Commons · audio CC0 declarado por su autor · Vorbis hasta 10 min."
                     } else {
                         "Fuente: demostración offline · sin audio."
                     });
@@ -1026,7 +1026,7 @@ impl DoremiApp {
                     egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
                         .id(egui::Id::new("catalog-query"))
                         .hint_text(if online {
-                            "Busca Chopin, Membeth o sine"
+                            "Busca música CC0, por ejemplo Chopin"
                         } else {
                             "Busca música por nombre o artista"
                         })
@@ -1065,8 +1065,13 @@ impl DoremiApp {
                     }
                 } else {
                     ui.label(format!(
-                        "{} resultados {}",
+                        "{} {} {}",
                         results.len(),
+                        if results.len() == 1 {
+                            "resultado"
+                        } else {
+                            "resultados"
+                        },
                         if online {
                             "CC0 de Commons"
                         } else {

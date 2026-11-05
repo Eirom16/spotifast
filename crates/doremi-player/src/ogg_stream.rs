@@ -79,6 +79,12 @@ impl Vorbis {
         {
             return Err(DecodeError::UnsupportedFormat);
         }
+        crate::vorbis_limits::check(
+            params
+                .extra_data
+                .as_deref()
+                .ok_or(DecodeError::InvalidOgg)?,
+        )?;
         let decoder = symphonia::default::get_codecs()
             .make(params, &DecoderOptions::default())
             .map_err(|_| DecodeError::UnsupportedFormat)?;

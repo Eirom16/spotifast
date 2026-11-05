@@ -20,6 +20,8 @@ pub use ogg::{MAX_OGG_BYTES, decode_ogg, decode_ogg_cancellable};
 pub use output::{Cancellation, Engine, EngineError, EngineEvent, Metrics, StreamFactory};
 #[cfg(feature = "ogg-vorbis")]
 pub mod ogg_stream;
+#[cfg(feature = "ogg-vorbis")]
+mod vorbis_limits;
 
 pub const MAX_SAMPLES: usize = 1_000_000;
 pub const DURATION_MS: u64 = 8000;

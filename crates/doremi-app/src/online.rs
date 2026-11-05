@@ -16,7 +16,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 pub(super) enum Prepared {
     Pcm(Arc<Pcm>),
-    Stream(doremi_core::catalog::TemporaryResource),
+    Stream(
+        Box<(
+            doremi_core::catalog::TemporaryResource,
+            commons::StreamGrant,
+        )>,
+    ),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -279,15 +284,7 @@ async fn actor(
                         let result = match transport {
                             Ok(client) => commons::search(&client, &request.query, request.limit)
                                 .await
-                                .map(|rows| {
-                                    rows.into_iter()
-                                        .filter(|row| {
-                                            commons::audited(row.media.id.local()).is_some()
-                                                || commons::progressive::candidate(&row.media.id)
-                                        })
-                                        .map(|row| row.media)
-                                        .collect()
-                                }),
+                                .map(|rows| rows.into_iter().map(|row| row.media).collect()),
                             Err(error) => Err(error),
                         };
                         state.publish(
@@ -340,14 +337,12 @@ async fn source(
     origin: Instant,
     ctx: &egui::Context,
 ) -> Result<Prepared, Error> {
-    if commons::progressive::candidate(media) {
+    if commons::candidate(media) && commons::audited(media.local()).is_none() {
         state.phase(generation, 1, ctx);
         let info = commons::resolve(&client?, media).await?;
-        if !commons::progressive::validate(&info) {
-            return Err(ProviderError::Unavailable.into());
-        }
         let resource = commons::temporary(&info, Tick(origin.elapsed().as_millis() as u64))?;
-        return Ok(Prepared::Stream(resource));
+        let grant = info.stream.ok_or(ProviderError::UnsupportedFormat)?;
+        return Ok(Prepared::Stream(Box::new((resource, grant))));
     }
     if let Some(pcm) = cache
         .lock()
