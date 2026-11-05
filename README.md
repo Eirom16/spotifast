@@ -12,7 +12,7 @@ Reproductor musical nativo en Rust, en migración desde
 **Estado: host Doremi independiente para Linux/Android, catálogo público
 MusicBrainz y nuevo ejecutable Windows compilado en runner nativo.
 La búsqueda musical está probada en Linux y SM-J701M/API 28; MusicBrainz aporta
-metadatos, no audio. No hay release estable ni streaming musical productivo.**
+metadatos, no audio. El primer stream musical CC0 está probado en Linux;\nla selección reproducible sigue siendo pequeña y no hay release estable.**
 
 El objetivo es usar egui/eframe y contratos neutrales de búsqueda/resolución,
 con escritorio y Android construidos sobre el mismo núcleo. No usaremos
@@ -30,8 +30,10 @@ El bridge conserva la integración manual del legado. El host independiente
 pausada y almacenamiento propio. `doremi-ui` extrae componentes reales del
 legado para la presentación neutral. MusicBrainz permite buscar y explorar
 grabaciones/artistas/ediciones y guardar sus IDs; no se les asigna audio de otra
-fuente. El motor nativo y el experimento Commons CC0 permanecen separados de
-los datos demo, que siguen silenciosos.
+fuente. En Buscar → Commons → Chopin puede seleccionarse una interpretación
+CC0 de Membeth: el motor nativo reproduce bloques HTTP verificados sin descargar
+la pieza completa. La selección Commons también conserva dos tonos de prueba.
+Los datos demo siguen separados y silenciosos.
 Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
 Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
 
