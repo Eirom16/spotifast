@@ -42,7 +42,11 @@ impl DoremiApp {
             model.revision += 1;
             return;
         }
-        self.navigate(Page::Home);
+        if model.page == Page::Playlist {
+            self.navigate(Page::Library);
+        } else {
+            self.navigate(Page::Home);
+        }
     }
 
     pub(super) fn shell(&mut self, ui: &mut egui::Ui, palette: &Palette) {
@@ -80,7 +84,9 @@ impl DoremiApp {
                                 palette,
                                 navigation_icon(page),
                                 label,
-                                self.model.as_ref().unwrap().page == page,
+                                self.model.as_ref().unwrap().page == page
+                                    || (page == Page::Library
+                                        && self.model.as_ref().unwrap().page == Page::Playlist),
                                 width,
                             );
                             self.record(name, &response);
@@ -118,7 +124,9 @@ impl DoremiApp {
                             palette,
                             icon,
                             label,
-                            self.model.as_ref().unwrap().page == page,
+                            self.model.as_ref().unwrap().page == page
+                                || (page == Page::Library
+                                    && self.model.as_ref().unwrap().page == Page::Playlist),
                             40.0,
                         );
                         self.record(name, &response);
@@ -131,11 +139,28 @@ impl DoremiApp {
                     ui.add_space(10.0);
                     ui.label(RichText::new("Tu biblioteca").font(theme::bold(15.0)));
                     let rows = self.model.as_ref().unwrap().library.items().to_vec();
+                    let playlists = self.model.as_ref().unwrap().playlists.clone();
                     egui::ScrollArea::vertical()
                         .id_salt("sidebar-library")
                         .show(ui, |ui| {
-                            if rows.is_empty() {
+                            if rows.is_empty() && playlists.lists().is_empty() {
                                 ui.weak("Guarda música para encontrarla aquí.");
+                            }
+                            for list in playlists.lists() {
+                                let model = self.model.as_ref().unwrap();
+                                let response = theme::nav_row(
+                                    ui,
+                                    palette,
+                                    Icon::ListMusic,
+                                    &list.name,
+                                    model.page == Page::Playlist
+                                        && model.selected_playlist == Some(list.id),
+                                    40.0,
+                                );
+                                self.record(&format!("sidebar-playlist:{}", list.id), &response);
+                                if response.clicked() {
+                                    self.open_playlist(list.id);
+                                }
                             }
                             for (index, media) in rows.iter().enumerate() {
                                 let response =
@@ -623,6 +648,7 @@ impl DoremiApp {
                 theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
                 self.record("player-art", &response);
             });
+            columns[1].spacing_mut().item_spacing.y = 4.0;
             columns[1].vertical_centered(|ui| {
                 let mut text = egui::text::LayoutJob::simple(
                     title,
@@ -689,7 +715,11 @@ impl DoremiApp {
             .filter(|item| item.id.provider.as_str() != "musicbrainz")
             .cloned()
             .collect();
-        if let Some(index) = playable.iter().position(|item| item.id == media.id) {
+        if !playable.is_empty() {
+            let index = rows[..index]
+                .iter()
+                .filter(|item| item.id.provider.as_str() != "musicbrainz")
+                .count();
             self.model.as_mut().unwrap().start_context(playable, index);
             self.navigate(Page::Player);
         }
@@ -722,6 +752,9 @@ impl DoremiApp {
                     },
                 );
                 self.record(&format!("select:{}", media.id.local()), &row.body);
+                if self.model.as_ref().unwrap().page == Page::Playlist {
+                    self.record(&format!("playlist-select:{index}"), &row.body);
+                }
                 if row.body.clicked() {
                     self.open_library_entry(rows, index);
                 }
@@ -774,6 +807,9 @@ impl DoremiApp {
                     "Más opciones de la canción",
                 );
                 self.record(&format!("row-more:{}", media.id.local()), &more);
+                if self.model.as_ref().unwrap().page == Page::Playlist {
+                    self.record(&format!("playlist-row-more:{index}"), &more);
+                }
                 egui::Popup::menu(&more).show(|ui| {
                     if media.id.provider.as_str() != "musicbrainz"
                         && self.button(
@@ -811,6 +847,7 @@ impl DoremiApp {
                         self.model.as_mut().unwrap().save_media(media.clone());
                         ui.close();
                     }
+                    self.row_playlist_actions(ui, media, index);
                 });
             });
         }
@@ -834,7 +871,7 @@ fn navigation_icon(page: Page) -> Icon {
     match page {
         Page::Home => Icon::House,
         Page::Search => Icon::Search,
-        Page::Library => Icon::Library,
+        Page::Library | Page::Playlist => Icon::Library,
         Page::Queue => Icon::ListMusic,
         _ => Icon::Settings,
     }

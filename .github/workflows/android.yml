@@ -97,6 +97,8 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo test --locked -p doremi-library --all-targets
+          cargo test --locked -p doremi-commons --all-targets
+          cargo clippy --locked -p doremi-commons --all-targets -- -D warnings
           cargo clippy --locked -p doremi-library --all-targets -- -D warnings
           cargo test --locked -p doremi-musicbrainz --all-targets
           cargo test --locked -p doremi-app --all-targets
@@ -104,6 +106,7 @@ jobs:
           cargo clippy --locked -p doremi-player --features native-output,local-flac,local-mp3 --all-targets -- -D warnings
           cargo clippy --locked -p doremi-app --all-targets -- -D warnings
           cargo build --locked -p doremi-app --bins
+          RUSTDOCFLAGS="-D warnings" cargo doc --locked -p doremi-library -p doremi-commons -p doremi-app --no-deps
       - name: Real X11 navigation, keyboard and queue sequence
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
@@ -153,6 +156,10 @@ jobs:
       - name: Test and build the new Doremi host natively
         shell: pwsh
         run: |
+          cargo test --locked -p doremi-library -p doremi-commons --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo clippy --locked -p doremi-library -p doremi-commons --all-targets -- -D warnings
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-musicbrainz --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-app --all-targets

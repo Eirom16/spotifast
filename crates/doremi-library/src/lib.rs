@@ -2,6 +2,7 @@
 pub mod collection;
 pub mod document_copy;
 pub mod local_files;
+pub mod playlists;
 use doremi_core::{
     media::{Media, MediaId, ProviderId},
     queue::{Queue, Repeat, checkpoint as core},
@@ -200,6 +201,7 @@ struct Write {
     prefs: Option<Vec<u8>>,
     queue: Option<Vec<u8>>,
     library: Option<collection::Collection>,
+    playlists: Option<playlists::Playlists>,
     local_files: Option<local_files::Index>,
     state: Vec<u8>,
 }
@@ -214,6 +216,9 @@ impl Write {
         }
         if newer.library.is_none() {
             newer.library = self.library;
+        }
+        if newer.playlists.is_none() {
+            newer.playlists = self.playlists;
         }
         if newer.local_files.is_none() {
             newer.local_files = self.local_files;
@@ -240,6 +245,7 @@ impl Writer {
             let mut previous = std::collections::BTreeMap::new();
             let mut previous_library: Option<collection::Collection> = None;
             let mut previous_files: Option<local_files::Index> = None;
+            let mut previous_playlists: Option<playlists::Playlists> = None;
             while let Ok(mut write) = receiver.recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     write = write.supersede(newer);
@@ -285,6 +291,24 @@ impl Writer {
                         Err(_) => {
                             failed = true;
                             eprintln!("Doremi library persistence: invalid bounded metadata");
+                        }
+                    }
+                }
+                if let Some(playlists) = write.playlists
+                    && !previous_playlists
+                        .as_ref()
+                        .is_some_and(|previous| playlists.same_snapshot(previous))
+                {
+                    match playlists.encode() {
+                        Ok(bytes)
+                            if atomic_private_document(&directory, "playlists-v1.json", &bytes)
+                                .is_ok() =>
+                        {
+                            previous_playlists = Some(playlists)
+                        }
+                        _ => {
+                            failed = true;
+                            eprintln!("Doremi playlists persistence failed");
                         }
                     }
                 }
@@ -344,6 +368,17 @@ impl Writer {
         local_files: Option<local_files::Index>,
         state: Vec<u8>,
     ) -> Result<usize, SubmitError> {
+        self.submit_user_documents(prefs, queue, library, local_files, None, state)
+    }
+    pub fn submit_user_documents(
+        &self,
+        prefs: Option<Vec<u8>>,
+        queue: Option<Vec<u8>>,
+        library: Option<collection::Collection>,
+        local_files: Option<local_files::Index>,
+        playlists: Option<playlists::Playlists>,
+        state: Vec<u8>,
+    ) -> Result<usize, SubmitError> {
         let id = NEXT_WRITE
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| SubmitError::Closed)?;
@@ -353,6 +388,7 @@ impl Writer {
                 prefs,
                 queue,
                 library,
+                playlists,
                 local_files,
                 state,
             })
@@ -373,11 +409,19 @@ impl Writer {
         let _ = self.worker.join();
     }
 }
-// Private locator paths get exclusively created temporary files. Never truncate
-// an unknown stale temp or follow a temp symlink. Existing documents retain their
-// original writer behavior and compatibility.
+// Locators and own playlists use exclusively created private temporary files.
+// Never truncate an unknown stale temp or follow a temp symlink. The older
+// preferences/library/queue writers retain their existing compatibility.
 fn atomic_locators(directory: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_private_document(directory, "local-files-v1.json", bytes)
+}
+fn atomic_private_document(directory: &Path, name: &str, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write;
+    let stem = match name {
+        "local-files-v1.json" => "local-files-v1",
+        "playlists-v1.json" => "playlists-v1",
+        _ => return Err(std::io::ErrorKind::InvalidInput.into()),
+    };
     static TEMPORARY: AtomicUsize = AtomicUsize::new(1);
     std::fs::create_dir_all(directory)?;
     let mut opened = None;
@@ -385,10 +429,7 @@ fn atomic_locators(directory: &Path, bytes: &[u8]) -> std::io::Result<()> {
         let nonce = TEMPORARY
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| std::io::Error::other("Temporary counter exhausted"))?;
-        let temporary = directory.join(format!(
-            ".local-files-v1-{}-{nonce}.tmp",
-            std::process::id()
-        ));
+        let temporary = directory.join(format!(".{stem}-{}-{nonce}.tmp", std::process::id()));
         let mut options = std::fs::OpenOptions::new();
         options.write(true).create_new(true);
         #[cfg(unix)]
@@ -411,7 +452,7 @@ fn atomic_locators(directory: &Path, bytes: &[u8]) -> std::io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temporary, directory.join("local-files-v1.json"))?;
+        std::fs::rename(&temporary, directory.join(name))?;
         #[cfg(unix)]
         std::fs::File::open(directory)?.sync_all()?;
         Ok(())
@@ -441,7 +482,11 @@ fn atomic_write(directory: &Path, name: &str, bytes: &[u8], durable: bool) -> st
 pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
     if !matches!(
         name,
-        "preferences-v1.json" | "queue-v1.json" | "library-v1.json" | "local-files-v1.json"
+        "preferences-v1.json"
+            | "queue-v1.json"
+            | "library-v1.json"
+            | "local-files-v1.json"
+            | "playlists-v1.json"
     ) {
         return Err(Error::Encoding);
     }
@@ -461,12 +506,67 @@ pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
 mod storage_tests {
     use super::*;
     #[test]
+    fn accepted_playlist_metadata_is_immutable_and_durable_before_acknowledgment() {
+        let directory = directory("playlist-writer");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("playlists-v1.tmp"),
+            b"preserve unknown temporary",
+        )
+        .unwrap();
+        let writer = Writer::new(directory.clone());
+        let mut lists = playlists::Playlists::default();
+        let id = lists.create("Música de café").unwrap();
+        let media = Media {
+            id: MediaId::new(ProviderId::new("commons").unwrap(), "music-id").unwrap(),
+            title: "Piano".into(),
+            duration_ms: Some(239518),
+        };
+        lists.append(id, media.clone()).unwrap();
+        lists.append(id, media.clone()).unwrap();
+        let accepted = lists.clone();
+        let job = writer
+            .submit_user_documents(None, None, None, None, Some(lists.clone()), b"{}".to_vec())
+            .unwrap();
+        lists.append(id, media).unwrap();
+        assert!(!wait(&writer, job));
+        let bytes = read(&directory, "playlists-v1.json").unwrap().unwrap();
+        assert_eq!(playlists::Playlists::decode(&bytes).unwrap(), accepted);
+        let diagnostics = writer
+            .submit(None, None, b"{\"state\":2}".to_vec())
+            .unwrap();
+        assert!(!wait(&writer, diagnostics));
+        assert_eq!(
+            read(&directory, "playlists-v1.json").unwrap().unwrap(),
+            bytes
+        );
+        writer.shutdown();
+        assert_eq!(
+            std::fs::read(directory.join("playlists-v1.tmp")).unwrap(),
+            b"preserve unknown temporary"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(directory.join("playlists-v1.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
     fn newer_diagnostics_cannot_discard_an_accepted_queue_save() {
         let save = Write {
             id: 1,
             prefs: Some(vec![1]),
             queue: Some(vec![2]),
             library: Some(collection::Collection::default()),
+            playlists: Some(playlists::Playlists::default()),
             local_files: Some(local_files::Index::default()),
             state: vec![3],
         };
@@ -475,6 +575,7 @@ mod storage_tests {
             prefs: None,
             queue: None,
             library: None,
+            playlists: None,
             local_files: None,
             state: vec![4],
         };
@@ -483,6 +584,7 @@ mod storage_tests {
         assert_eq!(merged.prefs, Some(vec![1]));
         assert_eq!(merged.queue, Some(vec![2]));
         assert!(merged.library.is_some());
+        assert!(merged.playlists.is_some());
         assert!(merged.local_files.is_some());
         assert_eq!(merged.state, vec![4]);
         let update = Write {
@@ -490,6 +592,7 @@ mod storage_tests {
             prefs: Some(vec![5]),
             queue: Some(vec![6]),
             library: None,
+            playlists: None,
             local_files: None,
             state: vec![7],
         };
@@ -497,6 +600,7 @@ mod storage_tests {
         assert_eq!(merged.prefs, Some(vec![5]));
         assert_eq!(merged.queue, Some(vec![6]));
         assert!(merged.library.is_some());
+        assert!(merged.playlists.is_some());
         assert!(merged.local_files.is_some());
     }
     fn directory(name: &str) -> PathBuf {
@@ -647,13 +751,31 @@ mod storage_tests {
                 directory.join("original.wav"),
             )
             .unwrap();
+        std::fs::write(
+            directory.join("playlists-v1.json"),
+            b"preserve previous playlists",
+        )
+        .unwrap();
+        let mut playlists = playlists::Playlists::default();
+        let list = playlists.create("Original").unwrap();
+        playlists
+            .append(
+                list,
+                Media {
+                    id: local_files::media_id("00000000000000000000000000000001").unwrap(),
+                    title: "Original".into(),
+                    duration_ms: None,
+                },
+            )
+            .unwrap();
         let writer = Writer::new(directory.clone());
         let id = writer
-            .submit_documents(
+            .submit_user_documents(
                 None,
                 Some(b"new queue".to_vec()),
                 Some(collection::Collection::default()),
                 Some(files),
+                Some(playlists),
                 b"{}".to_vec(),
             )
             .unwrap();
@@ -664,6 +786,10 @@ mod storage_tests {
             b"preserve previous library"
         );
         assert!(!directory.join("queue-v1.json").exists());
+        assert_eq!(
+            std::fs::read(directory.join("playlists-v1.json")).unwrap(),
+            b"preserve previous playlists"
+        );
         assert!(directory.join("local-files-v1.json").is_dir());
         std::fs::remove_dir_all(directory).unwrap();
     }

@@ -87,7 +87,7 @@ impl Collection {
         Ok(collection)
     }
 }
-fn validate(media: &Media) -> Result<(), Error> {
+pub(crate) fn validate(media: &Media) -> Result<(), Error> {
     // Even JSON's worst-case quote/backslash escaping stays below MAX_BYTES
     // at ITEM_LIMIT. Reject control characters rather than expanding them 6x.
     if media.id.provider.as_str().len() > 64
@@ -112,7 +112,7 @@ struct Document {
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Record {
+pub(crate) struct Record {
     provider: String,
     id: String,
     title: String,

@@ -31,12 +31,13 @@ public final class MainActivity extends Activity {
     private static native boolean nativeInit(String directory,Context application,long inputGeneration);
     private static native String nativeDraw(int width,int height,float scale);
     private static native void nativeTouch(int action,float x,float y);
-    private static native void nativeText(String text,long generation);
+    private static native void nativeText(String text,String field,long generation);
     private static native void nativeDestroy();
     private static native void nativeFocus(boolean granted);
     private static native void nativeBack();
     private volatile boolean canGoBack=false;
     private String nativeDirectory;
+    private String inputTarget="search";
     private static native void nativeDocument(long generation,String uri);
     private static final int OPEN_WAV=403;
     private long fileRequest=0;
@@ -208,7 +209,7 @@ public final class MainActivity extends Activity {
             public void beforeTextChanged(CharSequence s,int start,int count,int after) {}
             public void onTextChanged(CharSequence s,int start,int before,int count) {}
             public void afterTextChanged(Editable text) {
-                if(!updatingInput) { String value=text.toString(); long generation=++inputGeneration; surface.queueEvent(() -> nativeText(value,generation)); surface.requestRender(); }
+                if(!updatingInput) { String value=text.toString(),target=inputTarget; long generation=++inputGeneration; surface.queueEvent(() -> nativeText(value,target,generation)); surface.requestRender(); }
             }
         });
         root.addView(input,new FrameLayout.LayoutParams(1,1));
@@ -268,7 +269,8 @@ public final class MainActivity extends Activity {
                 boolean back=data.optBoolean("can_go_back");
                 boolean needsFocus=data.optBoolean("needs_focus");
                 boolean loadingAudio=data.optBoolean("loading_audio");
-                String query=data.optString("query");
+                String query=data.optString("editor_text");
+                String target=data.optString("editor_target","search");
                 long delay=data.optLong("next_ms",10000);
                 long acknowledgedGeneration=data.optLong("input_generation",0);
                 runOnUiThread(() -> {
@@ -276,6 +278,7 @@ public final class MainActivity extends Activity {
                     canGoBack=back;
                     requestDocument(requestedDocument);
                     updateFocus(needsFocus,loadingAudio);
+                    inputTarget=target;
                     updatingInput=true;
                     if(acknowledgedGeneration==inputGeneration && !input.getText().toString().equals(query)) { input.setText(query); input.setSelection(input.length()); }
                     updatingInput=false;

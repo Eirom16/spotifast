@@ -139,7 +139,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private boolean fixedControl(JSONObject data,String name) {
         if(java.util.Arrays.asList("home","search","library","queue","settings").contains(name)) return true;
-        if(name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:")) return true;
+        if(name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:") || name.startsWith("playlist-add:") || name.startsWith("playlist-choose:") || name.startsWith("playlist-up:") || name.startsWith("playlist-down:") || name.startsWith("playlist-remove:")) return true;
         if(data.optJSONArray("viewport").optDouble(0)>=760) return java.util.Arrays.asList("play","pause","next","previous","stop","repeat","shuffle","seek","volume","player").contains(name);
         return !"Player".equals(data.optString("page")) && java.util.Arrays.asList("play","pause","next","player").contains(name);
     }
@@ -158,11 +158,30 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) || rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1)) throw new AssertionError("Control outside Doremi viewport: "+name);
         return rect;
     }
+    private JSONArray stableRect(String name) throws Exception {
+        JSONArray previous=visibleRect(name);
+        for(int sample=0;sample<10;sample++) {
+            SystemClock.sleep(150);JSONArray current=visibleRect(name);
+            boolean stable=true;
+            for(int coordinate=0;coordinate<4;coordinate++) if(Math.abs(current.getDouble(coordinate)-previous.getDouble(coordinate))>0.25) stable=false;
+            if(stable) return current;
+            previous=current;
+        }
+        throw new AssertionError("Control did not settle before input: "+name);
+    }
     private void tap(String name) throws Exception { tap(name,500); }
     private void tap(String name,long settle) throws Exception {
         lastAction="tap:"+name;
         foreground();
         JSONObject data=state();JSONArray rect=controlRect(data,name);
+        if(rect==null && name.startsWith("playlist-add:")) {
+            String id=name.substring(name.indexOf(':',name.indexOf(':')+1)+1);
+            if(!hasControl(data,"playlist-choose:"+id)) tap("row-more:"+id);
+            tap("playlist-choose:"+id);data=state();rect=controlRect(data,name);
+        }
+        if(rect==null && (name.startsWith("playlist-up:") || name.startsWith("playlist-down:") || name.startsWith("playlist-remove:"))) {
+            tap("playlist-row-more:"+name.substring(name.indexOf(':')+1));data=state();rect=controlRect(data,name);
+        }
         if(rect==null && "Home".equals(data.optString("page")) && (name.startsWith("add:") || name.startsWith("select:") || name.startsWith("save:") || name.equals("local-audio") || name.equals("long-audio"))) {
             tap("demo-examples");data=state();rect=controlRect(data,name);
         }
@@ -170,7 +189,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             tap("row-more:"+name.substring(name.indexOf(':')+1));data=state();rect=controlRect(data,name);
         }
         if(rect==null && java.util.Arrays.asList("previous","stop","repeat","shuffle","seek","volume").contains(name) && data.optJSONArray("viewport").optDouble(0)<760) { openPlayer(); }
-        rect=visibleRect(name);data=state();
+        rect=stableRect(name);data=state();
         lastAction="tap:"+name;
         final int[] origin=new int[2];
         runOnMainSync(() -> surface(activity.getWindow().getDecorView()).getLocationOnScreen(origin));
@@ -610,6 +629,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         return null;
     }
     private void text(String text,boolean burst) throws Exception {
+        editorText(text,burst,"search");until(s -> text.equals(s.optString("query")));
+    }
+    private void editorText(String text,boolean burst,String field) throws Exception {
+        until(s -> field.equals(s.optString("editor_target")));
         final boolean[] committed={false};
         runOnMainSync(() -> {
             InputConnection input=connection(activity.getWindow().getDecorView());
@@ -621,9 +644,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             }
         });
         if(!committed[0]) throw new AssertionError("Android InputConnection unavailable");
-        until(s -> text.equals(s.optString("query")));
+        until(s -> field.equals(s.optString("editor_target")) && text.equals(s.optString("editor_text")));
         SystemClock.sleep(500);
-        if(!text.equals(state().getString("query"))) throw new AssertionError("A late frame undid text input");
+        if(!text.equals(state().getString("editor_text"))) throw new AssertionError("A late frame undid text input");
     }
     private void musicUi() throws Exception {
         if(hasControl(state(),"player") || hasControl(state(),"play") || !state().isNull("current")) throw new AssertionError("Fresh browsing screen must not show an empty mini-player");
@@ -634,7 +657,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("search");tap("source-commons");tap("query");text("Chopin",true);
         capture("qa-mobile-ime");hideKeyboard();
         until(20000,"selected CC0 music result",s -> hasControl(s,"select:26896924") && "Ready".equals(s.optJSONObject("online").optString("search_status")));
-        tap("save:26896924");tap("save-again:26896924");
+        tap("save:26896924");until(s -> savedCount(s,"26896924")==1);tap("save-again:26896924");
         until(s -> savedCount(s,"26896924")==1);capture("qa-mobile-results-dark");
         tap("settings");tap("light");tap("search");capture("qa-mobile-results-light");
         tap("settings");tap("dark");tap("search");tap("select:26896924",0);
@@ -671,6 +694,39 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));
         Files.write(new File(profileDirectory(),"qa-mobile-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    private void playlistUi() throws Exception {
+        tap("library");tap("playlist-name");editorText("Café nocturno",false,"playlist-name");hideKeyboard();tap("playlist-create");
+        until(s -> "Playlist".equals(s.optString("page")) && s.optJSONArray("playlists").length()==1);
+        long id=state().getJSONArray("playlists").getJSONObject(0).getLong("id");capture("qa-playlist-empty");
+        tap("library");
+        long occurrence=state().getLong("current_occurrence");String context=state().getJSONArray("context_occurrences").toString();
+        tap("playlist-add:"+id+":26896924");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==1);
+        tap("playlist-add:"+id+":26896924");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==2);
+        if(state().getLong("current_occurrence")!=occurrence || !context.equals(state().getJSONArray("context_occurrences").toString())) throw new AssertionError("Adding to a playlist changed the queue");
+        tap("playlist-open:"+id);tap("playlist-select:1");
+        JSONObject playing=until(25000,"playlist music at the selected duplicate",s -> onlinePlaying(s,"26896924") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+        if(playing.getLong("current_occurrence")!=playing.getJSONArray("context_occurrences").getLong(1)) throw new AssertionError("Selected duplicate opened the first occurrence");
+        capture("qa-playlist-playing");tap("pause");until(s -> "Paused".equals(s.optString("playback")));
+        tap("library");tap("playlist-open:"+id);
+        occurrence=state().getLong("current_occurrence");context=state().getJSONArray("context_occurrences").toString();
+        tap("playlist-up:1");tap("playlist-remove:0");until(s -> s.optJSONArray("playlists").optJSONObject(0).optJSONArray("entries").length()==1);
+        tap("playlist-edit");tap("playlist-rename");editorText("Café · lectura",false,"playlist-rename");hideKeyboard();tap("playlist-rename-save");
+        until(s -> "Café · lectura".equals(s.optJSONArray("playlists").optJSONObject(0).optString("name")));
+        if(!"Chopin".equals(state().getString("query"))) throw new AssertionError("Playlist input changed the catalog query");
+        tap("playlist-delete");tap("playlist-delete-cancel");
+        if(state().getJSONArray("playlists").length()!=1) throw new AssertionError("Cancelling deletion removed the playlist");
+        if(state().getLong("current_occurrence")!=occurrence || !context.equals(state().getJSONArray("context_occurrences").toString())) throw new AssertionError("Editing a playlist changed the queue");
+        capture("qa-playlist-edited-dark");tap("settings");tap("light");tap("library");tap("playlist-open:"+id);capture("qa-playlist-edited-light");
+        tap("settings");tap("dark");tap("library");tap("playlist-open:"+id);
+        until(s -> privatePlaylistSaved(id));
+        Files.write(new File(profileDirectory(),"qa-playlist-checks.json").toPath(),new JSONObject().put("result","pass").put("id",id).put("duplicate_selection",true).put("queue_preserved",true).put("unicode_ime",true).put("durable",true).put("deletion_cancelled",true).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private boolean privatePlaylistSaved(long id) {
+        try {
+            JSONObject list=privateDocument("playlists-v1.json").getJSONArray("lists").getJSONObject(0);
+            return list.getLong("id")==id && "Café · lectura".equals(list.getString("name")) && list.getJSONArray("entries").length()==1;
+        } catch(Exception error) {return false;}
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -681,8 +737,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
-            if("music-ui".equals(mode)) {
-                musicUi();result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
+            if("music-ui".equals(mode) || "music-playlists".equals(mode)) {
+                musicUi();
+                if("music-playlists".equals(mode)) playlistUi();result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
             }
             if("document-import".equals(mode) || "document-restore".equals(mode)) {
                 documentImport("document-restore".equals(mode));

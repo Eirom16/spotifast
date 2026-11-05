@@ -145,7 +145,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "editor_target":renderer.app.editor.key(), "editor_text":renderer.app.editor_text(), "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -198,23 +198,24 @@ pub extern "system" fn native_text(
     mut env: JNIEnv<'_>,
     _: JClass<'_>,
     text: JString<'_>,
+    field: JString<'_>,
     generation: jlong,
 ) {
     let Ok(text) = env.get_string(&text) else {
         return;
     };
     let text = String::from(text);
+    let Ok(field) = env.get_string(&field) else {
+        return;
+    };
+    let field = String::from(field);
     RENDERER.with(|cell| {
         if let Some(renderer) = cell.borrow_mut().as_mut() {
             if generation < renderer.text_generation {
                 return;
             }
             renderer.text_generation = generation;
-            let model = renderer.app.model.as_mut().unwrap();
-            if model.query != text {
-                model.query = text.chars().take(128).collect();
-                model.search();
-            }
+            renderer.app.receive_editor_text(&field, &text);
         }
     });
 }

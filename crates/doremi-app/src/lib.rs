@@ -19,6 +19,7 @@ use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
 mod local_media;
+mod playlists;
 mod presentation;
 mod saved;
 #[cfg(not(target_os = "android"))]
@@ -112,6 +113,7 @@ enum Page {
     Queue,
     Settings,
     Player,
+    Playlist,
 }
 
 struct Model {
@@ -127,6 +129,13 @@ struct Model {
     write_queue: bool,
     library: persistence::collection::Collection,
     write_library: bool,
+    playlists: persistence::playlists::Playlists,
+    write_playlists: bool,
+    selected_playlist: Option<u64>,
+    playlist_name: String,
+    playlist_edit_name: String,
+    playlist_delete_confirmation: bool,
+    playlist_notice: Option<String>,
     storage_warning: Option<&'static str>,
     audio: Option<Engine>,
     focus: bool,
@@ -198,6 +207,13 @@ impl Model {
             write_queue: true,
             library,
             write_library,
+            playlists: persistence::playlists::Playlists::default(),
+            write_playlists: true,
+            selected_playlist: None,
+            playlist_name: String::new(),
+            playlist_edit_name: String::new(),
+            playlist_delete_confirmation: false,
+            playlist_notice: None,
             storage_warning: None,
             audio: None,
             focus: !cfg!(target_os = "android"),
@@ -246,6 +262,7 @@ impl Model {
             model.music.selected = true;
         }
         model.load_library(directory);
+        model.load_playlists(directory);
         model.load_local_files(directory);
         match persistence::read(directory, "queue-v1.json") {
             Ok(Some(bytes)) => match persistence::decode(&bytes).and_then(|checkpoint| {
@@ -664,8 +681,24 @@ impl StorageError {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TextField {
+    Search,
+    PlaylistName,
+    PlaylistRename,
+}
+impl TextField {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::PlaylistName => "playlist-name",
+            Self::PlaylistRename => "playlist-rename",
+        }
+    }
+}
 pub struct DoremiApp {
     instance: usize,
+    editor: TextField,
     model: Option<Model>,
     writer: Option<persistence::Writer>,
     pending_write: usize,
@@ -699,6 +732,7 @@ impl DoremiApp {
         doremi_ui::install(ctx);
         Self {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            editor: TextField::Search,
             model: Some(model),
             writer: Some(writer),
             pending_write: 0,
@@ -766,12 +800,16 @@ impl DoremiApp {
         let state = serde_json::json!({
             "input":ctx.input(|input|serde_json::json!({"focused":input.raw.focused,"primary_down":input.pointer.primary_down(),"position":input.pointer.hover_pos().map(|point|[point.x,point.y])})),
             "local_import":model.local_files.snapshot(),"notice":model.notice,
+            "editor_target":self.editor.key(),"editor_text":self.editor_text(),
+            "playlists":model.playlists.lists().iter().map(|list| serde_json::json!({"id":list.id,"name":list.name,"entries":list.entries.iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
+            "selected_playlist":model.selected_playlist,
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "player_return":model.player_return, "query": model.query,
             "revision": model.revision, "green": model.prefs.green, "light": model.prefs.light,
             "current": model.queue.current().map(|e| e.media.id.local()),
             "current_provider":model.queue.current().map(|e|e.media.id.provider.as_str()),"online":model.source_diagnostics(),
             "music_catalog":music_catalog,
             "current_occurrence": model.queue.current().map(|e|e.id.as_u64()),
+            "context_occurrences":model.queue.context().iter().map(|e|e.id.as_u64()).collect::<Vec<_>>(),
             "manual_occurrences": model.queue.manual().iter().map(|e|e.id.as_u64()).collect::<Vec<_>>(),
             "position_ms":model.queue.position_ms(),
             "manual": model.queue.manual().iter().map(|e| e.media.id.local()).collect::<Vec<_>>(),
@@ -808,12 +846,13 @@ impl DoremiApp {
         let prefs = model
             .write_prefs
             .then(|| serde_json::to_vec(&model.prefs).unwrap());
-        match self.writer.as_ref().unwrap().submit_documents(
+        match self.writer.as_ref().unwrap().submit_user_documents(
             prefs,
             queue,
             model.write_library.then(|| model.library.clone()),
             (model.local_files.writable && !model.local_files.index.is_empty())
                 .then(|| model.local_files.index.clone()),
+            model.write_playlists.then(|| model.playlists.clone()),
             state.clone(),
         ) {
             Ok(id) => {
@@ -1002,24 +1041,13 @@ impl DoremiApp {
                         response.rect.max.y,
                     ],
                 });
+                if response.has_focus() {
+                    self.editor = TextField::Search;
+                }
                 if response.changed() {
                     self.model.as_mut().unwrap().search();
                 }
-                if ui.ctx().content_rect().width() < 760.0 {
-                    let height = ui.ctx().content_rect().height();
-                    let resized = ui.ctx().data_mut(|data| {
-                        let id = egui::Id::new("search-viewport-height");
-                        let previous = data.get_temp::<f32>(id);
-                        data.insert_temp(id, height);
-                        previous.is_some_and(|previous| height < previous)
-                    });
-                    if response.gained_focus()
-                        || response.changed()
-                        || (resized && response.has_focus())
-                    {
-                        response.scroll_to_me(Some(egui::Align::Center));
-                    }
-                }
+                Self::follow_editor(ui, &response);
                 if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
                     self.model.as_mut().unwrap().cancel_search();
                 }
@@ -1051,10 +1079,14 @@ impl DoremiApp {
             Page::Library => {
                 ui.heading("Biblioteca");
                 let library = self.model.as_ref().unwrap().library.clone();
-                ui.label("Favoritos de este dispositivo. Guardar no descarga el audio online.");
+                ui.label("Tus playlists y canciones guardadas en este dispositivo.");
                 if !self.model.as_ref().unwrap().write_library {
                     ui.small("Solo lectura: el archivo anterior se conserva.");
                 }
+                ui.add_space(8.0);
+                self.playlist_library(ui);
+                ui.add_space(16.0);
+                ui.heading("Canciones guardadas");
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 {
                     if self.model.as_ref().unwrap().local_files.pending() {
@@ -1091,6 +1123,7 @@ impl DoremiApp {
                 }
                 self.rows(ui, library.items());
             }
+            Page::Playlist => self.playlist_page(ui),
             Page::Queue => {
                 ui.heading("Cola");
                 if self.button(ui, "clear", "Vaciar cola manual", 210.0) {
@@ -1341,6 +1374,48 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn editor_targets_fence_late_text_and_duplicate_playlist_selection_keeps_its_offset() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/playlist-editor-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.navigate(Page::Library);
+        app.editor = TextField::PlaylistName;
+        app.receive_editor_text("search", "must not search");
+        assert!(app.model.as_ref().unwrap().query.is_empty());
+        app.receive_editor_text("playlist-name", "Café · 音楽");
+        assert_eq!(app.model.as_ref().unwrap().playlist_name, "Café · 音楽");
+        app.navigate(Page::Search);
+        app.receive_editor_text("playlist-name", "stale edit");
+        assert_eq!(app.model.as_ref().unwrap().playlist_name, "Café · 音楽");
+        let media = songs()[0].clone();
+        let metadata = Media {
+            id: MediaId::new(
+                ProviderId::new("musicbrainz").unwrap(),
+                "recording:00000000-0000-4000-8000-000000000001",
+            )
+            .unwrap(),
+            title: "Metadata only".into(),
+            duration_ms: None,
+        };
+        app.open_library_entry(&[media.clone(), metadata, media], 2);
+        assert_eq!(
+            app.model.as_ref().unwrap().queue.checkpoint().cursor,
+            Some(1)
+        );
+        assert_eq!(app.model.as_ref().unwrap().queue.context().len(), 2);
+        assert_eq!(
+            app.model.as_ref().unwrap().queue.context()[0].media.id,
+            app.model.as_ref().unwrap().queue.context()[1].media.id
+        );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn mobile_player_is_conditional_and_keeps_full_controls_reachable() {
         let _guard = UI_TEST_LOCK.lock().unwrap();
