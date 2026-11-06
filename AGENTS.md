@@ -63,3 +63,22 @@ Doremi. Las automatizaciones originales se conservan desactivadas en
 `.github/legacy-workflows/`. No las reactives sin revisar destinos, permisos,
 secretos y gates. Lee `F0-REPORT.md` antes de migrar identidad persistida,
 actualizaciones o empaquetado.
+
+## Infraestructura de agentes (OpenCode y Codex)
+
+- Subagentes OpenCode en `.opencode/agents/`: `doremi-ui`, `doremi-audio`,
+  `doremi-android`, `doremi-qa`. Máximo dos subagentes concurrentes; cada uno
+  edita solo su ámbito del árbol (los demás recursos los rechaza).
+- Skills en `.agents/skills/` (las leen OpenCode y Codex): `doremi-ui`,
+  `doremi-streaming`, `doremi-android`, `doremi-testing`, `doremi-release`.
+- Equivalente Codex: agentes en `.codex/agents/*.toml` (mismos cuatro roles,
+  nombres `doremi_ui`/`doremi_audio`/`doremi_android`/`doremi_qa`), tope de
+  dos subagentes concurrentes en `.codex/config.toml` y reglas de ejecución
+  en `.codex/rules/doremi.rules`. Verifica reglas con
+  `codex execpolicy check --rules .codex/rules/doremi.rules -- <comando>`.
+- `opencode.jsonc` pide confirmación para `git push`, reescribir historia,
+  `cargo clean` y `gh release create`; `cargo publish` está denegado.
+- GitHub se usa con `gh` CLI (ya autenticado); no duplicar con MCP de GitHub.
+- Builds completos y APK: solo CI; en local, circuito ligero y tests por
+  crate (`-p`). yt-dlp/ffmpeg/adb están instalados para los subagentes de
+  streaming y Android.

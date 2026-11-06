@@ -2,8 +2,8 @@ name: Doremi bounded provider experiment
 
 on:
   push:
-    branches: ["feature/doremi-android-real"]
-    paths: ["tools/provider-live-probe/**", "crates/doremi-core/**", "crates/doremi-player/**", "crates/doremi-commons/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
+    branches: ["feature/doremi-android-real", "feature/doremi-product-ui"]
+    paths: ["tools/provider-live-probe/**", "tools/provider-harness/**", "crates/doremi-core/**", "crates/doremi-player/**", "crates/doremi-commons/**", "Cargo.toml", "Cargo.lock", ".github/workflows/provider-probe.yml"]
   workflow_dispatch:
 
 permissions:

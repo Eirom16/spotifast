@@ -1,0 +1,7 @@
+# Config de proyecto Doremi para Codex.
+# Codex la carga solo si el repo es confiable (~/.codex/config.toml ya lo marca así).
+# No definir aquí claves de proveedor/telemetría: la capa de proyecto las ignora.
+
+[agents]
+# Presupuesto de Doremi: máximo dos subagentes concurrentes por sesión.
+max_concurrent_threads_per_session = 2

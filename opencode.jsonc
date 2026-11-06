@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "permissions": [
+    { "action": "shell", "resource": "git push*", "effect": "ask" },
+    { "action": "shell", "resource": "git reset --hard*", "effect": "ask" },
+    { "action": "shell", "resource": "git clean*", "effect": "ask" },
+    { "action": "shell", "resource": "cargo clean*", "effect": "ask" },
+    { "action": "shell", "resource": "cargo publish*", "effect": "deny" },
+    { "action": "shell", "resource": "gh release create*", "effect": "ask" }
+  ]
+}

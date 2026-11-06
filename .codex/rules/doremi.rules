@@ -1,0 +1,52 @@
+# Reglas de ejecución de Doremi para Codex (Starlark, solo lectura de estado).
+# Complementan AGENTS.md: no rebajarlas sin decisión explícita de alcance.
+# Verificación: codex execpolicy check --rules .codex/rules/doremi.rules -- <cmd>
+
+prefix_rule(
+    pattern = ["git", "push"],
+    decision = "prompt",
+    justification = "Doremi: no hacer push ni publicar en Eirom16/spotifast sin autorización explícita del mantenedor.",
+    match = ["git push origin feature/doremi-product-ui"],
+    not_match = ["git status", "git fetch origin"],
+)
+
+prefix_rule(
+    pattern = ["git", "reset", "--hard"],
+    decision = "prompt",
+    justification = "Doremi: reescribir historia sin autorización está prohibido; usar git checkout o stash para recuperar.",
+    match = ["git reset --hard HEAD~1"],
+    not_match = ["git reset", "git restore src/app.rs"],
+)
+
+prefix_rule(
+    pattern = ["git", "clean"],
+    decision = "prompt",
+    justification = "Doremi: no borrar trabajo sin versión ni configuración del repo (.agents/, .codex/, .opencode/) de forma irreversible.",
+    match = ["git clean -fd", "git clean -fdx"],
+    not_match = ["git status", "git describe --tags"],
+)
+
+prefix_rule(
+    pattern = ["cargo", "clean"],
+    decision = "prompt",
+    justification = "Doremi: no eliminar target/ del worktree por espacio; los builds del propio worktree son el contexto incremental.",
+    match = ["cargo clean"],
+    not_match = ["cargo check", "cargo test --locked -p doremi-core"],
+)
+
+prefix_rule(
+    pattern = ["cargo", "publish"],
+    decision = "forbidden",
+    justification = "Doremi: F0 no publica paquetes ni releases; el upstream crmne/spotifast no puede recibir cambios.",
+    match = ["cargo publish --dry-run"],
+    not_match = ["cargo build --locked", "cargo publish-dry-run --help"],
+)
+
+prefix_rule(
+    pattern = ["gh", "release", "create"],
+    decision = "prompt",
+    justification = "Doremi: una release exige verificaciones del mismo commit/versión, checksums y licencias; pedir autorización (F0 no publica).",
+    match = ["gh release create v0.14.2 --draft",
+             "gh release create v0.14.2 --notes-file target/notes.md"],
+    not_match = ["gh release view v0.14.2", "gh run list --limit 3"],
+)
