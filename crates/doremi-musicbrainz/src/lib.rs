@@ -3,7 +3,7 @@
 pub mod cover_art;
 use doremi_core::{
     catalog::ProviderError as Error,
-    media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId},
+    media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId, ReleaseEdition},
 };
 use reqwest::{Client as HttpClient, redirect::Policy};
 use serde_json::Value;
@@ -40,6 +40,10 @@ pub enum Request {
         offset: u32,
     },
     ArtistRecordings {
+        id: MediaId,
+        offset: u32,
+    },
+    ArtistReleases {
         id: MediaId,
         offset: u32,
     },
@@ -225,8 +229,10 @@ fn parameters(request: &Request) -> Result<(String, Vec<(String, String)>), Erro
             ]);
             endpoint(*kind).to_string()
         }
-        Request::ArtistRecordings { id, offset } => {
-            if *offset > MAX_OFFSET || *offset % PAGE_SIZE as u32 != 0 {
+        Request::ArtistRecordings { id, offset } | Request::ArtistReleases { id, offset } => {
+            // Browse pages can be shorter than the requested limit (especially
+            // releases). Continue at the number actually returned by the API.
+            if *offset > MAX_OFFSET {
                 return Err(Error::InvalidRequest);
             }
             params.extend([
@@ -235,7 +241,11 @@ fn parameters(request: &Request) -> Result<(String, Vec<(String, String)>), Erro
                 ("limit".into(), PAGE_SIZE.to_string()),
                 ("offset".into(), offset.to_string()),
             ]);
-            "recording".into()
+            if matches!(request, Request::ArtistReleases { .. }) {
+                "release".into()
+            } else {
+                "recording".into()
+            }
         }
         Request::ReleaseTracks { id } => {
             params.push(("inc".into(), "recordings+artist-credits".into()));
@@ -284,6 +294,24 @@ fn entry(value: &Value, kind: EntityKind) -> Result<CatalogEntry, Error> {
     } else {
         None
     };
+    let edition = if kind == EntityKind::Release {
+        let optional = |name| {
+            if value[name].is_null() || value[name].as_str().is_some_and(|s| s.trim().is_empty()) {
+                Ok(None)
+            } else {
+                text(value, name).map(Some)
+            }
+        };
+        let edition = ReleaseEdition {
+            date: optional("date")?,
+            country: optional("country")?,
+            description: optional("disambiguation")?,
+        };
+        (edition.date.is_some() || edition.country.is_some() || edition.description.is_some())
+            .then_some(edition)
+    } else {
+        None
+    };
     Ok(CatalogEntry {
         media: Media {
             id,
@@ -292,6 +320,7 @@ fn entry(value: &Value, kind: EntityKind) -> Result<CatalogEntry, Error> {
         },
         kind,
         artists,
+        edition,
     })
 }
 
@@ -330,6 +359,7 @@ pub fn parse(request: &Request, bytes: &[u8]) -> Result<Page, Error> {
         Request::ArtistRecordings { offset, .. } => {
             (EntityKind::Recording, *offset, "recording-count")
         }
+        Request::ArtistReleases { offset, .. } => (EntityKind::Release, *offset, "release-count"),
         _ => unreachable!(),
     };
     let key = format!("{}s", endpoint(kind));
@@ -345,7 +375,7 @@ pub fn parse(request: &Request, bytes: &[u8]) -> Result<Page, Error> {
     Ok(Page {
         more: !items.is_empty()
             && u64::from(offset) + (items.len() as u64) < total
-            && offset < MAX_OFFSET,
+            && u64::from(offset) + (items.len() as u64) <= u64::from(MAX_OFFSET),
         items,
         offset,
     })
@@ -424,5 +454,51 @@ mod tests {
         );
         assert_eq!(page.items[0].media.duration_ms, Some(1234));
         assert!(!page.more);
+    }
+    #[test]
+    fn artist_releases_keep_edition_ids_and_continue_after_short_pages() {
+        let request = Request::ArtistReleases {
+            id: identity(EntityKind::Artist, ID).unwrap(),
+            offset: 3,
+        };
+        let (path, params) = parameters(&request).unwrap();
+        assert_eq!(path, "release");
+        assert!(params.contains(&("artist".into(), ID.into())));
+        assert!(params.contains(&("offset".into(), "3".into())));
+        let bytes = format!(
+            r#"{{"release-count":30,"releases":[{{"id":"{ID}","title":"An edition","date":"1990-10","country":"US","disambiguation":"12-inch edition","artist-credit":[{{"name":"An artist","artist":{{"id":"{ID}"}}}}]}}]}}"#
+        );
+        let page = parse(&request, bytes.as_bytes()).unwrap();
+        assert_eq!(page.offset, 3);
+        assert!(page.more);
+        assert_eq!(page.items[0].kind, EntityKind::Release);
+        assert_eq!(
+            page.items[0].media.id,
+            identity(EntityKind::Release, ID).unwrap()
+        );
+        assert_eq!(
+            page.items[0].artists[0].id,
+            identity(EntityKind::Artist, ID).unwrap()
+        );
+        assert_eq!(page.items[0].media.duration_ms, None);
+        assert_eq!(
+            page.items[0].edition,
+            Some(ReleaseEdition {
+                date: Some("1990-10".into()),
+                country: Some("US".into()),
+                description: Some("12-inch edition".into()),
+            })
+        );
+        let empty = parse(&request, br#"{"release-count":3,"releases":[]}"#).unwrap();
+        assert!(empty.items.is_empty() && !empty.more);
+        for (id, offset) in [
+            (identity(EntityKind::Recording, ID).unwrap(), 0),
+            (identity(EntityKind::Artist, ID).unwrap(), MAX_OFFSET + 1),
+        ] {
+            assert_eq!(
+                parameters(&Request::ArtistReleases { id, offset }),
+                Err(Error::InvalidRequest)
+            );
+        }
     }
 }

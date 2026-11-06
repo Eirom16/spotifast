@@ -9,7 +9,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
 type Completion = (u64, Result<Arc<Results>, ProviderError>);
-type HistoryEntry = (Option<CatalogEntry>, Option<Arc<Results>>, Option<Request>);
+type HistoryEntry = (
+    Option<CatalogEntry>,
+    Option<Arc<Results>>,
+    Option<Request>,
+    Vec<u32>,
+);
 struct Job {
     generation: u64,
     request: Option<Request>,
@@ -99,6 +104,7 @@ pub(super) struct State {
     request: Option<Request>,
     retry_at: Option<Instant>,
     history: Vec<HistoryEntry>,
+    previous_offsets: Vec<u32>,
     generation: u64,
     pending: Option<(Option<Request>, Instant)>,
     worker: Option<Worker>,
@@ -115,6 +121,7 @@ impl State {
             request: None,
             retry_at: None,
             history: vec![],
+            previous_offsets: vec![],
             generation: 0,
             pending: None,
             worker: None,
@@ -137,6 +144,7 @@ impl State {
         self.page = None;
         self.detail = None;
         self.history.clear();
+        self.previous_offsets.clear();
         self.dispatch(
             (!query.trim().is_empty()).then(|| Request::Search {
                 query: query.into(),
@@ -150,6 +158,7 @@ impl State {
         self.page = None;
         self.detail = None;
         self.history.clear();
+        self.previous_offsets.clear();
         self.dispatch(None, Duration::ZERO);
     }
     pub fn suspend(&mut self) {
@@ -167,8 +176,12 @@ impl State {
         if self.history.len() == 8 {
             self.history.remove(0);
         }
-        self.history
-            .push((self.detail.take(), self.page.clone(), self.request.clone()));
+        self.history.push((
+            self.detail.take(),
+            self.page.clone(),
+            self.request.clone(),
+            std::mem::take(&mut self.previous_offsets),
+        ));
         let request = match entry.kind {
             EntityKind::Recording => None,
             EntityKind::Artist => Some(Request::ArtistRecordings {
@@ -184,10 +197,11 @@ impl State {
         self.page = None;
     }
     pub fn back(&mut self) {
-        if let Some((detail, page, request)) = self.history.pop() {
+        if let Some((detail, page, request, previous_offsets)) = self.history.pop() {
             self.dispatch(None, Duration::ZERO);
             self.detail = detail;
             self.page = page;
+            self.previous_offsets = previous_offsets;
             if self.page.is_none() && request.is_some() {
                 self.dispatch(request, Duration::ZERO);
             } else {
@@ -210,6 +224,26 @@ impl State {
     pub fn has_back(&self) -> bool {
         !self.history.is_empty()
     }
+    pub fn artist_releases(&self) -> bool {
+        matches!(self.request, Some(Request::ArtistReleases { .. }))
+    }
+    pub fn browse_artist(&mut self, releases: bool) {
+        let Some(entry) = &self.detail else { return };
+        if entry.kind != EntityKind::Artist || releases == self.artist_releases() {
+            return;
+        }
+        let id = entry.media.id.clone();
+        self.page = None;
+        self.previous_offsets.clear();
+        self.dispatch(
+            Some(if releases {
+                Request::ArtistReleases { id, offset: 0 }
+            } else {
+                Request::ArtistRecordings { id, offset: 0 }
+            }),
+            Duration::ZERO,
+        );
+    }
     pub fn page_by(&mut self, forward: bool) {
         let Some(page) = &self.page else {
             return;
@@ -218,9 +252,17 @@ impl State {
             return;
         }
         let offset = if forward {
-            page.offset + 20
+            page.offset
+                + if matches!(self.request, Some(Request::Search { .. })) {
+                    doremi_musicbrainz::PAGE_SIZE as u32
+                } else {
+                    page.items.len() as u32
+                }
         } else {
-            page.offset.saturating_sub(20)
+            let Some(offset) = self.previous_offsets.last().copied() else {
+                return;
+            };
+            offset
         };
         let request = match &self.request {
             Some(Request::Search { query, kind, .. }) => Request::Search {
@@ -232,8 +274,17 @@ impl State {
                 id: id.clone(),
                 offset,
             },
+            Some(Request::ArtistReleases { id, .. }) => Request::ArtistReleases {
+                id: id.clone(),
+                offset,
+            },
             _ => return,
         };
+        if forward {
+            self.previous_offsets.push(page.offset);
+        } else {
+            self.previous_offsets.pop();
+        }
         self.dispatch(Some(request), Duration::ZERO);
         self.page = None;
     }
@@ -322,7 +373,7 @@ impl State {
         }
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"selected":self.selected,"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
+        serde_json::json!({"selected":self.selected,"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"offset":self.page.as_ref().map(|page|page.offset),"artist_releases":self.artist_releases(),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
     }
 }
 
@@ -454,11 +505,16 @@ impl DoremiApp {
                                 },
                                 kind: EntityKind::Artist,
                                 artists: vec![],
+                                edition: None,
                             });
                         }
                     }
                     if let Some(ms) = entry.media.duration_ms {
                         ui.weak(duration(ms));
+                    }
+                    let edition = edition_label(entry);
+                    if !edition.is_empty() {
+                        ui.weak(edition);
                     }
                 }
             },
@@ -489,16 +545,32 @@ impl DoremiApp {
             ) {
                 self.model.as_mut().unwrap().save_media(entry.media.clone());
             }
+        } else if entry.kind == EntityKind::Artist {
+            ui.add_space(12.0);
+            let releases = self.model.as_ref().unwrap().music.artist_releases();
+            ui.horizontal_wrapped(|ui| {
+                for (selected_releases, name, label) in [
+                    (false, "artist-recordings", "Grabaciones"),
+                    (true, "artist-releases", "Álbumes y ediciones"),
+                ] {
+                    let response = ui.add(
+                        egui::Button::new(label)
+                            .selected(releases == selected_releases)
+                            .min_size(egui::vec2(0.0, TOUCH)),
+                    );
+                    self.record(name, &response);
+                    if response.clicked() {
+                        self.model
+                            .as_mut()
+                            .unwrap()
+                            .music
+                            .browse_artist(selected_releases);
+                    }
+                }
+            });
         } else {
             ui.add_space(12.0);
-            ui.label(
-                egui::RichText::new(if entry.kind == EntityKind::Artist {
-                    "Grabaciones"
-                } else {
-                    "Canciones"
-                })
-                .font(theme::bold(20.0)),
-            );
+            ui.label(egui::RichText::new("Canciones").font(theme::bold(20.0)));
         }
     }
 
@@ -520,6 +592,10 @@ impl DoremiApp {
         };
         if let Some(ms) = entry.media.duration_ms {
             subtitle.push_str(&format!(" · {}", duration(ms)));
+        }
+        let edition = edition_label(entry);
+        if !edition.is_empty() {
+            subtitle = format!("{edition} · {subtitle}");
         }
         let row = theme::list_row(
             ui,
@@ -594,10 +670,97 @@ fn kind_label(kind: EntityKind) -> &'static str {
 fn duration(ms: u64) -> String {
     format!("{}:{:02}", ms / 60000, ms / 1000 % 60)
 }
+fn edition_label(entry: &CatalogEntry) -> String {
+    entry.edition.as_ref().map_or_else(String::new, |edition| {
+        [
+            edition.date.as_deref(),
+            edition.country.as_deref(),
+            edition.description.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" · ")
+    })
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn artist_edition_paging_and_back_preserve_the_actual_page_and_cancel_old_queries() {
+        let make_entry = |kind, title: &str| CatalogEntry {
+            media: Media {
+                id: MediaId::new(
+                    ProviderId::new("musicbrainz").unwrap(),
+                    format!(
+                        "{}:00000000-0000-4000-8000-000000000001",
+                        match kind {
+                            EntityKind::Artist => "artist",
+                            _ => "release",
+                        }
+                    ),
+                )
+                .unwrap(),
+                title: title.into(),
+                duration_ms: None,
+            },
+            kind,
+            artists: vec![],
+            edition: None,
+        };
+        let artist = make_entry(EntityKind::Artist, "QA artist");
+        let release = make_entry(EntityKind::Release, "QA edition");
+        let mut state = State::new();
+        state.open(artist.clone());
+        let recordings_generation = state.generation;
+        state.browse_artist(true);
+        assert!(state.generation > recordings_generation);
+        assert!(state.artist_releases());
+        state.page = Some(Arc::new(Results {
+            items: vec![release.clone(); 3],
+            offset: 0,
+            more: true,
+        }));
+        state.page_by(true);
+        assert_eq!(
+            state.request,
+            Some(Request::ArtistReleases {
+                id: artist.media.id.clone(),
+                offset: 3
+            })
+        );
+        state.page = Some(Arc::new(Results {
+            items: vec![release.clone(); 2],
+            offset: 3,
+            more: true,
+        }));
+        state.open(release.clone());
+        state.back();
+        assert_eq!(state.detail, Some(artist.clone()));
+        assert!(state.artist_releases());
+        assert_eq!(state.page.as_ref().unwrap().offset, 3);
+        state.page_by(false);
+        assert_eq!(
+            state.request,
+            Some(Request::ArtistReleases {
+                id: artist.media.id.clone(),
+                offset: 0
+            })
+        );
+        state.browse_artist(false);
+        assert!(!state.artist_releases());
+        assert!(state.page.is_none() && state.previous_offsets.is_empty());
+        assert_eq!(
+            state.request,
+            Some(Request::ArtistRecordings {
+                id: artist.media.id,
+                offset: 0
+            })
+        );
+        state.cancel();
+        assert!(state.history.is_empty() && state.previous_offsets.is_empty());
+    }
     #[test]
     fn a_worker_that_exits_after_accepting_a_query_reports_unavailable() {
         let mut state = State::new();

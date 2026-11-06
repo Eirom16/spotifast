@@ -17,6 +17,7 @@ def main():
     parser.add_argument('--playlist-music',action='store_true',help='Opt-in Commons requests and native playback of the audited CC0 music')
     parser.add_argument('--artwork',action='store_true',help='Opt-in public metadata and licensed The Slip artwork; no album audio')
     parser.add_argument('--history-music',action='store_true',help='Opt-in actual CC0 listening, history, native replay and process restoration')
+    parser.add_argument('--artist-releases',action='store_true',help='Opt-in real artist editions, paging, album tracks and back navigation; no audio')
     parser.add_argument('--history-layout',type=Path,help='Offline geometry QA from an actual listening-history fixture directory')
     parser.add_argument('--close-helper',type=Path,help='Optional owned-window WM_DELETE_WINDOW helper; required by history QA')
     args=parser.parse_args()
@@ -77,7 +78,12 @@ def main():
                 is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:','up:','down:','remove:'))
                 is_fixed=name in {'home','search','library','queue','settings'} or (data['viewport'][0]>=760 and name in fixed) or (data['page']!='Player' and name in {'play','pause','next','player'})
                 if is_menu or is_fixed or top<=y1<y2<=bottom:
-                    assert 0<=x1<x2<=data['viewport'][0] and 0<=y1<y2<=data['viewport'][1],(name,control['rect'])
+                    # During a native resize, an earlier frame's published
+                    # controls can briefly precede the new viewport geometry.
+                    # Wait within the existing bound; never inject outside it.
+                    if not (0<=x1<x2<=data['viewport'][0] and 0<=y1<y2<=data['viewport'][1]):
+                        time.sleep(.1)
+                        continue
                     assert int(xdo('getwindowfocus'))==int(window), 'Own window lost focus; do not inject input'
                     xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
                     time.sleep(.4)
@@ -89,6 +95,28 @@ def main():
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
+        if args.artist_releases:
+            artist='artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da'
+            def music():return state()['music_catalog']
+            def loaded(s):return not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0 and s['music_catalog']['error'] is None
+            tap('search');tap('source-musicbrainz');tap('catalog-kind:Artist');tap('query')
+            xdo('type','--clearmodifiers','Nine Inch Nails')
+            wait(lambda s:any(c['name']=='catalog-open:'+artist for c in s['controls']),25);tap('catalog-open:'+artist)
+            wait(loaded,25);capture('artist-recordings')
+            tap('artist-releases');wait(lambda s:loaded(s) and s['music_catalog']['artist_releases'],25)
+            capture('artist-editions-dark')
+            assert music()['detail']==artist and music()['offset']==0
+            first_count=music()['count'];tap('catalog-next');wait(lambda s:loaded(s) and s['music_catalog']['offset']==first_count,25)
+            capture('artist-editions-next');tap('catalog-previous');wait(lambda s:loaded(s) and s['music_catalog']['offset']==0,25)
+            edition=next(c['name'] for c in state()['controls'] if c['name'].startswith('catalog-open:release:'))
+            tap(edition);wait(lambda s:loaded(s) and s['music_catalog']['detail']==edition.removeprefix('catalog-open:'),25)
+            capture('artist-album-tracks');tap('catalog-back');wait(lambda s:loaded(s) and s['music_catalog']['detail']==artist and s['music_catalog']['artist_releases'])
+            tap('settings');tap('light');tap('search');capture('artist-editions-light')
+            tap('artist-recordings');wait(lambda s:loaded(s) and not s['music_catalog']['artist_releases'],25)
+            assert not state()['audio'] and state()['audio_metrics'] is None
+            (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'artist_id':artist,'release_id':edition.removeprefix('catalog-open:'),'first_page_count':first_count,'actual_metadata':True,'paging_and_back':True,'album_tracks':True,'audio':False,'themes':['dark','light']},indent=2)+'\n')
+            print(output)
+            return
         if args.artwork:
             release='release:12b57d46-a192-499e-a91f-7da66790a1c1'
             tap('search');tap('source-musicbrainz');tap('catalog-kind:Release');tap('query')

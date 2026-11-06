@@ -72,10 +72,20 @@ pub struct ArtistCredit {
     pub name: String,
 }
 
+/// Optional attributes identify different editions without changing their titles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReleaseEdition {
+    pub date: Option<String>,
+    pub country: Option<String>,
+    pub description: Option<String>,
+}
+
+/// Catalog-only metadata stays separate from the minimal persisted queue item.
 /// A catalog result never implies that its provider supplies playable audio.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {
     pub media: Media,
     pub kind: EntityKind,
     pub artists: Vec<ArtistCredit>,
+    pub edition: Option<ReleaseEdition>,
 }

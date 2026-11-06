@@ -729,6 +729,7 @@ impl DoremiApp {
                 media: media.clone(),
                 kind: doremi_core::media::EntityKind::Recording,
                 artists: vec![],
+                edition: None,
             });
             self.navigate(Page::Search);
             return;

@@ -707,6 +707,33 @@ public final class DoremiInstrumentation extends Instrumentation {
         }
         Files.write(new File(profileDirectory(),restore?"qa-history-restore-checks.json":"qa-history-checks.json").toPath(),new JSONObject().put("result","pass").put("physical_device",true).put("id",id).put("acoustic_capture",false).put("restored_process",restore).put("state",state()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    private boolean catalogLoaded(JSONObject state) {
+        JSONObject catalog=state.optJSONObject("music_catalog");
+        return catalog!=null && !catalog.optBoolean("waiting") && catalog.optInt("count",0)>0 && catalog.isNull("error");
+    }
+    private void artistReleasesUi() throws Exception {
+        final String artist="artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da";
+        tap("search");tap("source-musicbrainz");tap("catalog-kind:Artist");tap("query");text("Nine Inch Nails",false);hideKeyboard();
+        until(25000,"identified artist",state -> hasControl(state,"catalog-open:"+artist));tap("catalog-open:"+artist);
+        until(25000,"artist recordings",this::catalogLoaded);capture("qa-artist-recordings");
+        tap("artist-releases");JSONObject releases=until(25000,"artist editions",state -> catalogLoaded(state) && state.optJSONObject("music_catalog").optBoolean("artist_releases"));
+        if(!artist.equals(releases.getJSONObject("music_catalog").getString("detail"))) throw new AssertionError("Edition browse changed artist identity");
+        JSONArray target=visibleRect("artist-releases");if(target.getDouble(3)-target.getDouble(1)<48) throw new AssertionError("Artist tab touch target too small");
+        capture("qa-artist-editions-dark");
+        final int count=releases.getJSONObject("music_catalog").getInt("count");
+        tap("catalog-next");until(25000,"next editions page",state -> catalogLoaded(state) && state.optJSONObject("music_catalog").optInt("offset")==count);capture("qa-artist-editions-next");
+        tap("catalog-previous");JSONObject first=until(25000,"previous editions page",state -> catalogLoaded(state) && state.optJSONObject("music_catalog").optInt("offset")==0);
+        String chosen=null;JSONArray controls=first.getJSONArray("controls");
+        for(int i=0;i<controls.length();i++) {String name=controls.getJSONObject(i).getString("name");if(name.startsWith("catalog-open:release:")) {chosen=name;break;}}
+        if(chosen==null) throw new AssertionError("No identified edition to open");
+        final String edition=chosen.substring("catalog-open:".length());tap(chosen);
+        until(25000,"edition tracks",state -> catalogLoaded(state) && edition.equals(state.optJSONObject("music_catalog").optString("detail")));capture("qa-artist-album-tracks");
+        tap("catalog-back");until(state -> catalogLoaded(state) && artist.equals(state.optJSONObject("music_catalog").optString("detail")) && state.optJSONObject("music_catalog").optBoolean("artist_releases"));
+        tap("settings");tap("light");tap("search");capture("qa-artist-editions-light");
+        tap("artist-recordings");until(25000,"return to recordings",state -> catalogLoaded(state) && !state.optJSONObject("music_catalog").optBoolean("artist_releases"));
+        if(state().optBoolean("audio") || !state().isNull("audio_metrics")) throw new AssertionError("Metadata browsing started audio");
+        Files.write(new File(profileDirectory(),"qa-artist-checks.json").toPath(),new JSONObject().put("result","pass").put("artist_id",artist).put("release_id",edition).put("first_page_count",count).put("paging_and_back",true).put("album_tracks",true).put("album_audio",false).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private void artworkUi() throws Exception {
         final String release="release:12b57d46-a192-499e-a91f-7da66790a1c1";
         tap("search");tap("source-musicbrainz");tap("catalog-kind:Release");tap("query");text("The Slip",false);hideKeyboard();
@@ -854,6 +881,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("artist-releases".equals(mode)) {
+                artistReleasesUi();result.putString("stream","PASS: real artist editions, pagination, album tracks, back navigation and themes; no album audio\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("history-ui".equals(mode) || "history-restore".equals(mode)) {
                 historyUi("history-restore".equals(mode));result.putString("stream","PASS: actual native listening history, shared recent cards, seek exclusion and persistence\n");finish(Activity.RESULT_OK,result);return;
             }

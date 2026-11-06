@@ -1441,6 +1441,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(directory);
     }
     #[test]
+    fn artist_browse_tabs_fit_phone_widths_with_distinct_touch_targets() {
+        use doremi_core::media::{CatalogEntry, EntityKind};
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../target/artist-tabs-{}", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.model.as_mut().unwrap().music.detail = Some(CatalogEntry {
+            media: Media {
+                id: MediaId::new(
+                    ProviderId::new("musicbrainz").unwrap(),
+                    "artist:00000000-0000-4000-8000-000000000001",
+                )
+                .unwrap(),
+                title: "Artista de prueba · título largo".into(),
+                duration_ms: None,
+            },
+            kind: EntityKind::Artist,
+            artists: vec![],
+            edition: None,
+        });
+        for width in [360.0, 393.0, 430.0, 1180.0] {
+            for _ in 0..3 {
+                app.controls.clear();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 852.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.music_results(ui),
+                );
+                output.textures_delta.clear();
+            }
+            let tabs: Vec<_> = app
+                .controls
+                .iter()
+                .filter(|control| control.name.starts_with("artist-"))
+                .collect();
+            assert_eq!(tabs.len(), 2);
+            for tab in &tabs {
+                let [x1, y1, x2, y2] = tab.rect;
+                assert!(x1 >= 0.0 && x2 <= width && y1 >= 0.0 && y2 <= 852.0);
+                assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
+            }
+            let [a, b] = [tabs[0].rect, tabs[1].rect];
+            assert!(a[2] <= b[0] || a[3] <= b[1]);
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
     fn recent_cards_and_full_history_render_bounded_rows_at_phone_and_desktop_sizes() {
         let _guard = UI_TEST_LOCK.lock().unwrap();
         let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(

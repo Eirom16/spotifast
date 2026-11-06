@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in physical artwork or listening-history QA in a new private profile."""
+"""Opt-in physical artwork, artist editions or history QA in a new private profile."""
 import argparse
 import json
 from pathlib import Path
@@ -16,7 +16,9 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--profile', required=True)
-    parser.add_argument('--history', action='store_true', help='Actual CC0 listening, history, new-process replay and clearing')
+    journey = parser.add_mutually_exclusive_group()
+    journey.add_argument('--history', action='store_true', help='Actual CC0 listening, history, new-process replay and clearing')
+    journey.add_argument('--artist-releases', action='store_true', help='Real artist editions, album tracks, pagination and back navigation; no audio')
     args = parser.parse_args()
     assert re.fullmatch('[a-z0-9][a-z0-9-]{0,47}', args.profile)
     output = args.output.resolve()
@@ -43,6 +45,8 @@ def main():
             restore_names=('qa-history-restored','qa-history-clear-confirmation','qa-history-cleared')
             artwork_names=('qa-artwork-results','qa-artwork-dark','qa-artwork-light','qa-artwork-recreated')
             modes=[('history-ui',first_names,'qa-history-checks'),('history-restore',restore_names,'qa-history-restore-checks')] if args.history else [('artwork-ui',artwork_names,'qa-artwork-checks')]
+            if args.artist_releases:
+                modes=[('artist-releases',('qa-artist-recordings','qa-artist-editions-dark','qa-artist-editions-next','qa-artist-album-tracks','qa-artist-editions-light'),'qa-artist-checks')]
             checks_by_mode={};pids=[]
             for index,(mode,names,check_name) in enumerate(modes):
                 if index:adb('shell','am','force-stop',package)
@@ -66,7 +70,9 @@ def main():
                 assert not re.search(r'FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR',own_log)
                 checks=json.loads(adb('shell','run-as',package,'cat',private+check_name+'.json'))
                 assert checks['result']=='pass'
-                if not args.history:assert checks['cached_reopen'] and checks['activity_recreation'] and not checks['album_audio']
+                if args.artist_releases:
+                    assert checks['paging_and_back'] and checks['album_tracks'] and not checks['album_audio']
+                elif not args.history:assert checks['cached_reopen'] and checks['activity_recreation'] and not checks['album_audio']
                 else:
                     (output/(check_name+'.json')).write_text(json.dumps(checks,indent=2)+'\n')
                     if index==0:
