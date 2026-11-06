@@ -43,10 +43,35 @@ pub fn forget() -> Result<(), Error> {
 /// Explicit user-selected migration only. The source entry is read-only; the
 /// caller must verify the musical account before writing Doremi's own entry.
 pub fn import_doremi_rust() -> Result<String, Error> {
-    let bytes = entry_at("doremi", "youtube_music_auth")?
+    #[cfg(target_os = "linux")]
+    let headers = entry_at("doremi", "youtube_music_auth")?
         .get_secret()
         .map_err(|_| Error::Unavailable)?;
-    crate::legacy_cookie(&bytes)
+    #[cfg(target_os = "windows")]
+    let headers = windows_legacy_headers("doremi", "youtube_music_auth")?.into_bytes();
+    crate::legacy_cookie(&headers)
+}
+#[cfg(target_os = "windows")]
+fn windows_legacy_headers(service: &str, user: &str) -> Result<String, Error> {
+    // python-keyring writes a UTF-16 password under the service target, moving
+    // colliding users to user@service. Doremi's own raw-secret target differs.
+    let store = windows_native_keyring_store::Store::new().map_err(|_| Error::Unavailable)?;
+    for target in [service.to_owned(), format!("{user}@{service}")] {
+        let modifiers = std::collections::HashMap::from([("target", target.as_str())]);
+        let entry = store
+            .build(service, user, Some(&modifiers))
+            .map_err(|_| Error::Unavailable)?;
+        let attributes = match entry.get_attributes() {
+            Ok(attributes) => attributes,
+            Err(keyring_core::Error::NoEntry) => continue,
+            Err(_) => return Err(Error::Unavailable),
+        };
+        if attributes.get("username").map(String::as_str) != Some(user) {
+            continue;
+        }
+        return entry.get_password().map_err(|_| Error::InvalidResponse);
+    }
+    Err(Error::Unavailable)
 }
 
 #[cfg(test)]
@@ -68,5 +93,28 @@ mod tests {
             entry.get_secret(),
             Err(keyring_core::Error::NoEntry)
         ));
+    }
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires a native Windows credential store; synthetic target only"]
+    fn python_keyring_service_target_and_utf16_are_read_without_changing_the_source() {
+        let service = format!("dev.eirom.doremi.python-fixture-{}", std::process::id());
+        let user = "fixture-user";
+        let store = windows_native_keyring_store::Store::new().expect("native store unavailable");
+        let modifiers = std::collections::HashMap::from([("target", service.as_str())]);
+        let entry = store
+            .build(&service, user, Some(&modifiers))
+            .expect("fixture target unavailable");
+        let headers = r#"{"cookie":"SAPISID=synthetic-fixture","x-goog-authuser":"0"}"#;
+        entry.set_password(headers).expect("fixture write failed");
+        entry
+            .update_attributes(&std::collections::HashMap::from([("username", user)]))
+            .expect("fixture username failed");
+        let result = windows_legacy_headers(&service, user);
+        let preserved = entry.get_password();
+        let removed = entry.delete_credential();
+        assert!(removed.is_ok());
+        assert_eq!(result.unwrap(), headers);
+        assert_eq!(preserved.unwrap(), headers);
     }
 }
