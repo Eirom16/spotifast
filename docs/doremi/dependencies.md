@@ -110,6 +110,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-commons` | `path=../doremi-commons` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-musicbrainz` | `path=../doremi-musicbrainz` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis', 'local-flac', 'local-mp3']; path=../doremi-player` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-youtube` | `path=../doremi-youtube` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `android_logger` | `0.15` |
@@ -153,10 +154,23 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz: dev-dependencies` | `tokio` | `features=['rt', 'net']; version=1` |
 | `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
+| `crates/doremi-youtube: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json']; version=0.12` |
+| `crates/doremi-youtube: dependencies` | `serde` | `features=['derive']; version=1` |
+| `crates/doremi-youtube: dependencies` | `serde_json` | `1` |
+| `crates/doremi-youtube: dependencies` | `sha1` | `0.10` |
+| `crates/doremi-youtube: dev-dependencies` | `tokio` | `features=['rt', 'macros', 'net', 'io-util']; version=1` |
+| `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `keyring-core` | `1` |
+| `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tempfile` | `3` |
+| `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tungstenite` | `default-features=False; features=['handshake']; version=0.28` |
+| `crates/doremi-youtube/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
+| `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `zbus-secret-service-keyring-store` | `features=['rt-tokio-crypto-rust']; version=1.0.1` |
+| `crates/doremi-youtube/cfg(target_os = "windows"): dependencies` | `windows-native-keyring-store` | `default-features=False; version=1.1` |
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 806 entradas (incluye miembros locales).
+`Cargo.lock`: 807 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -168,7 +182,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
 | 752 | `registry+https://github.com/rust-lang/crates.io-index` |
-| 10 | `workspace` |
+| 11 | `workspace` |
 
 ## Patches
 

@@ -17,6 +17,8 @@ mod online;
 mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+mod youtube_session;
 use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
@@ -983,6 +985,11 @@ impl DoremiApp {
                 if self.button(ui, "browse-catalog", "Buscar música", 220.0) {
                     self.navigate(Page::Search);
                 }
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                if self.button(ui, "youtube-home", "Explorar YouTube Music", 250.0) {
+                    self.model.as_mut().unwrap().music.home();
+                    self.navigate(Page::Search);
+                }
                 self.recent_shelf(ui);
                 ui.add_space(16.0);
                 ui.heading("Tu biblioteca");
@@ -1017,15 +1024,29 @@ impl DoremiApp {
                 ui.heading("Buscar");
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 {
-                    let width = ((ui.available_width() - 2.0 * GAP) / 3.0)
+                    let width = ((ui.available_width() - 3.0 * GAP) / 4.0)
                         .floor()
                         .max(TOUCH);
                     ui.horizontal_wrapped(|ui| {
+                        if self.button(ui, "source-youtube", "YouTube Music", width) {
+                            let model = self.model.as_mut().unwrap();
+                            model.cancel_search();
+                            model.set_online_source(false);
+                            model.music.selected = true;
+                            model.music.youtube = true;
+                            model.search();
+                            model.revision += 1;
+                        }
                         if self.button(ui, "source-musicbrainz", "MusicBrainz", width) {
                             let model = self.model.as_mut().unwrap();
                             model.cancel_search();
                             model.set_online_source(false);
                             model.music.selected = true;
+                            model.music.youtube = false;
+                            if model.music.kind == doremi_core::media::EntityKind::Playlist {
+                                model.music.kind = doremi_core::media::EntityKind::Recording;
+                            }
+                            model.search();
                             model.revision += 1;
                         }
                         if self.button(ui, "source-commons", "Commons", width) {
@@ -1037,7 +1058,11 @@ impl DoremiApp {
                     });
                     let model = self.model.as_ref().unwrap();
                     ui.small(if model.music.selected {
-                        "Fuente: MusicBrainz · catálogo público; no proporciona audio."
+                        if model.music.youtube {
+                            "Fuente: YouTube Music"
+                        } else {
+                            "Fuente: MusicBrainz · metadatos opcionales; no proporciona audio."
+                        }
                     } else if model.online.selected {
                         "Fuente: Commons · audio CC0 declarado por su autor · Vorbis hasta 10 min."
                     } else {
@@ -1049,7 +1074,13 @@ impl DoremiApp {
                                 (doremi_core::media::EntityKind::Recording, "Canciones"),
                                 (doremi_core::media::EntityKind::Artist, "Artistas"),
                                 (doremi_core::media::EntityKind::Release, "Álbumes"),
+                                (doremi_core::media::EntityKind::Playlist, "Playlists"),
                             ] {
+                                if kind == doremi_core::media::EntityKind::Playlist
+                                    && !self.model.as_ref().unwrap().music.youtube
+                                {
+                                    continue;
+                                }
                                 let response = ui.selectable_label(
                                     self.model.as_ref().unwrap().music.kind == kind,
                                     label,
@@ -1179,6 +1210,8 @@ impl DoremiApp {
             Page::Queue => self.queue_page(ui),
             Page::Settings => {
                 ui.heading("Configuración");
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                self.youtube_account(ui);
                 ui.label("Acento");
                 ui.horizontal_wrapped(|ui| {
                     for (name, label, value) in

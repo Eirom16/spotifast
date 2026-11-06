@@ -16,6 +16,7 @@ const CAPACITY: usize = 8;
 struct Job {
     generation: u64,
     id: MediaId,
+    url: Option<String>,
     ctx: egui::Context,
 }
 struct Pixels {
@@ -62,7 +63,14 @@ impl Worker {
                         let source = runtime
                             .as_ref()
                             .map_err(|_| ProviderError::Unavailable)?
-                            .block_on(client.fetch(&job.id, cancelled))?;
+                            .block_on(async {
+                                if let Some(url)=&job.url {
+                                    tokio::select! {
+                                        result=doremi_youtube::artwork(url)=>result.map(|bytes|cover_art::Image {bytes,lifetime:Duration::from_secs(300),reusable:true}),
+                                        _=async {while !cancelled() {tokio::time::sleep(Duration::from_millis(20)).await;}}=>Err(ProviderError::Cancelled),
+                                    }
+                                } else {client.fetch(&job.id, cancelled).await}
+                            })?;
                         let image = doremi_ui::bitmap::decode(
                             &source.bytes,
                             doremi_ui::bitmap::DecodeLimits {
@@ -132,6 +140,7 @@ struct Cached {
 }
 pub(super) struct State {
     selected: Option<MediaId>,
+    url: Option<String>,
     generation: u64,
     version: u64,
     pixels: Option<Arc<egui::ColorImage>>,
@@ -146,6 +155,7 @@ impl State {
     pub fn new() -> Self {
         Self {
             selected: None,
+            url: None,
             generation: 0,
             version: 0,
             pixels: None,
@@ -235,6 +245,7 @@ impl State {
             let job = Job {
                 generation: self.generation,
                 id: self.selected.clone().unwrap(),
+                url: self.url.clone(),
                 ctx: ctx.clone(),
             };
             match worker.commands.try_send(job) {
@@ -263,7 +274,11 @@ impl State {
         if self.selected.as_ref() != Some(expected) || self.waiting {
             "Cargando carátula…"
         } else if self.pixels.is_some() {
-            "Carátula: Cover Art Archive · derechos de sus autores"
+            if expected.provider.as_str() == doremi_youtube::PROVIDER {
+                "Carátula: YouTube Music · derechos de sus autores"
+            } else {
+                "Carátula: Cover Art Archive · derechos de sus autores"
+            }
         } else if self.error == Some(ProviderError::Unavailable) {
             "Esta edición no tiene carátula disponible."
         } else {
@@ -339,9 +354,30 @@ impl DoremiApp {
         let id = (model.page == Page::Search && model.music.selected)
             .then_some(model.music.detail.as_ref())
             .flatten()
-            .filter(|entry| entry.kind == EntityKind::Release)
+            .filter(|entry| {
+                entry.kind == EntityKind::Release
+                    || entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
+            })
             .map(|entry| entry.media.id.clone());
+        let url = id.as_ref().and_then(|id| {
+            model
+                .music
+                .session
+                .client
+                .try_lock()
+                .ok()
+                .and_then(|client| {
+                    client
+                        .as_ref()
+                        .and_then(|client| client.as_ref().ok())
+                        .and_then(|client| client.thumbnail(id))
+                })
+        });
+        if model.artwork.url != url {
+            model.artwork.select(None);
+        }
         model.artwork.select(id);
+        model.artwork.url = url;
         model.artwork.poll(ctx);
         self.artwork_textures.prune(&model.artwork);
     }

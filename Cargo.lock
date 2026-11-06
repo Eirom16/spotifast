@@ -1559,6 +1559,7 @@ dependencies = [
  "doremi-musicbrainz",
  "doremi-player",
  "doremi-ui",
+ "doremi-youtube",
  "eframe",
  "egui",
  "egui_glow",
@@ -1648,6 +1649,23 @@ dependencies = [
  "fastframe-theme",
  "image",
  "serde",
+]
+
+[[package]]
+name = "doremi-youtube"
+version = "0.1.0"
+dependencies = [
+ "doremi-core",
+ "keyring-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha1",
+ "tempfile",
+ "tokio",
+ "tungstenite",
+ "windows-native-keyring-store",
+ "zbus-secret-service-keyring-store",
 ]
 
 [[package]]

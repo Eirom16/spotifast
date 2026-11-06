@@ -160,6 +160,7 @@ fn endpoint(kind: EntityKind) -> &'static str {
         EntityKind::Recording => "recording",
         EntityKind::Artist => "artist",
         EntityKind::Release => "release",
+        EntityKind::Playlist => "playlist",
     }
 }
 fn network_error(error: reqwest::Error) -> Error {
@@ -227,6 +228,15 @@ fn escape_query(query: &str) -> Result<String, Error> {
     Ok(escaped)
 }
 fn parameters(request: &Request) -> Result<(String, Vec<(String, String)>), Error> {
+    if matches!(
+        request,
+        Request::Search {
+            kind: EntityKind::Playlist,
+            ..
+        }
+    ) {
+        return Err(Error::Unsupported);
+    }
     let mut params = vec![("fmt".into(), "json".into())];
     let path = match request {
         Request::Search {

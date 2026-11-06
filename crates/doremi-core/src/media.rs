@@ -64,6 +64,7 @@ pub enum EntityKind {
     Recording,
     Artist,
     Release,
+    Playlist,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

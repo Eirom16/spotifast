@@ -4,7 +4,74 @@ use doremi_core::{
     catalog::ProviderError,
     media::{CatalogEntry, EntityKind},
 };
-use doremi_musicbrainz::{Client, Page as Results, Request};
+use doremi_musicbrainz::Client;
+#[derive(Clone, Debug)]
+pub(super) struct Results {
+    items: Vec<CatalogEntry>,
+    offset: u32,
+    more: bool,
+    detail: Option<CatalogEntry>,
+    continuation: Option<String>,
+}
+impl From<doremi_musicbrainz::Page> for Results {
+    fn from(page: doremi_musicbrainz::Page) -> Self {
+        Self {
+            items: page.items,
+            offset: page.offset,
+            more: page.more,
+            detail: page.detail,
+            continuation: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Request {
+    Search {
+        query: String,
+        kind: EntityKind,
+        offset: u32,
+    },
+    ArtistRecordings {
+        id: MediaId,
+        offset: u32,
+    },
+    ArtistReleases {
+        id: MediaId,
+        offset: u32,
+    },
+    ReleaseTracks {
+        id: MediaId,
+    },
+    YouTube(doremi_youtube::Request),
+}
+impl Request {
+    fn musicbrainz(&self) -> Option<doremi_musicbrainz::Request> {
+        use doremi_musicbrainz::Request as Mb;
+        Some(match self {
+            Self::Search {
+                query,
+                kind,
+                offset,
+            } => Mb::Search {
+                query: query.clone(),
+                kind: *kind,
+                offset: *offset,
+            },
+            Self::ArtistRecordings { id, offset } => Mb::ArtistRecordings {
+                id: id.clone(),
+                offset: *offset,
+            },
+            Self::ArtistReleases { id, offset } => Mb::ArtistReleases {
+                id: id.clone(),
+                offset: *offset,
+            },
+            Self::ReleaseTracks { id } => Mb::ReleaseTracks { id: id.clone() },
+            Self::YouTube(_) => return None,
+        })
+    }
+}
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
@@ -26,7 +93,7 @@ struct Worker {
     generation: Arc<AtomicU64>,
 }
 impl Worker {
-    fn new() -> Result<Self, ProviderError> {
+    fn new(youtube: youtube_session::SharedClient) -> Result<Self, ProviderError> {
         let (commands, mut receive) = mpsc::channel::<Job>(2);
         let (send, events) = mpsc::channel(1);
         let generation = Arc::new(AtomicU64::new(0));
@@ -60,9 +127,37 @@ impl Worker {
                             }
                         };
                         let result = async {
-                            match &mut client {
-                                Ok(client) => client.fetch(&request).await.map(Arc::new),
-                                Err(error) => Err(*error),
+                            if let Request::YouTube(request) = &request {
+                                match youtube
+                                    .lock()
+                                    .await
+                                    .get_or_insert_with(doremi_youtube::Client::new)
+                                {
+                                    Ok(client) => client.fetch(request).await.map(|page| {
+                                        Arc::new(Results {
+                                            items: page
+                                                .sections
+                                                .iter()
+                                                .flat_map(|s| &s.items)
+                                                .filter_map(doremi_youtube::entry)
+                                                .take(200)
+                                                .collect(),
+                                            offset: 0,
+                                            more: page.continuation.is_some(),
+                                            detail: None,
+                                            continuation: page.continuation,
+                                        })
+                                    }),
+                                    Err(error) => Err(*error),
+                                }
+                            } else {
+                                match &mut client {
+                                    Ok(client) => client
+                                        .fetch(&request.musicbrainz().unwrap())
+                                        .await
+                                        .map(|page| Arc::new(Results::from(page))),
+                                    Err(error) => Err(*error),
+                                }
                             }
                         };
                         tokio::select! {
@@ -96,6 +191,8 @@ impl Worker {
 
 pub(super) struct State {
     pub selected: bool,
+    pub youtube: bool,
+    pub session: youtube_session::State,
     pub kind: EntityKind,
     pub page: Option<Arc<Results>>,
     pub detail: Option<CatalogEntry>,
@@ -113,6 +210,8 @@ impl State {
     pub fn new() -> Self {
         Self {
             selected: false,
+            youtube: true,
+            session: youtube_session::State::new(),
             kind: EntityKind::Recording,
             page: None,
             detail: None,
@@ -146,10 +245,19 @@ impl State {
         self.history.clear();
         self.previous_offsets.clear();
         self.dispatch(
-            (!query.trim().is_empty()).then(|| Request::Search {
-                query: query.into(),
-                kind: self.kind,
-                offset: 0,
+            (!query.trim().is_empty()).then(|| {
+                if self.youtube {
+                    Request::YouTube(doremi_youtube::Request::Search {
+                        query: query.into(),
+                        kind: self.kind,
+                    })
+                } else {
+                    Request::Search {
+                        query: query.into(),
+                        kind: self.kind,
+                        offset: 0,
+                    }
+                }
             }),
             Duration::from_millis(350),
         );
@@ -182,15 +290,24 @@ impl State {
             self.request.clone(),
             std::mem::take(&mut self.previous_offsets),
         ));
-        let request = match entry.kind {
-            EntityKind::Recording => None,
-            EntityKind::Artist => Some(Request::ArtistRecordings {
-                id: entry.media.id.clone(),
-                offset: 0,
-            }),
-            EntityKind::Release => Some(Request::ReleaseTracks {
-                id: entry.media.id.clone(),
-            }),
+        self.youtube = entry.media.id.provider.as_str() == doremi_youtube::PROVIDER;
+        let request = if self.youtube {
+            (entry.kind != EntityKind::Recording).then(|| {
+                Request::YouTube(doremi_youtube::Request::Browse {
+                    id: entry.media.id.local().into(),
+                })
+            })
+        } else {
+            match entry.kind {
+                EntityKind::Recording | EntityKind::Playlist => None,
+                EntityKind::Artist => Some(Request::ArtistRecordings {
+                    id: entry.media.id.clone(),
+                    offset: 0,
+                }),
+                EntityKind::Release => Some(Request::ReleaseTracks {
+                    id: entry.media.id.clone(),
+                }),
+            }
         };
         self.dispatch(request, Duration::ZERO);
         self.detail = Some(entry);
@@ -228,6 +345,9 @@ impl State {
         matches!(self.request, Some(Request::ArtistReleases { .. }))
     }
     pub fn browse_artist(&mut self, releases: bool) {
+        if self.youtube {
+            return;
+        }
         let Some(entry) = &self.detail else { return };
         if entry.kind != EntityKind::Artist || releases == self.artist_releases() {
             return;
@@ -245,6 +365,39 @@ impl State {
         );
     }
     pub fn page_by(&mut self, forward: bool) {
+        if self.youtube {
+            let token = self
+                .page
+                .as_ref()
+                .and_then(|page| page.continuation.clone());
+            if forward && let Some(token) = token {
+                let search = matches!(
+                    self.request,
+                    Some(Request::YouTube(
+                        doremi_youtube::Request::Search { .. }
+                            | doremi_youtube::Request::Continue { search: true, .. }
+                    ))
+                );
+                if self.history.len() == 8 {
+                    self.history.remove(0);
+                }
+                self.history.push((
+                    self.detail.clone(),
+                    self.page.clone(),
+                    self.request.clone(),
+                    vec![],
+                ));
+                self.dispatch(
+                    Some(Request::YouTube(doremi_youtube::Request::Continue {
+                        token,
+                        search,
+                    })),
+                    Duration::ZERO,
+                );
+                self.page = None;
+            }
+            return;
+        }
         let Some(page) = &self.page else {
             return;
         };
@@ -289,6 +442,14 @@ impl State {
         self.page = None;
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
+        let revision = self.session.revision;
+        let signed_in = self.session.account.is_some();
+        self.session.poll(ctx);
+        if (signed_in && self.session.account.is_none())
+            || (revision != self.session.revision && self.session.account.is_some())
+        {
+            self.cancel();
+        }
         let mut disconnected = false;
         if let Some(worker) = &mut self.worker {
             loop {
@@ -349,7 +510,7 @@ impl State {
                 self.pending = None;
                 return;
             }
-            match Worker::new() {
+            match Worker::new(self.session.client.clone()) {
                 Ok(worker) => self.worker = Some(worker),
                 Err(error) => {
                     self.pending = None;
@@ -382,8 +543,23 @@ impl State {
             }
         }
     }
+    pub fn youtube_page(&mut self, request: doremi_youtube::Request) {
+        self.cancel();
+        self.selected = true;
+        self.youtube = true;
+        self.dispatch(Some(Request::YouTube(request)), Duration::ZERO);
+    }
+    pub fn home(&mut self) {
+        self.cancel();
+        self.selected = true;
+        self.youtube = true;
+        self.dispatch(
+            Some(Request::YouTube(doremi_youtube::Request::Home)),
+            Duration::ZERO,
+        );
+    }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"selected":self.selected,"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"offset":self.page.as_ref().map(|page|page.offset),"artist_releases":self.artist_releases(),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
+        serde_json::json!({"selected":self.selected,"provider":if self.youtube {"youtube-music"} else {"musicbrainz"},"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"offset":self.page.as_ref().map(|page|page.offset),"artist_releases":self.artist_releases(),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
     }
 }
 
@@ -403,7 +579,11 @@ impl DoremiApp {
         let state = &self.model.as_ref().unwrap().music;
         if state.waiting {
             ui.spinner();
-            ui.label("Consultando MusicBrainz…");
+            ui.label(if state.youtube {
+                "Consultando YouTube Music…"
+            } else {
+                "Consultando MusicBrainz…"
+            });
         }
         if let Some(error) = state.error {
             let retry = state.can_retry();
@@ -463,7 +643,13 @@ impl DoremiApp {
             Hero {
                 kind: kind_label(entry.kind),
                 title: &entry.media.title,
-                description: Some("MusicBrainz · metadatos públicos"),
+                description: Some(
+                    if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER {
+                        "YouTube Music"
+                    } else {
+                        "MusicBrainz · metadatos públicos"
+                    },
+                ),
                 round: entry.kind == EntityKind::Artist,
                 cover_clickable: false,
             },
@@ -535,7 +721,10 @@ impl DoremiApp {
                 }
             },
         );
-        ui.weak("MusicBrainz proporciona metadatos; esta selección no incluye audio.");
+        let youtube = entry.media.id.provider.as_str() == doremi_youtube::PROVIDER;
+        if !youtube {
+            ui.weak("MusicBrainz proporciona metadatos; esta selección no incluye audio.");
+        }
         if entry.kind == EntityKind::Release {
             ui.small(
                 self.model
@@ -545,7 +734,15 @@ impl DoremiApp {
                     .caption(&entry.media.id),
             );
         }
-        ui.small(format!("ID de MusicBrainz: {}", entry.media.id.local()));
+        ui.small(format!(
+            "ID de {}: {}",
+            if youtube {
+                "YouTube Music"
+            } else {
+                "MusicBrainz"
+            },
+            entry.media.id.local()
+        ));
         {
             let saved = self
                 .model
@@ -562,6 +759,7 @@ impl DoremiApp {
                     match entry.kind {
                         EntityKind::Artist => "Guardar artista",
                         EntityKind::Release => "Guardar álbum",
+                        EntityKind::Playlist => "Guardar playlist",
                         EntityKind::Recording => "Guardar",
                     }
                 },
@@ -575,7 +773,7 @@ impl DoremiApp {
                 }
             }
         }
-        if entry.kind == EntityKind::Artist {
+        if entry.kind == EntityKind::Artist && !youtube {
             ui.add_space(12.0);
             let releases = self.model.as_ref().unwrap().music.artist_releases();
             ui.horizontal_wrapped(|ui| {
@@ -694,6 +892,7 @@ fn kind_label(kind: EntityKind) -> &'static str {
         EntityKind::Recording => "Grabación",
         EntityKind::Artist => "Artista",
         EntityKind::Release => "Álbum / edición",
+        EntityKind::Playlist => "Playlist",
     }
 }
 fn duration(ms: u64) -> String {
@@ -741,12 +940,14 @@ mod tests {
         let artist = make_entry(EntityKind::Artist, "QA artist");
         let release = make_entry(EntityKind::Release, "QA edition");
         let mut state = State::new();
+        state.youtube = false;
         state.open(artist.clone());
         let recordings_generation = state.generation;
         state.browse_artist(true);
         assert!(state.generation > recordings_generation);
         assert!(state.artist_releases());
         state.page = Some(Arc::new(Results {
+            continuation: None,
             detail: None,
             items: vec![release.clone(); 3],
             offset: 0,
@@ -761,6 +962,7 @@ mod tests {
             })
         );
         state.page = Some(Arc::new(Results {
+            continuation: None,
             detail: None,
             items: vec![release.clone(); 2],
             offset: 3,
@@ -795,6 +997,7 @@ mod tests {
     #[test]
     fn a_worker_that_exits_after_accepting_a_query_reports_unavailable() {
         let mut state = State::new();
+        state.youtube = false;
         state.search("Moonlight Sonata");
         state.pending = None; // The command was accepted by the worker.
         let (commands, _receive) = mpsc::channel(2);
@@ -814,6 +1017,7 @@ mod tests {
     #[test]
     fn a_replaced_or_cancelled_query_cannot_publish_old_results() {
         let mut state = State::new();
+        state.youtube = false;
         state.search("first");
         let old = state.generation;
         state.search("Café 東京");
@@ -826,6 +1030,7 @@ mod tests {
             generation: Arc::new(AtomicU64::new(0)),
         });
         let page = Arc::new(Results {
+            continuation: None,
             detail: None,
             items: vec![],
             offset: 0,

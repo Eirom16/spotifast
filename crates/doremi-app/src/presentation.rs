@@ -722,7 +722,10 @@ impl DoremiApp {
             return;
         };
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        if media.id.provider.as_str() == "musicbrainz" {
+        if media.id.provider.as_str() == "musicbrainz"
+            || metadata_kind(&media.id)
+                .is_some_and(|kind| kind != doremi_core::media::EntityKind::Recording)
+        {
             let Some(kind) = metadata_kind(&media.id) else {
                 self.model.as_mut().unwrap().notice =
                     "No se reconoce este identificador de catálogo. Se conserva en la biblioteca."
@@ -742,13 +745,21 @@ impl DoremiApp {
         }
         let playable: Vec<_> = rows
             .iter()
-            .filter(|item| item.id.provider.as_str() != "musicbrainz")
+            .filter(|item| {
+                item.id.provider.as_str() != "musicbrainz"
+                    && metadata_kind(&item.id)
+                        .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
+            })
             .cloned()
             .collect();
         if !playable.is_empty() {
             let index = rows[..index]
                 .iter()
-                .filter(|item| item.id.provider.as_str() != "musicbrainz")
+                .filter(|item| {
+                    item.id.provider.as_str() != "musicbrainz"
+                        && metadata_kind(&item.id)
+                            .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
+                })
                 .count();
             self.model.as_mut().unwrap().start_context(playable, index);
             self.navigate(Page::Player);
@@ -768,15 +779,34 @@ impl DoremiApp {
         let palette = theme::palette(prefs.light, prefs.green);
         for (index, media) in rows.iter().enumerate() {
             ui.push_id((&media.id, index), |ui| {
-                let subtitle = if media.id.provider.as_str() == "musicbrainz" {
+                let subtitle = if media.id.provider.as_str() == "musicbrainz"
+                    || media.id.provider.as_str() == "youtube-music"
+                {
                     match metadata_kind(&media.id) {
                         Some(doremi_core::media::EntityKind::Artist) => {
-                            "Artista · MusicBrainz · metadatos"
+                            if media.id.provider.as_str() == "musicbrainz" {
+                                "Artista · MusicBrainz · metadatos"
+                            } else {
+                                "Artista · YouTube Music"
+                            }
                         }
                         Some(doremi_core::media::EntityKind::Release) => {
-                            "Álbum / edición · MusicBrainz · metadatos"
+                            if media.id.provider.as_str() == "musicbrainz" {
+                                "Álbum / edición · MusicBrainz · metadatos"
+                            } else {
+                                "Álbum · YouTube Music"
+                            }
                         }
-                        _ => "MusicBrainz · metadatos",
+                        Some(doremi_core::media::EntityKind::Playlist) => {
+                            "Playlist · YouTube Music"
+                        }
+                        _ => {
+                            if media.id.provider.as_str() == "youtube-music" {
+                                "Canción · YouTube Music"
+                            } else {
+                                "MusicBrainz · metadatos"
+                            }
+                        }
                     }
                 } else if demo_candidate(&media.id) {
                     "Demostración · sin audio"
@@ -918,7 +948,7 @@ impl DoremiApp {
 fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     {
-        doremi_musicbrainz::entity_kind(id).ok()
+        doremi_youtube::entity_kind(id).or_else(|| doremi_musicbrainz::entity_kind(id).ok())
     }
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
     {

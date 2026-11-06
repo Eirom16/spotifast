@@ -23,6 +23,7 @@ cp assets/doremi/LICENSE target/android-assets/licenses/Doremi-assets-GPL-3.txt
 cp assets/doremi/PROVENANCE.md target/android-assets/licenses/
 cp assets/audio/LICENSE.txt target/android-assets/licenses/Audio-CC0.txt
 cp assets/audio/manifest.json target/android-assets/licenses/Audio-manifest.json
+cp crates/doremi-youtube/LICENSE-TUBEFAST target/android-assets/licenses/Tubefast-MIT.txt
 cp crates/doremi-player/licenses/* target/android-assets/licenses/
 cp crates/doremi-player/tests/fixtures/SOURCE.md target/android-assets/licenses/Symphonia-source-and-fixture.md
 cp tools/provider-live-probe/corpus.json target/android-assets/licenses/Commons-CC0-corpus.json
