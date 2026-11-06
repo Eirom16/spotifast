@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Opt-in physical artwork, artist editions or history QA in a new private profile."""
+"""Opt-in physical catalog, artwork or history QA in a new private profile."""
 import argparse
 import json
 from pathlib import Path
@@ -19,6 +19,7 @@ def main():
     journey = parser.add_mutually_exclusive_group()
     journey.add_argument('--history', action='store_true', help='Actual CC0 listening, history, new-process replay and clearing')
     journey.add_argument('--artist-releases', action='store_true', help='Real artist editions, album tracks, pagination and back navigation; no audio')
+    journey.add_argument('--catalog-library', action='store_true', help='Saved artist and album types, new-process restoration and reopening by ID; no audio')
     args = parser.parse_args()
     assert re.fullmatch('[a-z0-9][a-z0-9-]{0,47}', args.profile)
     output = args.output.resolve()
@@ -47,11 +48,13 @@ def main():
             modes=[('history-ui',first_names,'qa-history-checks'),('history-restore',restore_names,'qa-history-restore-checks')] if args.history else [('artwork-ui',artwork_names,'qa-artwork-checks')]
             if args.artist_releases:
                 modes=[('artist-releases',('qa-artist-recordings','qa-artist-editions-dark','qa-artist-editions-next','qa-artist-album-tracks','qa-artist-editions-light'),'qa-artist-checks')]
+            if args.catalog_library:
+                modes=[('catalog-library',('qa-saved-artist','qa-saved-catalog-dark','qa-saved-catalog-light'),'qa-saved-catalog-checks'),('catalog-library-restore',('qa-saved-catalog-restored','qa-saved-artist-reopened','qa-saved-album-reopened','qa-saved-album-removed'),'qa-saved-catalog-restore-checks')]
             checks_by_mode={};pids=[]
             for index,(mode,names,check_name) in enumerate(modes):
                 if index:adb('shell','am','force-stop',package)
                 log=adb('shell','am','instrument','-w','-e','mode',mode,'-e','profile',args.profile,f'{package}.test/dev.eirom.doremi.DoremiInstrumentation')
-                prefix=mode+'-' if args.history else ''
+                prefix=mode+'-' if args.history or args.catalog_library else ''
                 (output/(prefix+'instrumentation.log')).write_bytes(log)
                 state=json.loads(adb('shell','run-as',package,'cat',private+'qa-state.json'))
                 (output/(prefix+'latest-state.json')).write_text(json.dumps(state,indent=2)+'\n')
@@ -70,7 +73,10 @@ def main():
                 assert not re.search(r'FATAL EXCEPTION|Fatal signal \d+|panicked at|JNI DETECTED ERROR',own_log)
                 checks=json.loads(adb('shell','run-as',package,'cat',private+check_name+'.json'))
                 assert checks['result']=='pass'
-                if args.artist_releases:
+                if args.catalog_library:
+                    assert checks['saved_types'] and checks['queue_preserved'] and not checks['audio'] and checks['restored_process']==bool(index)
+                    (output/(check_name+'.json')).write_text(json.dumps(checks,indent=2)+'\n')
+                elif args.artist_releases:
                     assert checks['paging_and_back'] and checks['album_tracks'] and not checks['album_audio']
                 elif not args.history:assert checks['cached_reopen'] and checks['activity_recreation'] and not checks['album_audio']
                 else:
@@ -80,10 +86,10 @@ def main():
                         (output/'qa-history-counted-frames.json').write_bytes(counted)
                 assert all((output/(name+'.png')).is_file() for name in names)
                 checks_by_mode[mode]=checks
-            if args.history:assert len(set(pids))==2,'Restoration reused the old process'
+            if args.history or args.catalog_library:assert len(set(pids))==2,'Restoration reused the old process'
             manifest=json.loads((args.artifact/'manifest.json').read_text())
-            summary=dict(result='pass',source_commit=args.commit,native_source_commit=manifest['native_source_commit'],apk_sha256=digest(apk.read_bytes()),physical_device=True,checks=checks_by_mode if args.history else checks,
-                         fresh_process=bool(args.history),device={key:adb('shell','getprop',key).decode().strip() for key in ('ro.product.model','ro.build.version.sdk','ro.product.cpu.abilist')})
+            summary=dict(result='pass',source_commit=args.commit,native_source_commit=manifest['native_source_commit'],apk_sha256=digest(apk.read_bytes()),physical_device=True,checks=checks_by_mode if args.history or args.catalog_library else checks,
+                         fresh_process=bool(args.history or args.catalog_library),device={key:adb('shell','getprop',key).decode().strip() for key in ('ro.product.model','ro.build.version.sdk','ro.product.cpu.abilist')})
     finally:
         after = library()
         (output/'normal-library-preserved.json').write_text(json.dumps({'before': before, 'after': after, 'preserved': before == after})+'\n')

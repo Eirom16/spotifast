@@ -1128,14 +1128,18 @@ impl DoremiApp {
             Page::Library => {
                 ui.heading("Biblioteca");
                 let library = self.model.as_ref().unwrap().library.clone();
-                ui.label("Tus playlists y canciones guardadas en este dispositivo.");
+                ui.label("Tu música y tus playlists, guardadas en este dispositivo.");
                 if !self.model.as_ref().unwrap().write_library {
                     ui.small("Solo lectura: el archivo anterior se conserva.");
                 }
                 ui.add_space(8.0);
                 self.playlist_library(ui);
                 ui.add_space(16.0);
-                ui.heading("Canciones guardadas");
+                ui.heading("Tu música guardada");
+                self.rows(ui, library.items());
+                if !library.items().is_empty() {
+                    ui.add_space(12.0);
+                }
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 {
                     if self.model.as_ref().unwrap().local_files.pending() {
@@ -1170,7 +1174,6 @@ impl DoremiApp {
                     #[cfg(target_os = "android")]
                             ui.small("WAV PCM16, FLAC y MP3 locales, mono o estéreo, hasta 256 MiB. Se guarda una copia privada.");
                 }
-                self.rows(ui, library.items());
             }
             Page::Playlist => self.playlist_page(ui),
             Page::Queue => self.queue_page(ui),
@@ -1894,6 +1897,37 @@ mod tests {
         assert_eq!(model.page, Page::Search);
         assert_eq!(model.music.detail.as_ref().unwrap().media.id, metadata.id);
         assert_eq!(model.queue.checkpoint(), before);
+        for (prefix, kind) in [
+            ("artist", doremi_core::media::EntityKind::Artist),
+            ("release", doremi_core::media::EntityKind::Release),
+        ] {
+            let saved = Media {
+                id: MediaId::new(
+                    ProviderId::new("musicbrainz").unwrap(),
+                    format!("{prefix}:00000000-0000-4000-8000-000000000001"),
+                )
+                .unwrap(),
+                title: format!("Saved {prefix}"),
+                duration_ms: None,
+            };
+            app.model.as_mut().unwrap().save_media(saved.clone());
+            let restored = persistence::collection::Collection::decode(
+                &app.model.as_ref().unwrap().library.encode().unwrap(),
+            )
+            .unwrap();
+            app.open_library_entry(
+                restored.items(),
+                restored
+                    .items()
+                    .iter()
+                    .position(|media| media.id == saved.id)
+                    .unwrap(),
+            );
+            let model = app.model.as_ref().unwrap();
+            assert_eq!(model.music.detail.as_ref().unwrap().kind, kind);
+            assert_eq!(model.music.detail.as_ref().unwrap().media, saved);
+            assert_eq!(model.queue.checkpoint(), before);
+        }
         app.open_library_entry(&rows, 2);
         let model = app.model.as_ref().unwrap();
         assert_eq!(model.page, Page::Player);

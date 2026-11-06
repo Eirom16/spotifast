@@ -723,11 +723,17 @@ impl DoremiApp {
         };
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if media.id.provider.as_str() == "musicbrainz" {
+            let Some(kind) = metadata_kind(&media.id) else {
+                self.model.as_mut().unwrap().notice =
+                    "No se reconoce este identificador de catálogo. Se conserva en la biblioteca."
+                        .into();
+                return;
+            };
             let model = self.model.as_mut().unwrap();
             model.music.selected = true;
             model.music.open(doremi_core::media::CatalogEntry {
                 media: media.clone(),
-                kind: doremi_core::media::EntityKind::Recording,
+                kind,
                 artists: vec![],
                 edition: None,
             });
@@ -763,7 +769,15 @@ impl DoremiApp {
         for (index, media) in rows.iter().enumerate() {
             ui.push_id((&media.id, index), |ui| {
                 let subtitle = if media.id.provider.as_str() == "musicbrainz" {
-                    "MusicBrainz · metadatos"
+                    match metadata_kind(&media.id) {
+                        Some(doremi_core::media::EntityKind::Artist) => {
+                            "Artista · MusicBrainz · metadatos"
+                        }
+                        Some(doremi_core::media::EntityKind::Release) => {
+                            "Álbum / edición · MusicBrainz · metadatos"
+                        }
+                        _ => "MusicBrainz · metadatos",
+                    }
                 } else if demo_candidate(&media.id) {
                     "Demostración · sin audio"
                 } else if self.model.as_ref().unwrap().online_candidate(&media.id) {
@@ -792,7 +806,8 @@ impl DoremiApp {
                     theme::ListRow {
                         title: &media.title,
                         subtitle: &subtitle,
-                        round: false,
+                        round: metadata_kind(&media.id)
+                            == Some(doremi_core::media::EntityKind::Artist),
                         actions: 2,
                         action_label: "Seleccionar",
                     },
@@ -850,7 +865,7 @@ impl DoremiApp {
                     [22.0, TOUCH],
                     palette.secondary,
                     palette.text,
-                    "Más opciones de la canción",
+                    "Más opciones",
                 );
                 self.record(&format!("row-more:{}", media.id.local()), &more);
                 if self.model.as_ref().unwrap().page == Page::Playlist {
@@ -900,6 +915,17 @@ impl DoremiApp {
     }
 }
 
+fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    {
+        doremi_musicbrainz::entity_kind(id).ok()
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
+    {
+        let _ = id;
+        None
+    }
+}
 fn time(ms: u64) -> String {
     format!("{}:{:02}", ms / 60000, ms / 1000 % 60)
 }

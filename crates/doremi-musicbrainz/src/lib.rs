@@ -57,6 +57,8 @@ pub struct Page {
     pub items: Vec<CatalogEntry>,
     pub offset: u32,
     pub more: bool,
+    /// Lookup metadata refreshes a saved album header without another request.
+    pub detail: Option<CatalogEntry>,
 }
 
 pub struct Client {
@@ -197,6 +199,19 @@ fn local_id(id: &MediaId, kind: EntityKind) -> Result<&str, Error> {
     }
     Ok(uuid_value)
 }
+/// Recover the entity type from a validated, provider-qualified saved identity.
+pub fn entity_kind(id: &MediaId) -> Result<EntityKind, Error> {
+    for kind in [
+        EntityKind::Recording,
+        EntityKind::Artist,
+        EntityKind::Release,
+    ] {
+        if local_id(id, kind).is_ok() {
+            return Ok(kind);
+        }
+    }
+    Err(Error::InvalidRequest)
+}
 fn escape_query(query: &str) -> Result<String, Error> {
     let query = query.trim();
     if query.is_empty() || query.len() > 512 || query.chars().any(char::is_control) {
@@ -331,7 +346,11 @@ pub fn parse(request: &Request, bytes: &[u8]) -> Result<Page, Error> {
         return Err(Error::TooLarge);
     }
     let root: Value = serde_json::from_slice(bytes).map_err(|_| Error::InvalidResponse)?;
-    if let Request::ReleaseTracks { .. } = request {
+    if let Request::ReleaseTracks { id } = request {
+        let detail = entry(&root, EntityKind::Release)?;
+        if detail.media.id != *id {
+            return Err(Error::InvalidResponse);
+        }
         let media = root["media"].as_array().ok_or(Error::InvalidResponse)?;
         // A release may contain many discs. Keep a hard total limit and report
         // overflow rather than silently presenting a partial album as complete.
@@ -352,6 +371,7 @@ pub fn parse(request: &Request, bytes: &[u8]) -> Result<Page, Error> {
             items,
             offset: 0,
             more: false,
+            detail: Some(detail),
         });
     }
     let (kind, offset, count_key) = match request {
@@ -373,6 +393,7 @@ pub fn parse(request: &Request, bytes: &[u8]) -> Result<Page, Error> {
         .map(|value| entry(value, kind))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(Page {
+        detail: None,
         more: !items.is_empty()
             && u64::from(offset) + (items.len() as u64) < total
             && u64::from(offset) + (items.len() as u64) <= u64::from(MAX_OFFSET),
@@ -410,6 +431,23 @@ mod tests {
     }
     #[test]
     fn requests_and_responses_cannot_supply_paths_or_excess_results() {
+        for kind in [
+            EntityKind::Recording,
+            EntityKind::Artist,
+            EntityKind::Release,
+        ] {
+            assert_eq!(entity_kind(&identity(kind, ID).unwrap()), Ok(kind));
+        }
+        for id in [
+            MediaId::new(ProviderId::new("other").unwrap(), format!("artist:{ID}")).unwrap(),
+            MediaId::new(
+                ProviderId::new("musicbrainz").unwrap(),
+                "artist:../../cookie",
+            )
+            .unwrap(),
+        ] {
+            assert_eq!(entity_kind(&id), Err(Error::InvalidRequest));
+        }
         assert!(!uuid("../../cookie"));
         assert_eq!(
             escape_query("  Café + test:* ").unwrap(),
@@ -445,7 +483,7 @@ mod tests {
             id: identity(EntityKind::Release, ID).unwrap(),
         };
         let bytes = format!(
-            r#"{{"media":[{{"tracks":[{{"length":1234,"recording":{{"id":"{ID}","title":"Track"}}}}]}}]}}"#
+            r#"{{"id":"{ID}","title":"Actual album","date":"1990","media":[{{"tracks":[{{"length":1234,"recording":{{"id":"{ID}","title":"Track"}}}}]}}]}}"#
         );
         let page = parse(&request, bytes.as_bytes()).unwrap();
         assert_eq!(
@@ -454,6 +492,18 @@ mod tests {
         );
         assert_eq!(page.items[0].media.duration_ms, Some(1234));
         assert!(!page.more);
+        let detail = page.detail.unwrap();
+        assert_eq!(detail.media.title, "Actual album");
+        assert_eq!(detail.edition.unwrap().date.as_deref(), Some("1990"));
+        assert_eq!(
+            parse(
+                &request,
+                bytes
+                    .replace(ID, "00000000-0000-4000-8000-000000000001")
+                    .as_bytes()
+            ),
+            Err(Error::InvalidResponse)
+        );
     }
     #[test]
     fn artist_releases_keep_edition_ids_and_continue_after_short_pages() {

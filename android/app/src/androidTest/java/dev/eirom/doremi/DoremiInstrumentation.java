@@ -711,6 +711,42 @@ public final class DoremiInstrumentation extends Instrumentation {
         JSONObject catalog=state.optJSONObject("music_catalog");
         return catalog!=null && !catalog.optBoolean("waiting") && catalog.optInt("count",0)>0 && catalog.isNull("error");
     }
+    private boolean savedCatalog(JSONObject state,String id) {
+        JSONArray items=state.optJSONArray("saved_media");
+        if(items!=null) for(int i=0;i<items.length();i++) {
+            JSONObject item=items.optJSONObject(i);
+            if("musicbrainz".equals(item.optString("provider")) && id.equals(item.optString("id"))) return true;
+        }
+        return false;
+    }
+    private boolean catalogLibraryDurable(int count) {
+        try {return privateDocument("library-v1.json").getJSONArray("items").length()==count;}
+        catch(Exception error) {return false;}
+    }
+    private void catalogLibraryUi(boolean restore) throws Exception {
+        final String artist="artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da",album="release:12b57d46-a192-499e-a91f-7da66790a1c1";
+        if(!restore) {
+            if(state().getJSONArray("saved_media").length()!=0) throw new AssertionError("Catalog library QA requires a fresh profile");
+            tap("search");tap("source-musicbrainz");tap("catalog-kind:Release");tap("query");text("The Slip",false);hideKeyboard();
+            until(25000,"identified album",state -> hasControl(state,"catalog-open:"+album));tap("catalog-open:"+album);until(25000,"album tracks",this::catalogLoaded);
+            tap("catalog-save:"+album);until(state -> savedCatalog(state,album));
+            tap("catalog-artist:"+artist);until(25000,"album artist",state -> catalogLoaded(state) && artist.equals(state.optJSONObject("music_catalog").optString("detail")));
+            tap("catalog-save:"+artist);until(state -> savedCatalog(state,artist));capture("qa-saved-artist");
+            tap("library");capture("qa-saved-catalog-dark");tap("settings");tap("light");tap("library");capture("qa-saved-catalog-light");
+            until(state -> savedCatalog(state,artist) && savedCatalog(state,album) && catalogLibraryDurable(2));
+        } else {
+            JSONObject first=state();
+            if(!savedCatalog(first,artist) || !savedCatalog(first,album) || first.getJSONArray("saved_media").length()!=2 || !first.getString("query").isEmpty() || first.getJSONObject("online").getBoolean("worker_initialized") || first.getJSONObject("music_catalog").getLong("generation")!=0) throw new AssertionError("Catalog restoration needed network or lost saved entity types");
+            tap("library");capture("qa-saved-catalog-restored");tap("select:"+artist);
+            until(25000,"restored artist recordings",state -> catalogLoaded(state) && artist.equals(state.optJSONObject("music_catalog").optString("detail")));capture("qa-saved-artist-reopened");
+            tap("library");tap("select:"+album);until(25000,"restored album tracks and credits",state -> catalogLoaded(state) && album.equals(state.optJSONObject("music_catalog").optString("detail")) && hasControl(state,"catalog-artist:"+artist));capture("qa-saved-album-reopened");
+            tap("catalog-save:"+album);until(state -> !savedCatalog(state,album) && savedCatalog(state,artist) && catalogLibraryDurable(1));tap("library");capture("qa-saved-album-removed");
+            if(!state().getString("query").isEmpty()) throw new AssertionError("Saved entity reopening issued a title search");
+        }
+        JSONObject after=state();
+        if(after.optBoolean("audio") || !after.isNull("audio_metrics") || after.getJSONArray("context_occurrences").length()!=0 || after.getJSONArray("manual_occurrences").length()!=0) throw new AssertionError("Saving or opening catalog metadata changed the audio queue");
+        Files.write(new File(profileDirectory(),restore?"qa-saved-catalog-restore-checks.json":"qa-saved-catalog-checks.json").toPath(),new JSONObject().put("result","pass").put("artist_id",artist).put("release_id",album).put("restored_process",restore).put("saved_types",true).put("queue_preserved",true).put("audio",false).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private void artistReleasesUi() throws Exception {
         final String artist="artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da";
         tap("search");tap("source-musicbrainz");tap("catalog-kind:Artist");tap("query");text("Nine Inch Nails",false);hideKeyboard();
@@ -881,6 +917,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("catalog-library".equals(mode) || "catalog-library-restore".equals(mode)) {
+                catalogLibraryUi("catalog-library-restore".equals(mode));result.putString("stream","PASS: saved artist/album types, process restoration, reopening by ID and queue preservation; no audio\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("artist-releases".equals(mode)) {
                 artistReleasesUi();result.putString("stream","PASS: real artist editions, pagination, album tracks, back navigation and themes; no album audio\n");finish(Activity.RESULT_OK,result);return;
             }

@@ -303,7 +303,17 @@ impl State {
                 if generation == self.generation {
                     self.waiting = false;
                     match result {
-                        Ok(page) => self.page = Some(page),
+                        Ok(page) => {
+                            if let Some(detail) = &page.detail
+                                && self
+                                    .detail
+                                    .as_ref()
+                                    .is_some_and(|current| current.media.id == detail.media.id)
+                            {
+                                self.detail = Some(detail.clone());
+                            }
+                            self.page = Some(page);
+                        }
                         Err(error) => {
                             self.error = Some(error);
                             self.retry_at = match error {
@@ -510,10 +520,16 @@ impl DoremiApp {
                         }
                     }
                     if let Some(ms) = entry.media.duration_ms {
+                        if !entry.artists.is_empty() {
+                            ui.weak("•");
+                        }
                         ui.weak(duration(ms));
                     }
                     let edition = edition_label(entry);
                     if !edition.is_empty() {
+                        if !entry.artists.is_empty() || entry.media.duration_ms.is_some() {
+                            ui.weak("•");
+                        }
                         ui.weak(edition);
                     }
                 }
@@ -530,7 +546,7 @@ impl DoremiApp {
             );
         }
         ui.small(format!("ID de MusicBrainz: {}", entry.media.id.local()));
-        if entry.kind == EntityKind::Recording {
+        {
             let saved = self
                 .model
                 .as_ref()
@@ -540,12 +556,26 @@ impl DoremiApp {
             if self.button(
                 ui,
                 &format!("catalog-save:{}", entry.media.id.local()),
-                if saved { "Guardada" } else { "Guardar" },
-                120.0,
+                if saved {
+                    "Quitar de biblioteca"
+                } else {
+                    match entry.kind {
+                        EntityKind::Artist => "Guardar artista",
+                        EntityKind::Release => "Guardar álbum",
+                        EntityKind::Recording => "Guardar",
+                    }
+                },
+                190.0,
             ) {
-                self.model.as_mut().unwrap().save_media(entry.media.clone());
+                let model = self.model.as_mut().unwrap();
+                if saved {
+                    model.remove_saved(&entry.media.id);
+                } else {
+                    model.save_media(entry.media.clone());
+                }
             }
-        } else if entry.kind == EntityKind::Artist {
+        }
+        if entry.kind == EntityKind::Artist {
             ui.add_space(12.0);
             let releases = self.model.as_ref().unwrap().music.artist_releases();
             ui.horizontal_wrapped(|ui| {
@@ -568,7 +598,7 @@ impl DoremiApp {
                     }
                 }
             });
-        } else {
+        } else if entry.kind == EntityKind::Release {
             ui.add_space(12.0);
             ui.label(egui::RichText::new("Canciones").font(theme::bold(20.0)));
         }
@@ -578,7 +608,6 @@ impl DoremiApp {
         use doremi_ui::{self as theme, Icon};
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        let can_save = entry.kind == EntityKind::Recording;
         let artists = entry
             .artists
             .iter()
@@ -605,7 +634,7 @@ impl DoremiApp {
                 title: &entry.media.title,
                 subtitle: &subtitle,
                 round: entry.kind == EntityKind::Artist,
-                actions: usize::from(can_save),
+                actions: 1,
                 action_label: "Explorar",
             },
         );
@@ -613,7 +642,7 @@ impl DoremiApp {
             &format!("catalog-open:{}", entry.media.id.local()),
             &row.body,
         );
-        if can_save {
+        {
             let saved = self
                 .model
                 .as_ref()
@@ -718,6 +747,7 @@ mod tests {
         assert!(state.generation > recordings_generation);
         assert!(state.artist_releases());
         state.page = Some(Arc::new(Results {
+            detail: None,
             items: vec![release.clone(); 3],
             offset: 0,
             more: true,
@@ -731,6 +761,7 @@ mod tests {
             })
         );
         state.page = Some(Arc::new(Results {
+            detail: None,
             items: vec![release.clone(); 2],
             offset: 3,
             more: true,
@@ -795,6 +826,7 @@ mod tests {
             generation: Arc::new(AtomicU64::new(0)),
         });
         let page = Arc::new(Results {
+            detail: None,
             items: vec![],
             offset: 0,
             more: false,

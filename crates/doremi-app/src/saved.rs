@@ -64,7 +64,7 @@ impl Model {
                 Ok(true) => "Añadida a tu biblioteca de Doremi.".into(),
                 Ok(false) => "Ya está en tu biblioteca de Doremi.".into(),
                 Err(Error::TooLarge) => {
-                    "La biblioteca admite 256 pistas con metadatos acotados.".into()
+                    "La biblioteca admite 256 elementos con metadatos acotados.".into()
                 }
                 Err(_) => "Estos metadatos no se pueden guardar.".into(),
             };

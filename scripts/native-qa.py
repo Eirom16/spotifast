@@ -18,6 +18,7 @@ def main():
     parser.add_argument('--artwork',action='store_true',help='Opt-in public metadata and licensed The Slip artwork; no album audio')
     parser.add_argument('--history-music',action='store_true',help='Opt-in actual CC0 listening, history, native replay and process restoration')
     parser.add_argument('--artist-releases',action='store_true',help='Opt-in real artist editions, paging, album tracks and back navigation; no audio')
+    parser.add_argument('--catalog-library',action='store_true',help='Opt-in saved artist/album restoration by ID; no audio')
     parser.add_argument('--history-layout',type=Path,help='Offline geometry QA from an actual listening-history fixture directory')
     parser.add_argument('--close-helper',type=Path,help='Optional owned-window WM_DELETE_WINDOW helper; required by history QA')
     args=parser.parse_args()
@@ -95,6 +96,35 @@ def main():
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
+        if args.catalog_library:
+            assert args.close_helper and args.close_helper.is_file()
+            artist='artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da';album='release:12b57d46-a192-499e-a91f-7da66790a1c1'
+            def loaded(s):return not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0 and s['music_catalog']['error'] is None
+            def saved(id):return {'provider':'musicbrainz','id':id} in state()['saved_media']
+            tap('search');tap('source-musicbrainz');tap('catalog-kind:Release');tap('query');xdo('type','--clearmodifiers','The Slip')
+            wait(lambda s:any(c['name']=='catalog-open:'+album for c in s['controls']),25);tap('catalog-open:'+album);wait(loaded,25)
+            tap('catalog-save:'+album);wait(lambda s:saved(album))
+            tap('catalog-artist:'+artist);wait(lambda s:loaded(s) and s['music_catalog']['detail']==artist,25)
+            tap('catalog-save:'+artist);wait(lambda s:saved(artist));capture('saved-artist')
+            tap('library');capture('saved-catalog-dark')
+            assert len(state()['saved_media'])==2 and not state()['context_occurrences'] and not state()['manual_occurrences']
+            tap('settings');tap('light');tap('library');capture('saved-catalog-light')
+            wait(lambda s:len(json.loads((directory/'library-v1.json').read_text())['items'])==2)
+            old_pid=process.pid;subprocess.run([str(args.close_helper.resolve()),str(window),str(old_pid)],check=True);assert process.wait(timeout=8)==0
+            process=subprocess.Popen([str(args.binary.resolve())],env=env,stdout=logfile,stderr=subprocess.STDOUT)
+            window=xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0];xdo('windowfocus','--sync',window)
+            if args.size:xdo('windowsize','--sync',window,*args.size)
+            restored=wait(lambda s:s['pid']!=old_pid and s['page']=='Home' and bool(s['controls']) and (not args.size or all(abs(a-b)<1 for a,b in zip(s['viewport'],args.size))))
+            assert len(restored['saved_media'])==2 and restored['query']=='' and not restored['online']['worker_initialized'] and restored['music_catalog']['generation']==0
+            tap('library');capture('saved-catalog-restored');tap('select:'+artist)
+            wait(lambda s:loaded(s) and s['music_catalog']['detail']==artist,25);capture('saved-artist-reopened')
+            tap('library');tap('select:'+album);wait(lambda s:loaded(s) and s['music_catalog']['detail']==album,25)
+            assert any(c['name']=='catalog-artist:'+artist for c in state()['controls']),'Album lookup lost its actual artist credits'
+            capture('saved-album-reopened');tap('catalog-save:'+album);wait(lambda s:not saved(album))
+            tap('library');capture('saved-album-removed')
+            assert saved(artist) and len(state()['saved_media'])==1 and not state()['context_occurrences'] and not state()['audio'] and state()['query']==''
+            subprocess.run([str(args.close_helper.resolve()),str(window),str(process.pid)],check=True);assert process.wait(timeout=8)==0
+            (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'artist_id':artist,'release_id':album,'fresh_process':True,'restoration_without_network':True,'reopen_without_search':True,'album_metadata_refreshed':True,'remove_preserves_artist_and_queue':True,'audio':False,'themes':['dark','light']},indent=2)+'\n');print(output);return
         if args.artist_releases:
             artist='artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da'
             def music():return state()['music_catalog']

@@ -49,6 +49,10 @@ impl Model {
         false
     }
     pub(super) fn add_to_playlist(&mut self, id: u64, media: Media) {
+        if !playlist_track(&media) {
+            self.notice = "Abre el álbum o artista y añade sus canciones individualmente.".into();
+            return;
+        }
         if self.playlist_writable() {
             let result = self.playlists.append(id, media);
             self.playlist_feedback(result, "Añadida a la playlist. La cola no cambia.");
@@ -295,7 +299,7 @@ impl DoremiApp {
     }
     pub(super) fn row_playlist_actions(&mut self, ui: &mut egui::Ui, media: &Media, index: usize) {
         let snapshot = self.model.as_ref().unwrap().playlists.clone();
-        if !snapshot.lists().is_empty() {
+        if playlist_track(media) && !snapshot.lists().is_empty() {
             let menu = ui.menu_button("Añadir a playlist", |ui| {
                 egui::ScrollArea::vertical()
                     .max_height(240.0)
@@ -359,6 +363,15 @@ impl DoremiApp {
     }
 }
 
+fn playlist_track(media: &Media) -> bool {
+    // A saved catalog collection is a reference, not a track to expand or play.
+    media.id.provider.as_str() != "musicbrainz"
+        || !matches!(
+            media.id.local().split_once(':'),
+            Some(("artist" | "release", _))
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -373,6 +386,21 @@ mod tests {
         let id = model.playlists.create("Piano").unwrap();
         model.add_to_playlist(id, media.clone());
         model.add_to_playlist(id, media);
+        for kind in ["artist", "release"] {
+            model.add_to_playlist(
+                id,
+                Media {
+                    id: MediaId::new(
+                        ProviderId::new("musicbrainz").unwrap(),
+                        format!("{kind}:00000000-0000-4000-8000-000000000001"),
+                    )
+                    .unwrap(),
+                    title: "Collection metadata".into(),
+                    duration_ms: None,
+                },
+            );
+        }
+        assert_eq!(model.playlists.get(id).unwrap().entries.len(), 2);
         model.playlists.rename(id, "Música para leer").unwrap();
         model.playlists.move_entry(id, 0, 1).unwrap();
         model.playlists.remove(id, 0).unwrap();
