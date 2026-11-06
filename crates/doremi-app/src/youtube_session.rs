@@ -323,7 +323,7 @@ fn run(
             Err(error) => return (Err(error), false),
         },
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        Intent::Connect(profile) => browser::sign_in(cancel, &profile),
+        Intent::Connect(profile) => browser::consent(cancel, &profile),
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         Intent::ImportLegacy => credentials::import_doremi_rust(),
         #[cfg(target_os = "android")]
@@ -441,7 +441,7 @@ impl DoremiApp {
         } else {
             ui.label("Busca y explora sin cuenta. Conecta una cuenta para consultar los datos musicales que YouTube Music permita.");
             #[cfg(any(target_os="linux",target_os="windows"))]
-            ui.small("Autoriza en una ventana externa de Chrome, Chromium o Edge. Doremi recibe la sesión de esa ventana y la guarda en el almacén protegido del sistema.");
+            ui.small("Autoriza en una ventana externa de Firefox (o Chrome/Chromium/Edge). Doremi solo lee la sesión de esa ventana y la guarda en el almacén protegido del sistema.");
             #[cfg(target_os="android")]
             ui.small("Conecta una sesión ya autorizada seleccionando su archivo de Doremi-Rust. Doremi verificará la cuenta y la guardará cifrada en este dispositivo. La autorización directa con Google todavía no está disponible.");
             if self.button(
