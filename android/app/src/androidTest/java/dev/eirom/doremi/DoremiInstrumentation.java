@@ -146,6 +146,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         until(s -> "Player".equals(s.optString("page")));
     }
     private boolean fixedControl(JSONObject data,String name) {
+        if("query".equals(name) && data.optJSONArray("viewport").optDouble(0)<760) return true;
         if(java.util.Arrays.asList("home","search","library","queue","settings").contains(name)) return true;
         if(name.startsWith("up:") || name.startsWith("down:") || name.startsWith("remove:") || name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:") || name.startsWith("playlist-add:") || name.startsWith("playlist-choose:") || name.startsWith("playlist-up:") || name.startsWith("playlist-down:") || name.startsWith("playlist-remove:")) return true;
         if(data.optJSONArray("viewport").optDouble(0)>=760) return java.util.Arrays.asList("play","pause","next","previous","stop","repeat","shuffle","seek","volume","player").contains(name);

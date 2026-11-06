@@ -137,7 +137,7 @@ def main():
             for _ in range(30):
                 data=state();control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect'];scale=data['pixels_per_point'];left,top,right,bottom=data['page_rect']
-                fixed=name in {'home','search','library','queue','settings'} or name.startswith(('add:','forget:','save-again:','up:','down:','remove:')) or (data['page']!='Player' and name in {'play','pause','next','player'})
+                fixed=(name=='query' and data['viewport'][0]<760) or name in {'home','search','library','queue','settings'} or name.startswith(('add:','forget:','save-again:','up:','down:','remove:')) or (data['page']!='Player' and name in {'play','pause','next','player'})
                 if fixed or top<=y1<y2<=bottom: break
                 height=bottom-top;above=y1<top
                 x=round((left+right)/2*scale);start=round((top+height*(.25 if above else .8))*scale+args.origin_y);end=round((top+height*(.8 if above else .25))*scale+args.origin_y)

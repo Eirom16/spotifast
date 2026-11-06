@@ -187,6 +187,27 @@ impl DoremiApp {
                     .inner_margin(Margin::same(if wide { 24 } else { 12 })),
             )
             .show(ui, |ui| {
+                let page = self.model.as_ref().unwrap().page;
+                let search_root = {
+                    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+                    {
+                        let music = &self.model.as_ref().unwrap().music;
+                        !(music.selected && music.detail.is_some())
+                    }
+                    #[cfg(not(any(
+                        target_os = "linux",
+                        target_os = "windows",
+                        target_os = "android"
+                    )))]
+                    {
+                        true
+                    }
+                };
+                if !wide && page == Page::Search && search_root {
+                    // Fixed header: viewport/IME changes and result scrolling
+                    // cannot push the active search field under the keyboard.
+                    self.search_field(ui);
+                }
                 if let Some(error) = self
                     .model
                     .as_ref()
@@ -196,7 +217,7 @@ impl DoremiApp {
                 {
                     ui.colored_label(palette.danger, error);
                 }
-                let rect = ui.max_rect();
+                let rect = ui.available_rect_before_wrap();
                 self.page_rect = [rect.left(), rect.top(), rect.right(), rect.bottom()];
                 let page = self.model.as_ref().unwrap().page;
                 egui::ScrollArea::vertical()

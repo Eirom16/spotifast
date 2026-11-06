@@ -985,6 +985,39 @@ impl DoremiApp {
         self.persist(&ctx);
     }
 
+    pub(crate) fn search_field(&mut self, ui: &mut egui::Ui) {
+        let online = self.model.as_ref().unwrap().online_search_selected();
+        let response = ui.add_sized(
+            [ui.available_width(), TOUCH],
+            egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
+                .id(egui::Id::new("catalog-query"))
+                .hint_text(if online {
+                    "Busca música CC0, por ejemplo Chopin"
+                } else {
+                    "Busca música por nombre o artista"
+                })
+                .char_limit(128),
+        );
+        self.controls.push(Control {
+            name: "query".into(),
+            rect: [
+                response.rect.min.x,
+                response.rect.min.y,
+                response.rect.max.x,
+                response.rect.max.y,
+            ],
+        });
+        if response.has_focus() {
+            self.editor = TextField::Search;
+        }
+        if response.changed() {
+            self.model.as_mut().unwrap().search();
+        }
+        if ui.ctx().content_rect().width() >= 760.0 {
+            self.follow_editor(ui, &response, TextField::Search);
+        }
+    }
+
     fn page_content(&mut self, ui: &mut egui::Ui) {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         let ctx = ui.ctx().clone();
@@ -1032,7 +1065,9 @@ impl DoremiApp {
                     self.music_results(ui);
                     return;
                 }
-                ui.heading("Buscar");
+                if ui.ctx().content_rect().width() >= 760.0 {
+                    ui.heading("Buscar");
+                }
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 {
                     let width = ((ui.available_width() - 3.0 * GAP) / 4.0)
@@ -1127,34 +1162,9 @@ impl DoremiApp {
                         });
                     }
                 }
-                let online = self.model.as_ref().unwrap().online_search_selected();
-                let response = ui.add_sized(
-                    [ui.available_width(), TOUCH],
-                    egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
-                        .id(egui::Id::new("catalog-query"))
-                        .hint_text(if online {
-                            "Busca música CC0, por ejemplo Chopin"
-                        } else {
-                            "Busca música por nombre o artista"
-                        })
-                        .char_limit(128),
-                );
-                self.controls.push(Control {
-                    name: "query".into(),
-                    rect: [
-                        response.rect.min.x,
-                        response.rect.min.y,
-                        response.rect.max.x,
-                        response.rect.max.y,
-                    ],
-                });
-                if response.has_focus() {
-                    self.editor = TextField::Search;
+                if ui.ctx().content_rect().width() >= 760.0 {
+                    self.search_field(ui);
                 }
-                if response.changed() {
-                    self.model.as_mut().unwrap().search();
-                }
-                self.follow_editor(ui, &response, TextField::Search);
                 if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
                     self.model.as_mut().unwrap().cancel_search();
                 }
@@ -1163,6 +1173,7 @@ impl DoremiApp {
                     self.music_results(ui);
                     return;
                 }
+                let online = self.model.as_ref().unwrap().online_search_selected();
                 let results = self.model.as_ref().unwrap().catalog.results().to_vec();
                 if let Some((error, message)) = self.model.as_ref().unwrap().search_feedback() {
                     if error {
@@ -1681,6 +1692,104 @@ mod tests {
             future
         );
         std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn mobile_search_is_pinned_above_results_through_ime_resize_and_scroll() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/mobile-search-header-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        {
+            app.model.as_mut().unwrap().music.selected = false;
+        }
+        app.navigate(Page::Search);
+        // Keep a mini-player visible as well: the IME leaves even less room.
+        app.model
+            .as_mut()
+            .unwrap()
+            .start_context(vec![songs()[0].clone()], 0);
+        app.model.as_mut().unwrap().command(Command::Pause);
+        let mut time = 0.0;
+        fn render(
+            app: &mut DoremiApp,
+            ctx: &egui::Context,
+            time: &mut f64,
+            size: [f32; 2],
+            focused: bool,
+            events: Vec<egui::Event>,
+        ) -> [f32; 4] {
+            *time += 0.1;
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
+                focused,
+                time: Some(*time),
+                events,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .native_pixels_per_point = Some(1.875);
+            let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+            output.textures_delta.clear();
+            let rect = app
+                .controls
+                .iter()
+                .find(|control| control.name == "query")
+                .unwrap()
+                .rect;
+            assert!(
+                rect[1] >= 0.0 && rect[1] <= 16.0,
+                "Search must be at the top: {rect:?}"
+            );
+            assert!(
+                rect[3] - rect[1] >= TOUCH && rect[3] <= app.page_rect[1],
+                "Search is a fixed header above the scrolling results: {rect:?} {:?}",
+                app.page_rect
+            );
+            assert!(rect[0] >= 0.0 && rect[2] <= size[0] && rect[3] <= size[1]);
+            rect
+        }
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for width in [360.0, 393.0, 430.0] {
+                for _ in 0..3 {
+                    render(&mut app, &ctx, &mut time, [width, 740.0], true, vec![]);
+                }
+                app.editor = TextField::Search;
+                app.receive_editor_text("search", "Café · búsqueda");
+                let rect = render(&mut app, &ctx, &mut time, [width, 300.0], false, vec![]);
+                let point = egui::pos2(width / 2.0, (app.page_rect[1] + app.page_rect[3]) / 2.0);
+                for _ in 0..3 {
+                    let scrolled = render(
+                        &mut app,
+                        &ctx,
+                        &mut time,
+                        [width, 300.0],
+                        false,
+                        vec![
+                            egui::Event::PointerMoved(point),
+                            egui::Event::MouseWheel {
+                                unit: egui::MouseWheelUnit::Point,
+                                phase: egui::TouchPhase::Move,
+                                delta: egui::vec2(0.0, -240.0),
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                    );
+                    assert_eq!(rect, scrolled, "Scrolling results moved the search field");
+                }
+                assert_eq!(app.model.as_ref().unwrap().query, "Café · búsqueda");
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
     }
     #[test]
     fn playlist_editor_stays_visible_when_android_ime_takes_window_focus() {

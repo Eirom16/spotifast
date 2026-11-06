@@ -77,7 +77,7 @@ def main():
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
                 is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:','up:','down:','remove:'))
-                is_fixed=name in {'home','search','library','queue','settings'} or (data['viewport'][0]>=760 and name in fixed) or (data['page']!='Player' and name in {'play','pause','next','player'})
+                is_fixed=(name=='query' and data['viewport'][0]<760) or name in {'home','search','library','queue','settings'} or (data['viewport'][0]>=760 and name in fixed) or (data['page']!='Player' and name in {'play','pause','next','player'})
                 if is_menu or is_fixed or top<=y1<y2<=bottom:
                     # During a native resize, an earlier frame's published
                     # controls can briefly precede the new viewport geometry.
