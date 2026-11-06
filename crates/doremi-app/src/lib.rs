@@ -1383,15 +1383,20 @@ mod tests {
     #[test]
     fn mobile_player_is_conditional_and_keeps_full_controls_reachable() {
         let _guard = UI_TEST_LOCK.lock().unwrap();
-        fn render(app: &mut DoremiApp, ctx: &egui::Context, size: [f32; 2]) {
+        fn render(app: &mut DoremiApp, ctx: &egui::Context, size: [f32; 2], scale: f32) {
             for _ in 0..3 {
-                let mut output = ctx.run_ui(
-                    egui::RawInput {
-                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
-                        ..Default::default()
-                    },
-                    |ui| app.draw(ui),
-                );
+                let mut input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size.into())),
+                    ..Default::default()
+                };
+                input
+                    .viewports
+                    .get_mut(&egui::ViewportId::ROOT)
+                    .unwrap()
+                    .native_pixels_per_point = Some(scale);
+                let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+                assert_eq!(ctx.pixels_per_point(), scale);
+                assert!((ctx.content_rect().width() - size[0]).abs() < 1.0);
                 output.textures_delta.clear();
             }
         }
@@ -1402,19 +1407,23 @@ mod tests {
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
         for light in [false, true] {
-            for size in [
+            for (size, scale) in [
                 [360.0, 640.0],
                 [393.0, 852.0],
                 [430.0, 932.0],
                 [640.0, 360.0],
                 [682.65625, 360.0],
                 [720.0, 360.0],
-            ] {
+            ]
+            .into_iter()
+            .map(|size| (size, 1.0))
+            .chain([([682.65625, 360.0], 1.875), ([360.0, 640.0], 1.875)])
+            {
                 let model = app.model.as_mut().unwrap();
                 model.queue = Queue::new(SessionId(90));
                 model.page = Page::Home;
                 model.prefs.light = light;
-                render(&mut app, &ctx, size);
+                render(&mut app, &ctx, size, scale);
                 assert!(
                     !app.controls
                         .iter()
@@ -1427,7 +1436,7 @@ mod tests {
                 media.title="Una canción con un título largo, con acentos y créditos de una interpretación que debe seguir dejando espacio a todos los controles".into();
                 app.model.as_mut().unwrap().start_context(vec![media], 0);
                 app.model.as_mut().unwrap().command(Command::Pause);
-                render(&mut app, &ctx, size);
+                render(&mut app, &ctx, size, scale);
                 assert!(
                     (empty_height - (app.page_rect[3] - app.page_rect[1]) - 72.0).abs() < 1.0,
                     "Mini-player reserves the wrong height"
@@ -1445,7 +1454,7 @@ mod tests {
                 }
                 app.navigate(Page::Library);
                 app.navigate(Page::Player);
-                render(&mut app, &ctx, size);
+                render(&mut app, &ctx, size, scale);
                 let names = [
                     "play",
                     "previous",

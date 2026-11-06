@@ -647,7 +647,8 @@ impl DoremiApp {
                 let notice_height = notice.size().y;
                 #[cfg(not(any(target_os = "android", test)))]
                 let notice_height = 0.0;
-                let art = (height - TOUCH - 2.0 * GAP - notice_height)
+                // Reserve breathing room for device-pixel rounding and the notice.
+                let art = (height - TOUCH - 3.0 * GAP - notice_height)
                     .clamp(96.0, 200.0)
                     .min(ui.available_width());
                 let (rect, response) =

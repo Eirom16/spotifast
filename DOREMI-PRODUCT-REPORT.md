@@ -69,26 +69,34 @@ window manager ausente en Xvfb; otra expectativa del driver confundía EOF con
 Paused. Se corrigieron los controladores conforme al protocolo y al contrato
 Stopped existente, sin cambiar el núcleo ni borrar los fallos.
 
-## Siguiente corte en validación
+## Cola/player y regresión de escala
 
-Cola con las mismas filas de 56 pt: actual separada, futuras por aparición y
-menús para subir/bajar/quitar; vaciar conserva current/context/favoritos. Cuerpo
-estático para las entradas futuras; abrir el player desde la actual. Targets de
-menú 48 pt. Player vacío compartido con acceso real a Buscar. Aviso de pausa en
-Android horizontal reservado bajo la carátula, con límites comprobados en tests.
+2d04a41 unifica la Cola en filas de 56 pt, con actual separada y futuras por
+aparición. Menús de 48 pt para subir/bajar/quitar y vaciado que conserva
+current/context/favoritos. Player vacío compartido con acceso real a Buscar.
 
-Tests/Clippy/Rustdoc/build locales y Java aprobados. GUI de cola/duplicados y
-playlists aprobada en escritorio y 360 px; el build final pasó a 393 px con Chopin
-real, incluida la ruta auditada y restauración sin búsqueda. Capturas antes/después
-360/393/430 px y claro/oscuro revisadas. La nueva Cola y la corrección del aviso
-horizontal necesitan CI/APK y prueba física; **no son el recorrido de 5aa9fbf**.
+[CI enfocada 42136724946](https://github.com/Eirom16/spotifast/actions/runs/42136724946)
+aprobada en los tres jobs. Artefactos del mismo commit descargados, verificados e
+instalados en Linux y Android. Windows conserva el límite OpenGL/NoDevice del
+runner; PE64, checksums y nuevo ejecutable comprobados. La CI completa 42136883688
+aprobó tests, Clippy/Rustdoc, Android, macOS y Preview Linux; Windows sigue pendiente.
+Linux GUI a 393 px pasó duplicados, movimiento exacto, vaciado y playlists.
+
+La primera prueba física de 2d04a41 pasó búsqueda/PCM/seek/recreación pero detectó
+que el aviso horizontal sobresalía 0,28125 pt en el Samsung a escala 1,875.
+Biblioteca normal preservada con el mismo hash. El fallo y su captura se conservan;
+la prueba no alcanzó la Cola. Se reserva un GAP adicional bajo el aviso y la
+regresión de layout ahora incluye esa densidad, además de 360/393/430 pt y ambos
+temas. Test de escala aprobado; CI/APK y repetición física de la corrección pendientes.
+
+Capturas antes/después 360/393/430 px y claro/oscuro revisadas en el corte de Cola.
 Se conservaron dos fallos de QA local que compartieron accidentalmente el display
 X11; las repeticiones aisladas pasaron y el driver ahora comprueba el foco.
 
 Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-05/.
 Incluye ci-5aa9fbf/{linux-mendelssohn-final,android-mendelssohn,windows}/,
 queue-{before,after}-layouts/, queue-ui-{phone360,desktop}-isolated/,
-queue-player-phone393/ y queue-player-final-checks/. No se repitieron suites
+queue-player-phone393/, queue-player-final-checks/ y ci-2d04a41/. No se repitieron suites
 físicas extensas de formatos locales ni se añadieron formatos/importadores.
 
 ## Pendiente del objetivo completo
