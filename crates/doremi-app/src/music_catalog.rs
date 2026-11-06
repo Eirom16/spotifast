@@ -81,6 +81,7 @@ type HistoryEntry = (
     Option<Arc<Results>>,
     Option<Request>,
     Vec<u32>,
+    bool,
 );
 struct Job {
     generation: u64,
@@ -289,6 +290,7 @@ impl State {
             self.page.clone(),
             self.request.clone(),
             std::mem::take(&mut self.previous_offsets),
+            self.youtube,
         ));
         self.youtube = entry.media.id.provider.as_str() == doremi_youtube::PROVIDER;
         let request = if self.youtube {
@@ -314,8 +316,9 @@ impl State {
         self.page = None;
     }
     pub fn back(&mut self) {
-        if let Some((detail, page, request, previous_offsets)) = self.history.pop() {
+        if let Some((detail, page, request, previous_offsets, youtube)) = self.history.pop() {
             self.dispatch(None, Duration::ZERO);
+            self.youtube = youtube;
             self.detail = detail;
             self.page = page;
             self.previous_offsets = previous_offsets;
@@ -386,6 +389,7 @@ impl State {
                     self.page.clone(),
                     self.request.clone(),
                     vec![],
+                    self.youtube,
                 ));
                 self.dispatch(
                     Some(Request::YouTube(doremi_youtube::Request::Continue {
@@ -612,7 +616,7 @@ impl DoremiApp {
                 ui.label("No hay resultados para esta consulta.");
             }
             for (index, item) in page.items.iter().enumerate() {
-                ui.push_id(index, |ui| self.music_row(ui, item));
+                ui.push_id(index, |ui| self.music_row(ui, item, index));
             }
             ui.horizontal_wrapped(|ui| {
                 if page.offset > 0 && self.button(ui, "catalog-previous", "Página anterior", 160.0)
@@ -773,6 +777,40 @@ impl DoremiApp {
                 }
             }
         }
+        if youtube {
+            let tracks: Vec<_> = if entry.kind == EntityKind::Recording {
+                vec![entry.media.clone()]
+            } else {
+                self.model
+                    .as_ref()
+                    .unwrap()
+                    .music
+                    .page
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|page| &page.items)
+                    .filter(|item| item.kind == EntityKind::Recording)
+                    .map(|item| item.media.clone())
+                    .collect()
+            };
+            if !tracks.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    if self.button(ui, "youtube-play-context", "Reproducir", 160.0) {
+                        self.model
+                            .as_mut()
+                            .unwrap()
+                            .start_context(tracks.clone(), 0);
+                        self.navigate(Page::Player);
+                    }
+                    if self.button(ui, "youtube-enqueue-context", "Añadir a la cola", 190.0) {
+                        self.model
+                            .as_mut()
+                            .unwrap()
+                            .command(Command::Append(tracks.clone()));
+                    }
+                });
+            }
+        }
         if entry.kind == EntityKind::Artist && !youtube {
             ui.add_space(12.0);
             let releases = self.model.as_ref().unwrap().music.artist_releases();
@@ -802,7 +840,7 @@ impl DoremiApp {
         }
     }
 
-    fn music_row(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry) {
+    fn music_row(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry, row_index: usize) {
         use doremi_ui::{self as theme, Icon};
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
@@ -833,7 +871,13 @@ impl DoremiApp {
                 subtitle: &subtitle,
                 round: entry.kind == EntityKind::Artist,
                 actions: 1,
-                action_label: "Explorar",
+                action_label: if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
+                    && entry.kind == EntityKind::Recording
+                {
+                    "Reproducir"
+                } else {
+                    "Explorar"
+                },
             },
         );
         self.record(
@@ -882,7 +926,36 @@ impl DoremiApp {
             }
         }
         if row.body.clicked() {
-            self.model.as_mut().unwrap().music.open(entry.clone());
+            if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
+                && entry.kind == EntityKind::Recording
+            {
+                let model = self.model.as_mut().unwrap();
+                let tracks: Vec<_> = model
+                    .music
+                    .page
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|page| &page.items)
+                    .filter(|item| item.kind == EntityKind::Recording)
+                    .map(|item| item.media.clone())
+                    .collect();
+                let index = model
+                    .music
+                    .page
+                    .as_ref()
+                    .map(|page| {
+                        page.items
+                            .iter()
+                            .take(row_index)
+                            .filter(|item| item.kind == EntityKind::Recording)
+                            .count()
+                    })
+                    .unwrap_or(0);
+                model.start_context(tracks, index);
+                self.navigate(Page::Player);
+            } else {
+                self.model.as_mut().unwrap().music.open(entry.clone());
+            }
         }
     }
 }
@@ -915,6 +988,76 @@ fn edition_label(entry: &CatalogEntry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn youtube_ids_and_source_survive_navigation_into_optional_metadata_and_back() {
+        let mut state = State::new();
+        state.search("Chopin");
+        assert!(matches!(
+            state.request,
+            Some(Request::YouTube(doremi_youtube::Request::Search { .. }))
+        ));
+        let prior = state.request.clone();
+        let entry = CatalogEntry {
+            media: Media {
+                id: MediaId::new(
+                    ProviderId::new("musicbrainz").unwrap(),
+                    "artist:00000000-0000-4000-8000-000000000001",
+                )
+                .unwrap(),
+                title: "Optional metadata".into(),
+                duration_ms: None,
+            },
+            kind: EntityKind::Artist,
+            artists: vec![],
+            edition: None,
+        };
+        state.open(entry);
+        assert!(!state.youtube);
+        state.back();
+        assert!(state.youtube);
+        assert_eq!(state.request, prior);
+        let album = doremi_youtube::id("MPREb_exact_album").unwrap();
+        state.open(CatalogEntry {
+            media: Media {
+                id: album.clone(),
+                title: "Album".into(),
+                duration_ms: None,
+            },
+            kind: EntityKind::Release,
+            artists: vec![],
+            edition: None,
+        });
+        assert_eq!(
+            state.request,
+            Some(Request::YouTube(doremi_youtube::Request::Browse {
+                id: album.local().into()
+            }))
+        );
+    }
+    #[test]
+    fn youtube_pagination_preserves_the_provider_token_and_previous_results() {
+        let mut state = State::new();
+        state.search("Chopin");
+        let page = Arc::new(Results {
+            items: vec![],
+            offset: 0,
+            more: true,
+            detail: None,
+            continuation: Some("provider-token".into()),
+        });
+        state.page = Some(page.clone());
+        state.page_by(true);
+        assert_eq!(
+            state.request,
+            Some(Request::YouTube(doremi_youtube::Request::Continue {
+                token: "provider-token".into(),
+                search: true
+            }))
+        );
+        state.back();
+        assert!(Arc::ptr_eq(state.page.as_ref().unwrap(), &page));
+        assert!(state.youtube);
+    }
     #[test]
     fn artist_edition_paging_and_back_preserve_the_actual_page_and_cancel_old_queries() {
         let make_entry = |kind, title: &str| CatalogEntry {

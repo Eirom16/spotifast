@@ -109,7 +109,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app: dependencies` | `serde_json` | `1` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-commons` | `path=../doremi-commons` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-musicbrainz` | `path=../doremi-musicbrainz` |
-| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis', 'local-flac', 'local-mp3']; path=../doremi-player` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis', 'local-flac', 'local-mp3', 'aac-mp4']; path=../doremi-player` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-youtube` | `path=../doremi-youtube` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
@@ -155,7 +155,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `doremi-core` | `path=../doremi-core` |
-| `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json']; version=0.12` |
+| `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json', 'blocking']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-youtube: dependencies` | `serde_json` | `1` |
 | `crates/doremi-youtube: dependencies` | `sha1` | `0.10` |
@@ -170,7 +170,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 807 entradas (incluye miembros locales).
+`Cargo.lock`: 809 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -181,7 +181,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 7 | `git+https://github.com/crmne/librespot?rev=3ba977f1f918582edce566cfc16617f8eccdfb1e#3ba977f1f918582edce566cfc16617f8eccdfb1e` |
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
-| 752 | `registry+https://github.com/rust-lang/crates.io-index` |
+| 754 | `registry+https://github.com/rust-lang/crates.io-index` |
 | 11 | `workspace` |
 
 ## Patches

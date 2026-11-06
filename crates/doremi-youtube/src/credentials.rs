@@ -7,13 +7,16 @@ fn entry() -> Result<keyring_core::Entry, Error> {
     entry_for(USER)
 }
 fn entry_for(user: &str) -> Result<keyring_core::Entry, Error> {
+    entry_at(SERVICE, user)
+}
+fn entry_at(service: &str, user: &str) -> Result<keyring_core::Entry, Error> {
     #[cfg(target_os = "linux")]
     let store = zbus_secret_service_keyring_store::Store::new();
     #[cfg(target_os = "windows")]
     let store = windows_native_keyring_store::Store::new();
     store
         .map_err(|_| Error::Unavailable)?
-        .build(SERVICE, user, None)
+        .build(service, user, None)
         .map_err(|_| Error::Unavailable)
 }
 pub fn load() -> Result<Option<String>, Error> {
@@ -35,6 +38,15 @@ pub fn forget() -> Result<(), Error> {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(_) => Err(Error::Unavailable),
     }
+}
+
+/// Explicit user-selected migration only. The source entry is read-only; the
+/// caller must verify the musical account before writing Doremi's own entry.
+pub fn import_doremi_rust() -> Result<String, Error> {
+    let bytes = entry_at("doremi", "youtube_music_auth")?
+        .get_secret()
+        .map_err(|_| Error::Unavailable)?;
+    crate::legacy_cookie(&bytes)
 }
 
 #[cfg(test)]

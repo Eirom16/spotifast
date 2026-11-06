@@ -486,7 +486,11 @@ impl Model {
             if self.audio.as_ref().and_then(Engine::current_request) == Some(request) {
                 match event {
                     EngineEvent::Ready(r) => {
-                        self.notice = if self
+                        self.notice = if self.queue.current().is_some_and(|entry| {
+                            entry.media.id.provider.as_str() == "youtube-music"
+                        }) {
+                            "YouTube Music · reproducción nativa"
+                        } else if self
                             .queue
                             .current()
                             .is_some_and(|entry| self.online_candidate(&entry.media.id))
@@ -749,7 +753,14 @@ pub struct DoremiApp {
 impl DoremiApp {
     #[cfg(not(target_os = "android"))]
     pub fn new(cc: &eframe::CreationContext<'_>, directory: PathBuf) -> Self {
-        Self::new_context(&cc.egui_ctx, directory)
+        let app = Self::new_context(&cc.egui_ctx, directory);
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        let mut app = app;
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if std::env::var_os("DOREMI_DATA_DIR").is_none() {
+            app.model.as_mut().unwrap().music.session.restore();
+        }
+        app
     }
 
     pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
@@ -1028,7 +1039,19 @@ impl DoremiApp {
                         .floor()
                         .max(TOUCH);
                     ui.horizontal_wrapped(|ui| {
-                        if self.button(ui, "source-youtube", "YouTube Music", width) {
+                        if ui.ctx().content_rect().width() < 760.0 {
+                            ui.spacing_mut().button_padding.x = 4.0;
+                        }
+                        if self.button(
+                            ui,
+                            "source-youtube",
+                            if ui.ctx().content_rect().width() < 760.0 {
+                                "YouTube\nMusic"
+                            } else {
+                                "YouTube Music"
+                            },
+                            width,
+                        ) {
                             let model = self.model.as_mut().unwrap();
                             model.cancel_search();
                             model.set_online_source(false);
@@ -1037,7 +1060,16 @@ impl DoremiApp {
                             model.search();
                             model.revision += 1;
                         }
-                        if self.button(ui, "source-musicbrainz", "MusicBrainz", width) {
+                        if self.button(
+                            ui,
+                            "source-musicbrainz",
+                            if ui.ctx().content_rect().width() < 760.0 {
+                                "Music\nBrainz"
+                            } else {
+                                "MusicBrainz"
+                            },
+                            width,
+                        ) {
                             let model = self.model.as_mut().unwrap();
                             model.cancel_search();
                             model.set_online_source(false);
@@ -1321,6 +1353,8 @@ impl DoremiApp {
             let mut retained = retained;
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             retained.model.artwork.shutdown();
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            retained.model.music.session.shutdown();
             retained.writer.shutdown_with_history(
                 retained
                     .model
@@ -2063,14 +2097,22 @@ mod tests {
                     .iter()
                     .filter(|control| control.name.starts_with("source-"))
                     .collect::<Vec<_>>();
-                assert_eq!(controls.len(), 3);
+                assert_eq!(controls.len(), 4);
                 for control in &controls {
                     let [x1, y1, x2, y2] = control.rect;
                     assert!(x1 >= 0.0 && y1 >= 0.0 && x2 <= size[0] && y2 <= size[1]);
                     assert!(x2 - x1 >= TOUCH && y2 - y1 >= TOUCH);
                 }
                 for pair in controls.windows(2) {
-                    assert_eq!(pair[0].rect[1], pair[1].rect[1]);
+                    assert_eq!(
+                        pair[0].rect[1],
+                        pair[1].rect[1],
+                        "Viewport {size:?}: {:?}",
+                        controls
+                            .iter()
+                            .map(|control| (&control.name, control.rect))
+                            .collect::<Vec<_>>()
+                    );
                     assert!((pair[1].rect[0] - pair[0].rect[2] - GAP).abs() < 0.1);
                 }
             }

@@ -7,6 +7,7 @@ pub mod browser;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod credentials;
 pub mod parser;
+pub mod stream;
 use doremi_core::{
     catalog::ProviderError as Error,
     media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId},
@@ -390,14 +391,14 @@ pub fn entity_kind(media: &MediaId) -> Option<EntityKind> {
         return None;
     }
     let local = media.local();
-    if local.starts_with("UC") {
+    if local.len() == 11 {
+        Some(EntityKind::Recording)
+    } else if local.starts_with("UC") {
         Some(EntityKind::Artist)
     } else if local.starts_with("MPRE") {
         Some(EntityKind::Release)
     } else if local.starts_with("VL") || local.starts_with("PL") || local.starts_with("RD") {
         Some(EntityKind::Playlist)
-    } else if local.len() == 11 {
-        Some(EntityKind::Recording)
     } else {
         None
     }
@@ -549,7 +550,7 @@ mod protocol_tests {
     #[test]
     fn parses_song_album_artist_playlist_and_artwork_without_id_substitution() {
         let card = |id: &str| json!({"musicTwoRowItemRenderer":{"title":{"runs":[{"text":id}]},"navigationEndpoint":{"browseEndpoint":{"browseId":id}},"thumbnailRenderer":{"musicThumbnailRenderer":{"thumbnail":{"thumbnails":[{"url":"https://lh3.googleusercontent.com/fixture","width":700}]}}}}});
-        let value = json!({"contents":[{"musicCarouselShelfRenderer":{"contents":[card("UCfixture"),card("MPREb_fixture"),card("VLPLfixture")]}}]});
+        let value = json!({"contents":[{"musicCarouselShelfRenderer":{"contents":[card("UCfixture"),card("MPREb_fixture"),card("VLPLfixture0001")]}}]});
         let page = parser::parse_page(&value);
         let items = &page.sections[0].items;
         assert_eq!(items.len(), 3);
@@ -561,5 +562,75 @@ mod protocol_tests {
             let entry = entry(item).unwrap();
             assert_eq!(entity_kind(&entry.media.id), Some(entry.kind));
         }
+    }
+}
+
+/// Compatibility with headers saved by Doremi-Rust. Authorization is always
+/// recomputed from the cookie; its legacy `SAPISIDHASH 1` marker is not a grant.
+/// This parser performs no IO and never discovers/imports another app's session.
+pub fn legacy_cookie(bytes: &[u8]) -> Result<String, Error> {
+    if bytes.len() > 64 * 1024 {
+        return Err(Error::TooLarge);
+    }
+    let value: Value = serde_json::from_slice(bytes).map_err(|_| Error::InvalidResponse)?;
+    let user = value
+        .get("x-goog-authuser")
+        .and_then(Value::as_str)
+        .unwrap_or("0");
+    if user != "0" {
+        return Err(Error::Unsupported);
+    }
+    let raw = value
+        .get("cookie")
+        .or_else(|| value.get("Cookie"))
+        .and_then(Value::as_str)
+        .ok_or(Error::InvalidResponse)?;
+    if raw.contains(['\r', '\n']) {
+        return Err(Error::InvalidRequest);
+    }
+    let cookie = raw
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| {
+            pair.split_once('=').is_some_and(|(name, _)| {
+                matches!(
+                    name,
+                    "SAPISID"
+                        | "__Secure-3PAPISID"
+                        | "__Secure-1PAPISID"
+                        | "SID"
+                        | "HSID"
+                        | "SSID"
+                        | "APISID"
+                        | "__Secure-1PSID"
+                        | "__Secure-3PSID"
+                        | "LOGIN_INFO"
+                        | "SIDCC"
+                        | "__Secure-1PSIDTS"
+                        | "__Secure-3PSIDTS"
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    authorization(&cookie, 0).ok_or(Error::InvalidRequest)?;
+    Ok(cookie)
+}
+#[cfg(test)]
+mod legacy_tests {
+    use super::*;
+    #[test]
+    fn imports_cookie_headers_without_reusing_the_legacy_authorization_marker() {
+        let cookie=legacy_cookie(br#"{"cookie":"SAPISID=fixture; LOGIN_INFO=fixture; unrelated=discard","authorization":"SAPISIDHASH 1","x-goog-authuser":"0"}"#).unwrap();
+        assert_eq!(cookie, "SAPISID=fixture; LOGIN_INFO=fixture");
+        assert!(!authorization(&cookie, 123).unwrap().ends_with("HASH 1"));
+        assert_eq!(
+            legacy_cookie(br#"{"cookie":"SID=anonymous"}"#),
+            Err(Error::InvalidRequest)
+        );
+        assert_eq!(
+            legacy_cookie(br#"{"cookie":"SAPISID=fixture","x-goog-authuser":"1"}"#),
+            Err(Error::Unsupported)
+        );
     }
 }

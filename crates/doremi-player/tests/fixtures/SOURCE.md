@@ -59,3 +59,12 @@ SHA-256:
 Tests compare signal error against the original, exact gapless duration,
 CBR frame-scan duration, every sample after seeks with bounded decoder
 preroll, EOF/backward seek, truncation, metadata bounds and corrupt index counts.
+
+## Original scale, AAC / MP4
+
+`scale.m4a` encodes the same original CC0 scale as AAC-LC in MP4, for the
+YouTube Music progressive decoder. Generated with local FFmpeg:
+
+```sh
+ffmpeg -nostdin -v error -i assets/audio/scale.wav -map_metadata -1 -c:a aac -b:a 128k -movflags +faststart crates/doremi-player/tests/fixtures/scale.m4a
+```

@@ -15,6 +15,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 pub(super) enum Prepared {
+    YouTube(Box<doremi_youtube::stream::Stream>),
     Pcm(Arc<Pcm>),
     Stream(
         Box<(
@@ -27,6 +28,7 @@ pub(super) enum Prepared {
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Error {
     Provider(ProviderError),
+    YouTube(ProviderError),
     Decode(DecodeError),
 }
 impl From<ProviderError> for Error {
@@ -37,6 +39,9 @@ impl From<ProviderError> for Error {
 impl Error {
     pub fn message(self) -> String {
         match self {
+            Self::YouTube(ProviderError::AccessDenied)=>"YouTube Music rechazó el acceso o requiere una sesión válida. Conecta la cuenta para comprobar sus permisos.".into(),
+            Self::YouTube(ProviderError::Unavailable)=>"YouTube Music indica que el contenido no está disponible.".into(),
+            Self::YouTube(error)=>format!("No se pudo reproducir desde YouTube Music: {error:?}"),
             Self::Provider(error) => format!("Fuente online: {error:?}"),
             Self::Decode(error) => format!("No se pudo decodificar el audio: {error:?}"),
         }
@@ -113,7 +118,10 @@ pub(super) struct Worker {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl Worker {
-    pub fn new(origin: Instant) -> Result<Self, ProviderError> {
+    pub fn new(
+        origin: Instant,
+        youtube: super::youtube_session::SharedClient,
+    ) -> Result<Self, ProviderError> {
         let (sender, receiver) = mpsc::channel(4);
         let shared = Arc::new(Shared {
             generation: [AtomicU64::new(0), AtomicU64::new(0)],
@@ -133,7 +141,10 @@ impl Worker {
                     .build()
                 {
                     Ok(runtime) => runtime.block_on(async move {
-                        let client = commons::http::client();
+                        let client = Sources {
+                            commons: commons::http::client(),
+                            youtube,
+                        };
                         actor(receiver, state, client, origin).await;
                     }),
                     Err(_) => fail_jobs(receiver, state),
@@ -238,10 +249,15 @@ fn fail_jobs(mut receiver: mpsc::Receiver<Job>, shared: Arc<Shared>) {
         }
     }
 }
+#[derive(Clone)]
+struct Sources {
+    commons: Result<commons::Client, ProviderError>,
+    youtube: super::youtube_session::SharedClient,
+}
 async fn actor(
     mut receiver: mpsc::Receiver<Job>,
     shared: Arc<Shared>,
-    client: Result<commons::Client, ProviderError>,
+    client: Sources,
     origin: Instant,
 ) {
     let mut tasks: [Task; 2] = [None, None];
@@ -281,7 +297,7 @@ async fn actor(
                         request,
                         context,
                     } => {
-                        let result = match transport {
+                        let result = match transport.commons {
                             Ok(client) => commons::search(&client, &request.query, request.limit)
                                 .await
                                 .map(|rows| rows.into_iter().map(|row| row.media).collect()),
@@ -329,7 +345,7 @@ async fn actor(
     }
 }
 async fn source(
-    client: Result<commons::Client, ProviderError>,
+    client: Sources,
     media: &MediaId,
     generation: u64,
     state: &Shared,
@@ -337,6 +353,22 @@ async fn source(
     origin: Instant,
     ctx: &egui::Context,
 ) -> Result<Prepared, Error> {
+    if media.provider.as_str() == doremi_youtube::PROVIDER {
+        state.phase(generation, 1, ctx);
+        let result = match client
+            .youtube
+            .lock()
+            .await
+            .get_or_insert_with(doremi_youtube::Client::new)
+        {
+            Ok(client) => client.resolve(media).await,
+            Err(error) => Err(*error),
+        };
+        return result
+            .map(|stream| Prepared::YouTube(Box::new(stream)))
+            .map_err(Error::YouTube);
+    }
+    let client = client.commons;
     if commons::candidate(media) && commons::audited(media.local()).is_none() {
         state.phase(generation, 1, ctx);
         let info = commons::resolve(&client?, media).await?;
@@ -435,7 +467,10 @@ mod tests {
             let task = tokio::spawn(actor(
                 receiver,
                 shared.clone(),
-                Err(ProviderError::Transport),
+                Sources {
+                    commons: Err(ProviderError::Transport),
+                    youtube: Arc::new(tokio::sync::Mutex::new(None)),
+                },
                 Instant::now(),
             ));
             tokio::time::timeout(Duration::from_secs(2), async {

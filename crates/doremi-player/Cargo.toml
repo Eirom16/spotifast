@@ -13,6 +13,7 @@ native-output = ["dep:cpal"]
 ogg-vorbis = ["dep:symphonia"]
 local-flac = ["dep:symphonia", "symphonia/flac"]
 local-mp3 = ["dep:symphonia", "symphonia/mp3"]
+aac-mp4 = ["dep:symphonia", "symphonia/aac", "symphonia/isomp4"]
 
 [dependencies]
 doremi-core = { path = "../doremi-core" }

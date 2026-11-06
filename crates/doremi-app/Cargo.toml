@@ -33,7 +33,7 @@ doremi-musicbrainz = { path = "../doremi-musicbrainz" }
 doremi-youtube = { path = "../doremi-youtube" }
 # Shared optional Commons experiment; no network until explicitly selected.
 doremi-commons = { path = "../doremi-commons" }
-doremi-player = { path = "../doremi-player", features = ["native-output", "ogg-vorbis", "local-flac", "local-mp3"] }
+doremi-player = { path = "../doremi-player", features = ["native-output", "ogg-vorbis", "local-flac", "local-mp3", "aac-mp4"] }
 tokio = { version = "1", features = ["rt", "time", "net", "sync", "macros"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]

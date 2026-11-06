@@ -1,4 +1,4 @@
-//! Incremental, seekable Vorbis input. The host must authorize and authenticate
+//! Incremental, seekable Ogg/Vorbis and optional AAC/MP4 input. The host must authorize and authenticate
 //! encoded bytes before exposing them here. One decoded packet is retained;
 //! output/resampling use the existing native player's bounded PCM feed.
 use crate::{
@@ -8,7 +8,7 @@ use crate::{
 use std::io::{Read, Seek, SeekFrom};
 use symphonia::core::{
     audio::SampleBuffer,
-    codecs::{CODEC_TYPE_VORBIS, Decoder, DecoderOptions},
+    codecs::{CODEC_TYPE_AAC, CODEC_TYPE_VORBIS, CodecType, Decoder, DecoderOptions},
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
     io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::{Limit, MetadataOptions},
@@ -23,6 +23,8 @@ pub struct Vorbis {
     position: u64,
     buffer: Vec<f32>,
     cursor: usize,
+    invalid: DecodeError,
+    aac: bool,
 }
 impl Vorbis {
     pub fn from_read_seek<R: Read + Seek + Send + Sync + 'static>(
@@ -32,12 +34,33 @@ impl Vorbis {
     ) -> Result<Self, DecodeError> {
         Self::open(Box::new(Seekable { input, length }), expected)
     }
+    #[cfg(feature = "aac-mp4")]
+    pub fn aac_from_read_seek<R: Read + Seek + Send + Sync + 'static>(
+        input: R,
+        length: u64,
+    ) -> Result<Self, DecodeError> {
+        Self::open_format(Box::new(Seekable { input, length }), None, CODEC_TYPE_AAC)
+    }
     pub fn open(input: Box<dyn MediaSource>, expected: Info) -> Result<Self, DecodeError> {
-        if !(8000..=192000).contains(&expected.rate)
-            || !(1..=2).contains(&expected.channels)
-            || expected.frames == 0
-            || expected.frames > u64::from(expected.rate) * 600
-        {
+        Self::open_format(input, Some(expected), CODEC_TYPE_VORBIS)
+    }
+    fn open_format(
+        input: Box<dyn MediaSource>,
+        expected: Option<Info>,
+        codec: CodecType,
+    ) -> Result<Self, DecodeError> {
+        let aac = codec == CODEC_TYPE_AAC;
+        let invalid = if aac {
+            DecodeError::InvalidMp4
+        } else {
+            DecodeError::InvalidOgg
+        };
+        if expected.is_some_and(|expected| {
+            !(8000..=192000).contains(&expected.rate)
+                || !(1..=2).contains(&expected.channels)
+                || expected.frames == 0
+                || expected.frames > u64::from(expected.rate) * 600
+        }) {
             return Err(DecodeError::UnsupportedFormat);
         }
         let stream = MediaSourceStream::new(
@@ -47,7 +70,7 @@ impl Vorbis {
             },
         );
         let mut hint = Hint::new();
-        hint.with_extension("ogg");
+        hint.with_extension(if aac { "m4a" } else { "ogg" });
         let format = symphonia::default::get_probe()
             .format(
                 &hint,
@@ -61,30 +84,57 @@ impl Vorbis {
                     limit_visual_bytes: Limit::Maximum(0),
                 },
             )
-            .map_err(|_| DecodeError::InvalidOgg)?
+            .map_err(|_| invalid)?
             .format;
         if format.tracks().len() != 1 {
             return Err(DecodeError::UnsupportedFormat);
         }
-        let track = format.default_track().ok_or(DecodeError::InvalidOgg)?;
+        let track = format.default_track().ok_or(invalid)?;
         let params = &track.codec_params;
-        if params.codec != CODEC_TYPE_VORBIS
+        let expected = match expected {
+            Some(expected) => expected,
+            None => Info {
+                rate: params.sample_rate.ok_or(invalid)?,
+                channels: params
+                    .channels
+                    .map(|channels| channels.count())
+                    .or_else(|| {
+                        if aac {
+                            aac_channels(params.extra_data.as_deref()?, params.sample_rate?)
+                        } else {
+                            None
+                        }
+                    })
+                    .ok_or(invalid)?,
+                frames: params.n_frames.ok_or(invalid)?,
+            },
+        };
+        if !(8000..=192000).contains(&expected.rate)
+            || !(1..=2).contains(&expected.channels)
+            || expected.frames == 0
+            || expected.frames > u64::from(expected.rate) * 21600
+        {
+            return Err(DecodeError::UnsupportedFormat);
+        }
+        if aac && params.time_base != Some(symphonia::core::units::TimeBase::new(1, expected.rate))
+        {
+            return Err(DecodeError::UnsupportedFormat);
+        }
+        if params.codec != codec
             || params.sample_rate != Some(expected.rate)
+            || (!aac && params.channels.is_none())
             || params
                 .channels
-                .is_none_or(|channels| channels.count() != expected.channels)
+                .is_some_and(|channels| channels.count() != expected.channels)
             || params
                 .n_frames
                 .is_some_and(|frames| frames != expected.frames)
         {
             return Err(DecodeError::UnsupportedFormat);
         }
-        crate::vorbis_limits::check(
-            params
-                .extra_data
-                .as_deref()
-                .ok_or(DecodeError::InvalidOgg)?,
-        )?;
+        if !aac {
+            crate::vorbis_limits::check(params.extra_data.as_deref().ok_or(invalid)?)?;
+        }
         let decoder = symphonia::default::get_codecs()
             .make(params, &DecoderOptions::default())
             .map_err(|_| DecodeError::UnsupportedFormat)?;
@@ -97,21 +147,17 @@ impl Vorbis {
             position: 0,
             buffer: Vec::new(),
             cursor: 0,
+            invalid,
+            aac,
         })
     }
     fn packet(&mut self) -> Result<(), DecodeError> {
         for _ in 0..32 {
-            let packet = self
-                .format
-                .next_packet()
-                .map_err(|_| DecodeError::InvalidOgg)?;
+            let packet = self.format.next_packet().map_err(|_| self.invalid)?;
             if packet.track_id() != self.track {
                 return Err(DecodeError::UnsupportedFormat);
             }
-            let decoded = self
-                .decoder
-                .decode(&packet)
-                .map_err(|_| DecodeError::InvalidOgg)?;
+            let decoded = self.decoder.decode(&packet).map_err(|_| self.invalid)?;
             if decoded.spec().rate != self.info.rate
                 || decoded.spec().channels.count() != self.info.channels
             {
@@ -128,9 +174,9 @@ impl Vorbis {
             // of the packet that actually produced this buffer.
             self.position = packet.ts();
             if self.position > self.info.frames
-                || decoded.frames() as u64 > self.info.frames - self.position
+                || (!self.aac && decoded.frames() as u64 > self.info.frames - self.position)
             {
-                return Err(DecodeError::InvalidOgg);
+                return Err(self.invalid);
             }
             let mut converted =
                 SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec());
@@ -139,16 +185,24 @@ impl Vorbis {
             if self.buffer.capacity() < converted.samples().len() {
                 self.buffer.reserve_exact(converted.samples().len());
             }
-            for sample in converted.samples() {
+            let count = if self.aac {
+                converted
+                    .samples()
+                    .len()
+                    .min((self.info.frames - self.position) as usize * self.info.channels)
+            } else {
+                converted.samples().len()
+            };
+            for sample in &converted.samples()[..count] {
                 if !sample.is_finite() {
-                    return Err(DecodeError::InvalidOgg);
+                    return Err(self.invalid);
                 }
                 self.buffer.push(sample.clamp(-1.0, 1.0));
             }
             self.cursor = 0;
             return Ok(());
         }
-        Err(DecodeError::InvalidOgg)
+        Err(self.invalid)
     }
 }
 struct Seekable<R> {
@@ -201,14 +255,14 @@ impl FrameReader for Vorbis {
                     track_id: self.track,
                 },
             )
-            .map_err(|_| DecodeError::InvalidOgg)?;
+            .map_err(|_| self.invalid)?;
         if seek.track_id != self.track || seek.actual_ts > frame {
-            return Err(DecodeError::InvalidOgg);
+            return Err(self.invalid);
         }
         self.decoder.reset();
         self.position = seek.actual_ts;
         while self.position < frame {
-            self.read_frame()?.ok_or(DecodeError::InvalidOgg)?;
+            self.read_frame()?.ok_or(self.invalid)?;
         }
         Ok(())
     }
@@ -231,7 +285,22 @@ impl FrameReader for Vorbis {
     }
 }
 
-#[cfg(test)]
+// Read only the fixed AAC-LC AudioSpecificConfig fields needed for bounded PCM
+// allocation. The codec remains Symphonia; PCE/multichannel/HE-AAC are rejected.
+fn aac_channels(bytes: &[u8], rate: u32) -> Option<usize> {
+    let first = *bytes.first()?;
+    let second = *bytes.get(1)?;
+    let object = first >> 3;
+    let index = ((first & 7) << 1) | (second >> 7);
+    let channels = (second >> 3) & 15;
+    let rates = [
+        96000, 88200, 64000, 48000, 44100, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 7350,
+    ];
+    (object == 2 && rates.get(index as usize) == Some(&rate) && (1..=2).contains(&channels))
+        .then_some(channels as usize)
+}
+
+#[cfg(all(test, feature = "ogg-vorbis"))]
 mod tests {
     use super::*;
     #[test]
@@ -272,6 +341,35 @@ mod tests {
                     .abs()
                         < 1e-5
                 );
+            }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "aac-mp4"))]
+mod aac_tests {
+    use super::*;
+    #[test]
+    fn incremental_aac_decode_and_seek_use_the_shared_frame_reader() {
+        let bytes = include_bytes!("../tests/fixtures/scale.m4a");
+        let mut source =
+            Vorbis::aac_from_read_seek(std::io::Cursor::new(bytes.to_vec()), bytes.len() as u64)
+                .unwrap();
+        let info = source.info();
+        assert!((7900..=8100).contains(&(info.frames * 1000 / u64::from(info.rate))));
+        let mut frames = Vec::new();
+        while let Some(frame) = source.read_frame().unwrap() {
+            frames.push(frame);
+        }
+        assert_eq!(frames.len() as u64, info.frames);
+        assert!(frames.iter().flatten().all(|sample| sample.is_finite()));
+        assert!(frames.iter().any(|frame| frame[0].abs() > 0.01));
+        let target = u64::from(info.rate) * 4;
+        source.seek_frame(target).unwrap();
+        for expected in frames.iter().skip(target as usize).take(32) {
+            let actual = source.read_frame().unwrap().unwrap();
+            for channel in 0..2 {
+                assert!((actual[channel] - expected[channel]).abs() < 0.001);
             }
         }
     }

@@ -18,9 +18,9 @@ use doremi_core::media::{Media, MediaId, ProviderId};
 pub use ogg::{MAX_OGG_BYTES, decode_ogg, decode_ogg_cancellable};
 #[cfg(feature = "native-output")]
 pub use output::{Cancellation, Engine, EngineError, EngineEvent, Metrics, StreamFactory};
-#[cfg(feature = "ogg-vorbis")]
+#[cfg(any(feature = "ogg-vorbis", feature = "aac-mp4"))]
 pub mod ogg_stream;
-#[cfg(feature = "ogg-vorbis")]
+#[cfg(any(feature = "ogg-vorbis", feature = "aac-mp4"))]
 mod vorbis_limits;
 
 pub const MAX_SAMPLES: usize = 1_000_000;
@@ -77,6 +77,7 @@ pub enum DecodeError {
     InvalidOgg,
     InvalidFlac,
     InvalidMp3,
+    InvalidMp4,
     Cancelled,
     UnsupportedFormat,
     InvalidOutputRate,

@@ -9,8 +9,11 @@ use std::sync::{
 pub type SharedClient = Arc<tokio::sync::Mutex<Option<Result<Client, ProviderError>>>>;
 #[derive(Clone, Copy)]
 enum Intent {
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     Restore,
     Connect,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    ImportLegacy,
     Disconnect,
     Expire,
 }
@@ -33,6 +36,7 @@ pub(super) struct State {
     pending: Option<Intent>,
     commands: Option<SyncSender<Job>>,
     events: Option<Receiver<Completion>>,
+    thread: Option<std::thread::JoinHandle<()>>,
     cancel: Arc<AtomicBool>,
 }
 impl State {
@@ -44,19 +48,39 @@ impl State {
             busy: false,
             durable: false,
             revision: 0,
-            pending: Some(Intent::Restore),
+            pending: None,
             commands: None,
             events: None,
+            thread: None,
             cancel: Arc::new(AtomicBool::new(false)),
         }
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn restore(&mut self) {
+        self.pending = Some(Intent::Restore);
     }
     pub fn connect(&mut self) {
         self.pending = Some(Intent::Connect);
         self.error = None;
     }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub fn import_legacy(&mut self) {
+        self.pending = Some(Intent::ImportLegacy);
+        self.error = None;
+    }
     pub fn disconnect(&mut self) {
         self.cancel.store(true, Ordering::Release);
         self.pending = Some(Intent::Disconnect);
+    }
+    // Desktop calls only after the event loop; drawing and Android lifecycle
+    // never wait for native browser/keyring cleanup.
+    pub fn shutdown(&mut self) {
+        self.cancel();
+        self.commands.take();
+        self.events.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::Release);
@@ -105,7 +129,7 @@ impl State {
             let (complete, events) = mpsc::sync_channel(1);
             let client = self.client.clone();
             let cancel = self.cancel.clone();
-            if std::thread::Builder::new()
+            let thread = std::thread::Builder::new()
                 .name("doremi-youtube-session".into())
                 .spawn(move || {
                     let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -130,12 +154,14 @@ impl State {
                         job.ctx.request_repaint();
                     }
                     runtime.shutdown_timeout(Duration::from_millis(100));
-                })
-                .is_err()
-            {
-                self.error = Some(ProviderError::Unavailable);
-                self.pending = None;
-                return;
+                });
+            match thread {
+                Ok(thread) => self.thread = Some(thread),
+                Err(_) => {
+                    self.error = Some(ProviderError::Unavailable);
+                    self.pending = None;
+                    return;
+                }
             }
             self.commands = Some(send);
             self.events = Some(events);
@@ -176,7 +202,7 @@ fn run(
                 client.clear_session();
             }
         });
-        let result = credentials::forget().and_then(|()| {
+        let result = credentials::forget().and({
             if matches!(intent, Intent::Expire) {
                 Err(ProviderError::AccessDenied)
             } else {
@@ -192,6 +218,7 @@ fn run(
             Err(error) => return (Err(error), false),
         },
         Intent::Connect => browser::sign_in(cancel),
+        Intent::ImportLegacy => credentials::import_doremi_rust(),
         Intent::Disconnect | Intent::Expire => unreachable!(),
     };
     let cookie = match cookie {
@@ -234,10 +261,7 @@ fn run(
 ) -> (Result<Option<Account>, ProviderError>, bool) {
     // Custom Tabs cannot expose HttpOnly cookies to an app. Do not substitute
     // Google identity OAuth for access to the YouTube Music private library.
-    if matches!(
-        intent,
-        Intent::Restore | Intent::Disconnect | Intent::Expire
-    ) {
+    if matches!(intent, Intent::Disconnect | Intent::Expire) {
         (Ok(None), false)
     } else {
         (Err(ProviderError::Unsupported), false)
@@ -261,9 +285,10 @@ impl DoremiApp {
                 ui.weak("Sesión temporal: no se pudo guardar en el almacén protegido del sistema.");
             }
             if self.button(ui, "youtube-signout", "Cerrar sesión", 220.0) {
-                let music = &mut self.model.as_mut().unwrap().music;
-                music.cancel();
-                music.session.disconnect();
+                let model = self.model.as_mut().unwrap();
+                model.command(Command::Cancel);
+                model.music.cancel();
+                model.music.session.disconnect();
             }
             for (name, label, request) in [
                 (
@@ -305,6 +330,18 @@ impl DoremiApp {
             ui.small("La conexión de cuenta en Android aún no está disponible: el navegador externo no permite compartir la sesión musical con Doremi.");
             if self.button(ui, "youtube-signin", "Iniciar sesión", 220.0) {
                 self.model.as_mut().unwrap().music.session.connect();
+            }
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                ui.small("También puedes conectar una sesión ya autorizada y guardada en el llavero por Doremi-Rust. Solo se leerá cuando pulses el botón.");
+                if self.button(
+                    ui,
+                    "youtube-import-session",
+                    "Conectar cuenta de Doremi-Rust",
+                    280.0,
+                ) {
+                    self.model.as_mut().unwrap().music.session.import_legacy();
+                }
             }
         }
         if let Some(error) = self.model.as_ref().unwrap().music.session.error {

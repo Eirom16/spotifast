@@ -14,12 +14,21 @@ use std::{
 const LOGIN: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
 struct Browser {
     child: Child,
-    _profile: tempfile::TempDir,
+    profile: Option<tempfile::TempDir>,
 }
 impl Drop for Browser {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        if let Some(profile) = self.profile.take() {
+            let path = profile.keep();
+            for _ in 0..15 {
+                if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+        }
     }
 }
 fn programs() -> Vec<PathBuf> {
@@ -115,7 +124,7 @@ pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
         .ok_or(Error::Unavailable)?;
     let mut browser = Browser {
         child,
-        _profile: profile,
+        profile: Some(profile),
     };
     let start = Instant::now();
     let mut calls = 0_u64;
@@ -132,11 +141,16 @@ pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
             return Err(Error::Cancelled);
         }
         std::thread::sleep(Duration::from_millis(250));
-        let Some(port) =
-            std::fs::read_to_string(browser._profile.path().join("DevToolsActivePort"))
-                .ok()
-                .and_then(|v| v.lines().next()?.parse::<u16>().ok())
-        else {
+        let Some(port) = std::fs::read_to_string(
+            browser
+                .profile
+                .as_ref()
+                .unwrap()
+                .path()
+                .join("DevToolsActivePort"),
+        )
+        .ok()
+        .and_then(|v| v.lines().next()?.parse::<u16>().ok()) else {
             continue;
         };
         let Some(address) = debugger(port) else {
