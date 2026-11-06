@@ -40,6 +40,18 @@ public final class MainActivity extends Activity {
     private String inputTarget="search";
     private static native void nativeDocument(long generation,String uri);
     private static final int OPEN_WAV=403;
+    private static final int OPEN_YOUTUBE_SESSION=404;
+    private static native void nativeSessionDocument(long generation,String uri);
+    private long sessionRequest=0;
+    private long lastSessionRequest=0;
+    private volatile boolean sessionResultReady=false;
+    private volatile long sessionResultGeneration=0;
+    private volatile String sessionResultUri="";
+    // Called only by the Rust session worker; no IO on UI/GL threads.
+    public static byte[] loadYoutubeSession(Context context,String directory) throws java.io.IOException {return YoutubeSessionStore.load(context,directory);}
+    public static void storeYoutubeSession(Context context,String directory,byte[] cookie) throws java.io.IOException {YoutubeSessionStore.store(context,directory,cookie);}
+    public static void forgetYoutubeSession(Context context,String directory) throws java.io.IOException {YoutubeSessionStore.forget(context,directory);}
+    public static byte[] readYoutubeSessionDocument(Context context,String uri) throws java.io.IOException {return YoutubeSessionStore.readDocument(context,uri);}
     private long fileRequest=0;
     private volatile boolean documentResultReady=false;
     private volatile long documentResultGeneration=0;
@@ -61,12 +73,23 @@ public final class MainActivity extends Activity {
         return "Archivo WAV";
     }
     private void requestDocument(long generation) {
-        if(generation==0 || fileRequest!=0) return;
+        if(generation==0 || fileRequest!=0 || sessionRequest!=0) return;
         fileRequest=generation;
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("audio/*");
         intent.putExtra(Intent.EXTRA_LOCAL_ONLY,true);
+        if(!startSystemDocument(intent,OPEN_WAV)) deliverDocument("");
+    }
+    private void requestSessionDocument(long generation) {
+        if(generation==0 || generation<=lastSessionRequest || sessionRequest!=0 || fileRequest!=0 || sessionResultReady) return;
+        lastSessionRequest=generation;
+        sessionRequest=generation;
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
+        intent.putExtra(Intent.EXTRA_LOCAL_ONLY,true);
+        if(!startSystemDocument(intent,OPEN_YOUTUBE_SESSION)) deliverSessionDocument("");
+    }
+    private boolean startSystemDocument(Intent intent,int requestCode) {
         // Keep this request in the system documents UI, rather than delegating
         // it to a third-party file-manager default that may ignore SAF hints.
         // Query only this action; no package inventory or default changes.
@@ -80,9 +103,8 @@ public final class MainActivity extends Activity {
             }
         }
         if(systemPicker==null) {
-            deliverDocument("");
             Toast.makeText(this,"Selector de documentos del sistema no disponible",Toast.LENGTH_LONG).show();
-            return;
+            return false;
         }
         intent.setComponent(new android.content.ComponentName(systemPicker.activityInfo.packageName,systemPicker.activityInfo.name));
         // Development QA opens only its own generated directory; never collect
@@ -93,10 +115,8 @@ public final class MainActivity extends Activity {
                 android.provider.DocumentsContract.buildDocumentUri("com.android.externalstorage.documents","primary:Download/"+folder));
         }
         intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        try { startActivityForResult(intent,OPEN_WAV); }
-        catch(android.content.ActivityNotFoundException error) {
-            deliverDocument("");
-        }
+        try { startActivityForResult(intent,requestCode);return true; }
+        catch(android.content.ActivityNotFoundException error) {return false;}
     }
     private void deliverDocument(String uri) {
         documentResultGeneration=fileRequest;
@@ -105,11 +125,22 @@ public final class MainActivity extends Activity {
         documentResultReady=true;
         if(surface!=null) surface.requestRender();
     }
+    private void deliverSessionDocument(String uri) {
+        sessionResultGeneration=sessionRequest;sessionResultUri=uri;sessionRequest=0;sessionResultReady=true;
+        if(surface!=null) surface.requestRender();
+    }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
         if(request==OPEN_WAV) deliverDocument(result==RESULT_OK && data!=null && data.getData()!=null?data.getData().toString():"");
+        if(request==OPEN_YOUTUBE_SESSION) deliverSessionDocument(result==RESULT_OK && data!=null && data.getData()!=null?data.getData().toString():"");
     }
     @Override protected void onSaveInstanceState(Bundle state) {
+        state.putInt("doremiSessionPid",android.os.Process.myPid());
+        state.putLong("doremiSessionLastRequest",lastSessionRequest);
+        state.putLong("doremiSessionRequest",sessionRequest);
+        state.putBoolean("doremiSessionReady",sessionResultReady);
+        state.putLong("doremiSessionGeneration",sessionResultGeneration);
+        state.putString("doremiSessionUri",sessionResultUri);
         state.putLong("doremiFileRequest",fileRequest);
         state.putBoolean("doremiDocumentReady",documentResultReady);
         state.putLong("doremiDocumentGeneration",documentResultGeneration);
@@ -155,6 +186,15 @@ public final class MainActivity extends Activity {
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         if(state!=null) {
+            // A process restart retires an unfinished import; its result must
+            // never attach to a newly-created Rust request with the same number.
+            if(state.getInt("doremiSessionPid",0)==android.os.Process.myPid()) {
+                lastSessionRequest=state.getLong("doremiSessionLastRequest",0);
+                sessionRequest=state.getLong("doremiSessionRequest",0);
+                sessionResultReady=state.getBoolean("doremiSessionReady",false);
+                sessionResultGeneration=state.getLong("doremiSessionGeneration",0);
+                sessionResultUri=state.getString("doremiSessionUri","");
+            }
             fileRequest=state.getLong("doremiFileRequest",0);
             documentResultGeneration=state.getLong("doremiDocumentGeneration",0);
             documentResultUri=state.getString("doremiDocumentResult","");
@@ -261,10 +301,16 @@ public final class MainActivity extends Activity {
                 documentResultReady=false; documentResultUri="";
                 nativeDocument(generation,uri);
             }
+            if(sessionResultReady) {
+                long generation=sessionResultGeneration;String uri=sessionResultUri;
+                sessionResultReady=false;sessionResultUri="";
+                nativeSessionDocument(generation,uri);
+            }
             String output=nativeDraw(width,height,scale);
             try {
                 JSONObject data=new JSONObject(output);
                 long requestedDocument=data.optLong("file_request",0);
+                long requestedSession=data.optLong("session_request",0);
                 boolean ime=data.optBoolean("ime");
                 boolean back=data.optBoolean("can_go_back");
                 boolean needsFocus=data.optBoolean("needs_focus");
@@ -277,6 +323,7 @@ public final class MainActivity extends Activity {
                     if(!resumed) return;
                     canGoBack=back;
                     requestDocument(requestedDocument);
+                    requestSessionDocument(requestedSession);
                     updateFocus(needsFocus,loadingAudio);
                     inputTarget=target;
                     updatingInput=true;

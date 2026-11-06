@@ -7,15 +7,31 @@ use std::sync::{
     mpsc::{self, Receiver, SyncSender},
 };
 pub type SharedClient = Arc<tokio::sync::Mutex<Option<Result<Client, ProviderError>>>>;
-#[derive(Clone, Copy)]
+// Renderer recreation must not reuse a retired Android document request.
+#[cfg(target_os = "android")]
+static PICKER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[derive(Clone)]
 enum Intent {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
     Restore,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     Connect,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     ImportLegacy,
+    #[cfg(target_os = "android")]
+    ImportDocument(String),
     Disconnect,
     Expire,
+}
+impl Intent {
+    fn focus(&self) -> bool {
+        match self {
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            Self::Connect | Self::ImportLegacy => true,
+            #[cfg(target_os = "android")]
+            Self::ImportDocument(_) => true,
+            _ => false,
+        }
+    }
 }
 struct Job {
     intent: Intent,
@@ -34,6 +50,9 @@ pub(super) struct State {
     pub durable: bool,
     pub revision: u64,
     pending: Option<Intent>,
+    restored: bool,
+    #[cfg(target_os = "android")]
+    picker: Option<(u64, Instant)>,
     commands: Option<SyncSender<Job>>,
     events: Option<Receiver<Completion>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -49,27 +68,77 @@ impl State {
             durable: false,
             revision: 0,
             pending: None,
+            restored: false,
+            #[cfg(target_os = "android")]
+            picker: None,
             commands: None,
             events: None,
             thread: None,
             cancel: Arc::new(AtomicBool::new(false)),
         }
     }
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn restore(&mut self) {
-        self.pending = Some(Intent::Restore);
+        if !self.restored {
+            self.restored = true;
+            self.pending = Some(Intent::Restore);
+        }
     }
     pub fn connect(&mut self) {
-        self.pending = Some(Intent::Connect);
+        self.restored = true;
         self.error = None;
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            self.pending = Some(Intent::Connect);
+        }
+        #[cfg(target_os = "android")]
+        {
+            let Ok(previous) =
+                PICKER_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+                    value.checked_add(1)
+                })
+            else {
+                self.error = Some(ProviderError::Exhausted);
+                return;
+            };
+            let generation = previous + 1;
+            self.picker = Some((generation, Instant::now() + Duration::from_secs(120)));
+        }
+    }
+    #[cfg(target_os = "android")]
+    pub fn picker_request(&self) -> u64 {
+        self.picker.map_or(0, |(generation, _)| generation)
+    }
+    #[cfg(target_os = "android")]
+    pub fn selected_document(&mut self, generation: u64, uri: String) {
+        let Some((active, deadline)) = self.picker else {
+            return;
+        };
+        if generation != active {
+            return;
+        }
+        self.picker = None;
+        if Instant::now() >= deadline {
+            self.error = Some(ProviderError::Timeout);
+            return;
+        }
+        if uri.is_empty() {
+            self.error = Some(ProviderError::Cancelled);
+            return;
+        }
+        if !uri.starts_with("content://") || uri.len() > 4096 || uri.chars().any(char::is_control) {
+            self.error = Some(ProviderError::InvalidRequest);
+            return;
+        }
+        self.pending = Some(Intent::ImportDocument(uri));
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     pub fn import_legacy(&mut self) {
+        self.restored = true;
         self.pending = Some(Intent::ImportLegacy);
         self.error = None;
     }
     pub fn disconnect(&mut self) {
-        self.cancel.store(true, Ordering::Release);
+        self.cancel();
         self.pending = Some(Intent::Disconnect);
     }
     // Desktop calls only after the event loop; drawing and Android lifecycle
@@ -82,10 +151,24 @@ impl State {
             let _ = thread.join();
         }
     }
-    pub fn cancel(&self) {
+    pub fn cancel(&mut self) {
         self.cancel.store(true, Ordering::Release);
+        self.pending = None;
+        #[cfg(target_os = "android")]
+        {
+            self.picker = None;
+        }
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
+        #[cfg(target_os = "android")]
+        if let Some((_, deadline)) = self.picker {
+            if Instant::now() >= deadline {
+                self.picker = None;
+                self.error = Some(ProviderError::Timeout);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
         if self.account.is_some()
             && self.client.try_lock().ok().is_some_and(
                 |client| matches!(client.as_ref(),Some(Ok(client)) if !client.signed_in()),
@@ -123,7 +206,9 @@ impl State {
             ctx.request_repaint_after(Duration::from_millis(100));
             return;
         }
-        let Some(intent) = self.pending else { return };
+        let Some(intent) = self.pending.clone() else {
+            return;
+        };
         if self.commands.is_none() {
             let (send, receive) = mpsc::sync_channel::<Job>(1);
             let (complete, events) = mpsc::sync_channel(1);
@@ -140,12 +225,13 @@ impl State {
                         return;
                     };
                     while let Ok(job) = receive.recv() {
+                        let focus = job.intent.focus();
                         let (result, durable) = run(job.intent, &client, &runtime, &cancel);
                         if complete
                             .send(Completion {
                                 result,
                                 durable,
-                                focus: matches!(job.intent, Intent::Connect),
+                                focus,
                             })
                             .is_err()
                         {
@@ -188,13 +274,15 @@ impl Drop for State {
         self.cancel();
     }
 }
-#[cfg(any(target_os = "linux", target_os = "windows"))]
 fn run(
     intent: Intent,
     client: &SharedClient,
     runtime: &tokio::runtime::Runtime,
     cancel: &AtomicBool,
 ) -> (Result<Option<Account>, ProviderError>, bool) {
+    #[cfg(target_os = "android")]
+    use super::android_native::youtube_credentials as credentials;
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     use doremi_youtube::{browser, credentials};
     if matches!(intent, Intent::Disconnect | Intent::Expire) {
         runtime.block_on(async {
@@ -211,14 +299,23 @@ fn run(
         });
         return (result, false);
     }
+    if cancel.load(Ordering::Acquire) {
+        return (Err(ProviderError::Cancelled), false);
+    }
     let cookie = match intent {
         Intent::Restore => match credentials::load() {
             Ok(Some(cookie)) => Ok(cookie),
             Ok(None) => return (Ok(None), false),
             Err(error) => return (Err(error), false),
         },
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         Intent::Connect => browser::sign_in(cancel),
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         Intent::ImportLegacy => credentials::import_doremi_rust(),
+        #[cfg(target_os = "android")]
+        Intent::ImportDocument(uri) => {
+            credentials::read_document(&uri).and_then(|bytes| doremi_youtube::legacy_cookie(&bytes))
+        }
         Intent::Disconnect | Intent::Expire => unreachable!(),
     };
     let cookie = match cookie {
@@ -244,6 +341,17 @@ fn run(
     }
     if result.is_ok() {
         let durable = credentials::store(&cookie).is_ok();
+        if cancel.load(Ordering::Acquire) {
+            if durable {
+                let _ = credentials::forget();
+            }
+            runtime.block_on(async {
+                if let Some(Ok(client)) = &mut *client.lock().await {
+                    client.clear_session();
+                }
+            });
+            return (Err(ProviderError::Cancelled), false);
+        }
         (result, durable)
     } else {
         if result == Err(ProviderError::AccessDenied) {
@@ -252,30 +360,23 @@ fn run(
         (result, false)
     }
 }
-#[cfg(target_os = "android")]
-fn run(
-    intent: Intent,
-    _client: &SharedClient,
-    _runtime: &tokio::runtime::Runtime,
-    _cancel: &AtomicBool,
-) -> (Result<Option<Account>, ProviderError>, bool) {
-    // Custom Tabs cannot expose HttpOnly cookies to an app. Do not substitute
-    // Google identity OAuth for access to the YouTube Music private library.
-    if matches!(intent, Intent::Disconnect | Intent::Expire) {
-        (Ok(None), false)
-    } else {
-        (Err(ProviderError::Unsupported), false)
-    }
-}
 impl DoremiApp {
     pub(super) fn youtube_account(&mut self, ui: &mut egui::Ui) {
         ui.heading("Cuenta de YouTube Music");
         let state = &self.model.as_ref().unwrap().music.session;
+        #[cfg(target_os = "android")]
+        if state.picker.is_some() {
+            ui.label("Selecciona el archivo de la sesión autorizada en el selector del sistema.");
+            if self.button(ui, "youtube-cancel-signin", "Cancelar conexión", 220.0) {
+                self.model.as_mut().unwrap().music.session.cancel();
+            }
+            return;
+        }
         if state.busy {
             ui.spinner();
             ui.label("Conectando con YouTube Music…");
             if self.button(ui, "youtube-cancel-signin", "Cancelar conexión", 220.0) {
-                self.model.as_ref().unwrap().music.session.cancel();
+                self.model.as_mut().unwrap().music.session.cancel();
             }
             return;
         }
@@ -327,8 +428,17 @@ impl DoremiApp {
             #[cfg(any(target_os="linux",target_os="windows"))]
             ui.small("Autoriza en una ventana externa de Chrome, Chromium o Edge. Doremi recibe la sesión de esa ventana y la guarda en el almacén protegido del sistema.");
             #[cfg(target_os="android")]
-            ui.small("La conexión de cuenta en Android aún no está disponible: el navegador externo no permite compartir la sesión musical con Doremi.");
-            if self.button(ui, "youtube-signin", "Iniciar sesión", 220.0) {
+            ui.small("Conecta una sesión ya autorizada seleccionando su archivo de Doremi-Rust. Doremi verificará la cuenta y la guardará cifrada en este dispositivo. La autorización directa con Google todavía no está disponible.");
+            if self.button(
+                ui,
+                "youtube-signin",
+                if cfg!(target_os = "android") {
+                    "Importar sesión autorizada"
+                } else {
+                    "Iniciar sesión"
+                },
+                260.0,
+            ) {
                 self.model.as_mut().unwrap().music.session.connect();
             }
             #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -348,10 +458,28 @@ impl DoremiApp {
             ui.colored_label(ui.visuals().error_fg_color,match error {
                 ProviderError::AccessDenied=>"YouTube Music rechazó la sesión. Vuelve a conectar la cuenta.",
                 ProviderError::Cancelled=>"Conexión cancelada.",
-                ProviderError::Unsupported=>"La conexión de cuenta todavía no está implementada en esta plataforma.",
+                ProviderError::Unsupported=>"La sesión utiliza una cuenta o un formato que todavía no se admite.",
+                ProviderError::InvalidRequest|ProviderError::InvalidResponse=>"No se pudo validar el archivo o la sesión de YouTube Music.",
+                ProviderError::TooLarge=>"El archivo de sesión supera el tamaño admitido.",
                 ProviderError::Timeout=>"La conexión agotó el tiempo de espera.",
                 _=>"No se pudo conectar o restaurar la cuenta. Comprueba el navegador y el almacén de credenciales.",
             });
+            if self.model.as_ref().unwrap().music.session.account.is_none()
+                && matches!(
+                    error,
+                    ProviderError::Unavailable
+                        | ProviderError::InvalidResponse
+                        | ProviderError::AccessDenied
+                )
+                && self.button(
+                    ui,
+                    "youtube-forget-session",
+                    "Eliminar sesión guardada",
+                    260.0,
+                )
+            {
+                self.model.as_mut().unwrap().music.session.disconnect();
+            }
         }
     }
 }

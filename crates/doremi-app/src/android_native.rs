@@ -108,7 +108,8 @@ pub extern "system" fn native_init(
             }
         };
         let ctx = egui::Context::default();
-        let app = DoremiApp::new_context(&ctx, directory);
+        let mut app = DoremiApp::new_context(&ctx, directory);
+        app.model.as_mut().unwrap().music.session.restore();
         *cell.borrow_mut() = Some(Renderer {
             ctx,
             app,
@@ -145,7 +146,7 @@ pub extern "system" fn native_draw(
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "editor_target":renderer.app.editor.key(), "editor_text":renderer.app.editor_text(), "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
+        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "editor_target":renderer.app.editor.key(), "editor_text":renderer.app.editor_text(), "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "session_request":renderer.app.model.as_ref().unwrap().music.session.picker_request(), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -329,6 +330,137 @@ pub extern "system" fn native_document(
                 uri,
                 &renderer.ctx,
             );
+        }
+    });
+}
+
+/// JNI carries platform capabilities only. It never validates a musical account.
+pub(super) mod youtube_credentials {
+    use super::*;
+    use doremi_core::catalog::ProviderError as Error;
+    enum Operation<'a> {
+        Load,
+        Store(&'a str),
+        Forget,
+        Document(&'a str),
+    }
+    fn call(operation: Operation<'_>) -> Result<Option<Vec<u8>>, Error> {
+        let mut env = VM
+            .get()
+            .ok_or(Error::Unavailable)?
+            .attach_current_thread()
+            .map_err(|_| Error::Unavailable)?;
+        let class = ACTIVITY_CLASS.get().ok_or(Error::Unavailable)?;
+        let class: &JClass<'_> = class.as_obj().into();
+        let context = APPLICATION.get().ok_or(Error::Unavailable)?.as_obj();
+        let directory = DATA_DIRECTORY
+            .get()
+            .and_then(|directory| directory.to_str())
+            .ok_or(Error::Unavailable)?;
+        let result = (|| -> jni::errors::Result<_> {
+            let argument = env.new_string(match operation {
+                Operation::Document(uri) => uri,
+                _ => directory,
+            })?;
+            let secret = env.byte_array_from_slice(match operation {
+                Operation::Store(cookie) => cookie.as_bytes(),
+                _ => &[],
+            })?;
+            let mut args = vec![JValue::Object(context), JValue::Object(argument.as_ref())];
+            let (method, signature, bytes) = match operation {
+                Operation::Load => (
+                    "loadYoutubeSession",
+                    "(Landroid/content/Context;Ljava/lang/String;)[B",
+                    true,
+                ),
+                Operation::Store(_) => {
+                    args.push(JValue::Object(secret.as_ref()));
+                    (
+                        "storeYoutubeSession",
+                        "(Landroid/content/Context;Ljava/lang/String;[B)V",
+                        false,
+                    )
+                }
+                Operation::Forget => (
+                    "forgetYoutubeSession",
+                    "(Landroid/content/Context;Ljava/lang/String;)V",
+                    false,
+                ),
+                Operation::Document(_) => (
+                    "readYoutubeSessionDocument",
+                    "(Landroid/content/Context;Ljava/lang/String;)[B",
+                    true,
+                ),
+            };
+            let result = env.call_static_method(class, method, signature, &args)?;
+            if !bytes {
+                return Ok(None);
+            }
+            let value = result.l()?;
+            if value.is_null() {
+                return Ok(None);
+            }
+            env.convert_byte_array(jni::objects::JByteArray::from(value))
+                .map(Some)
+        })();
+        if result.is_err() {
+            let exception = env.exception_occurred().ok();
+            let _ = env.exception_clear();
+            if let Some(exception) = exception.filter(|exception| !exception.is_null()) {
+                if env
+                    .is_instance_of(&exception, "java/io/InterruptedIOException")
+                    .unwrap_or(false)
+                {
+                    return Err(Error::Timeout);
+                }
+                if env
+                    .is_instance_of(&exception, "java/lang/IllegalArgumentException")
+                    .unwrap_or(false)
+                {
+                    return Err(Error::TooLarge);
+                }
+            }
+        }
+        result.map_err(|_| Error::Unavailable)
+    }
+    pub fn load() -> Result<Option<String>, Error> {
+        call(Operation::Load)?
+            .map(|bytes| String::from_utf8(bytes).map_err(|_| Error::InvalidResponse))
+            .transpose()
+    }
+    pub fn store(cookie: &str) -> Result<(), Error> {
+        call(Operation::Store(cookie)).map(|_| ())
+    }
+    pub fn forget() -> Result<(), Error> {
+        call(Operation::Forget).map(|_| ())
+    }
+    pub fn read_document(uri: &str) -> Result<Vec<u8>, Error> {
+        call(Operation::Document(uri))?.ok_or(Error::InvalidResponse)
+    }
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeSessionDocument")]
+pub extern "system" fn native_session_document(
+    mut env: JNIEnv<'_>,
+    _: JClass<'_>,
+    generation: jlong,
+    uri: JString<'_>,
+) {
+    let Ok(uri) = env.get_string(&uri) else {
+        return;
+    };
+    let uri = String::from(uri);
+    RENDERER.with(|cell| {
+        if let Some(renderer) = cell.borrow_mut().as_mut() {
+            renderer
+                .app
+                .model
+                .as_mut()
+                .unwrap()
+                .music
+                .session
+                .selected_document(generation as u64, uri);
+            renderer.ctx.request_repaint();
         }
     });
 }

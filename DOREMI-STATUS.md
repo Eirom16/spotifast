@@ -9,7 +9,11 @@
 - Cuenta: Google rechazó el navegador automatizado en la prueba real. Login sin
   validar. Conexión explícita a una sesión autorizada de Doremi-Rust desde su
   llavero implementada localmente; no importa ni modifica el origen automáticamente.
-  La conexión de cuenta Android sigue pendiente.
+  Android incorpora un selector de sesión autorizada y almacenamiento cifrado con
+  Keystore; compilación y pruebas en dispositivo pendientes. La autorización
+  directa con Google y la validación musical autenticada siguen pendientes.
+- Buscador móvil fijado arriba de los resultados; geometría comprobada en
+  360/393/430 dp con teclado simulado, scroll y ambos temas. Nueva APK pendiente.
 - Audio: resolución por ID y streaming AAC/MP4 conectados al motor existente;
   rangos, cancelación y seek probados con fixtures. Audición real de YouTube aún
   pendiente: la prueba pública recibió una petición de autorización del proveedor.

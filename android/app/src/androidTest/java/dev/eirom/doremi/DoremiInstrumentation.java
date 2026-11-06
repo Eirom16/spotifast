@@ -908,6 +908,36 @@ public final class DoremiInstrumentation extends Instrumentation {
             return list.getLong("id")==id && "Café · lectura".equals(list.getString("name")) && list.getJSONArray("entries").length()==1;
         } catch(Exception error) {return false;}
     }
+    private void youtubeSessionStore(boolean restore) throws Exception {
+        // A nested synthetic profile cannot be restored by the running Rust UI.
+        File directory=new File(profileDirectory(),"session-store-fixture");
+        String path=directory.getAbsolutePath();
+        byte[] fixture="SAPISID=synthetic-android-store-fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        File file=new File(directory,"youtube-session-v1.bin");
+        if(!restore) {
+            if(YoutubeSessionStore.load(getTargetContext(),path)!=null) throw new AssertionError("Use a fresh session-store fixture");
+            YoutubeSessionStore.store(getTargetContext(),path,fixture);
+            byte[] sealed=Files.readAllBytes(file.toPath());
+            if(new String(sealed,java.nio.charset.StandardCharsets.ISO_8859_1).contains("SAPISID=")) throw new AssertionError("Session was stored without encryption");
+            if(!java.util.Arrays.equals(fixture,YoutubeSessionStore.load(getTargetContext(),path))) throw new AssertionError("Native session store round trip failed");
+            YoutubeSessionStore.store(getTargetContext(),path,fixture);
+            if(java.util.Arrays.equals(sealed,Files.readAllBytes(file.toPath()))) throw new AssertionError("Session nonce was reused");
+        } else {
+            if(!java.util.Arrays.equals(fixture,YoutubeSessionStore.load(getTargetContext(),path))) throw new AssertionError("Native session store did not survive process restart");
+            byte[] sealed=Files.readAllBytes(file.toPath());sealed[sealed.length-1]^=1;Files.write(file.toPath(),sealed);
+            boolean rejected=false;
+            try {YoutubeSessionStore.load(getTargetContext(),path);} catch(java.io.IOException expected) {rejected=true;}
+            if(!rejected) throw new AssertionError("Tampered session was accepted");
+            byte[] future=sealed.clone();future[3]=2;Files.write(file.toPath(),future);
+            rejected=false;
+            try {YoutubeSessionStore.store(getTargetContext(),path,fixture);} catch(java.io.IOException expected) {rejected=true;}
+            if(!rejected || !java.util.Arrays.equals(future,Files.readAllBytes(file.toPath()))) throw new AssertionError("Future session storage was overwritten");
+            YoutubeSessionStore.forget(getTargetContext(),path);
+            if(YoutubeSessionStore.load(getTargetContext(),path)!=null || file.exists()) throw new AssertionError("Sign-out retained session material");
+        }
+        Files.write(new File(profileDirectory(),restore?"qa-session-store-restored.json":"qa-session-store-written.json").toPath(),
+            new JSONObject().put("result","pass").put("pid",android.os.Process.myPid()).put("synthetic",true).put("encrypted",true).put("restored",restore).put("tamper_rejected",restore).put("forgotten",restore).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -918,6 +948,10 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("session-store-write".equals(mode) || "session-store-restore".equals(mode)) {
+                youtubeSessionStore("session-store-restore".equals(mode));
+                result.putString("stream","PASS: synthetic Android Keystore session storage; no real account or network authorization\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("catalog-library".equals(mode) || "catalog-library-restore".equals(mode)) {
                 catalogLibraryUi("catalog-library-restore".equals(mode));result.putString("stream","PASS: saved artist/album types, process restoration, reopening by ID and queue preservation; no audio\n");finish(Activity.RESULT_OK,result);return;
             }
