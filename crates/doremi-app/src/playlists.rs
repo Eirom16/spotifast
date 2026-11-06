@@ -89,7 +89,7 @@ impl DoremiApp {
             _ => {}
         }
     }
-    pub(super) fn follow_editor(ui: &egui::Ui, response: &egui::Response) {
+    pub(super) fn follow_editor(&self, ui: &egui::Ui, response: &egui::Response, field: TextField) {
         if ui.ctx().content_rect().width() < 760.0 {
             let height = ui.ctx().content_rect().height();
             let resized = ui.ctx().data_mut(|data| {
@@ -98,7 +98,12 @@ impl DoremiApp {
                 data.insert_temp(id, height);
                 previous.is_some_and(|previous| height < previous)
             });
-            if response.gained_focus() || response.changed() || (resized && response.has_focus()) {
+            // Android's native editor may own window focus while its IME
+            // shrinks this viewport. Keep its explicit field target visible.
+            if response.gained_focus()
+                || response.changed()
+                || (resized && (response.has_focus() || self.editor == field))
+            {
                 response.scroll_to_me(Some(egui::Align::Center));
             }
         }
@@ -124,10 +129,10 @@ impl DoremiApp {
         if response.has_focus() {
             self.editor = field;
         }
-        Self::follow_editor(ui, &response);
         if response.changed() {
             model.revision += 1;
         }
+        self.follow_editor(ui, &response, field);
         self.record(field.key(), &response);
     }
     pub(super) fn open_playlist(&mut self, id: u64) {

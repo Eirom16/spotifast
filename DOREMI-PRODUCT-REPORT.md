@@ -84,16 +84,25 @@ Linux GUI a 393 px pasó duplicados, movimiento exacto, vaciado y playlists.
 
 La primera prueba física de 2d04a41 pasó búsqueda/PCM/seek/recreación pero detectó
 que el aviso horizontal sobresalía 0,28125 pt en el Samsung a escala 1,875.
-Biblioteca normal preservada con el mismo hash. El fallo y su captura se conservan;
-la prueba no alcanzó la Cola. Se reserva un GAP adicional bajo el aviso y la
-regresión de layout ahora incluye esa densidad, además de 360/393/430 pt y ambos
-temas. Test de escala aprobado; CI/APK y repetición física de la corrección pendientes.
+Biblioteca normal preservada con el mismo hash. El fallo y su captura se conservan.
+3e8ccf5 reserva un GAP adicional: en hardware el aviso termina en 275,28125 pt,
+dentro de la página que termina en 283 pt. La Cola pasó en Android, incluidos
+menús de 48 pt, duplicados, vaciado, conservación de current/context/favoritos y
+Atrás. La ejecución completa falló después en renombrar una playlist con IME;
+no se declara un PASS global. Android/Windows CI de 3e8ccf5 pasaron; el job Linux
+fue sustituido automáticamente por la compilación del siguiente corte.
+
+Regresión IME preparada: el editor nativo puede quitar el foco de ventana a egui;
+el campo activo ahora se conserva al centrarlo cuando se reduce el viewport.
+Test reproduce el fallo a 384×332,28125 pt/escala 1,875 con mini-player y luego
+comprueba campo/Guardar visibles. Antes FAIL, después PASS; app 34 tests y
+Clippy/check-local aprobados. La corrección necesita su nueva APK y prueba física.
 
 Capturas antes/después 360/393/430 px y claro/oscuro revisadas en el corte de Cola.
 Se conservaron dos fallos de QA local que compartieron accidentalmente el display
 X11; las repeticiones aisladas pasaron y el driver ahora comprueba el foco.
 
-## Carátulas de álbum: corte local preparado
+## Carátulas de álbum: f641177 en CI
 
 La vista de una edición MusicBrainz pide su portada frontal de 250 px a Cover Art
 Archive por MBID exacto. Carga/errores y crédito de fuente visibles; artistas y
@@ -118,7 +127,10 @@ La versión con HTTP asíncrono pasó de nuevo a 393 px; cierre WM_DELETE_WINDOW
 con exit 0. La cancelación también interrumpe una respuesta pendiente en fixture. Imagen usada en QA bajo
 CC BY-NC-SA 3.0 US, dirección artística Rob Sheridan/Trent Reznor; licencia y
 atribución junto a la evidencia externa. No se incluye en los assets del producto.
-CI, regresión de imágenes del legado y prueba Android de este corte pendientes.
+[CI completa 42142254641](https://github.com/Eirom16/spotifast/actions/runs/42142254641)
+ya aprobó tests del workspace (incluidas imágenes del legado), Clippy/Rustdoc y
+Preview Linux; builds restantes aún en curso. La CI enfocada 42142253959 aprobó
+la APK y continúa Linux/Windows. Carátulas en Android físico aún pendientes.
 
 Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-05/.
 Incluye ci-5aa9fbf/{linux-mendelssohn-final,android-mendelssohn,windows}/,

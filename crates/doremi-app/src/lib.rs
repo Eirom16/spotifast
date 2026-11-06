@@ -1063,7 +1063,7 @@ impl DoremiApp {
                 if response.changed() {
                     self.model.as_mut().unwrap().search();
                 }
-                Self::follow_editor(ui, &response);
+                self.follow_editor(ui, &response, TextField::Search);
                 if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
                     self.model.as_mut().unwrap().cancel_search();
                 }
@@ -1396,6 +1396,106 @@ mod tests {
             app.model.as_ref().unwrap().queue.context()[0].media.id,
             app.model.as_ref().unwrap().queue.context()[1].media.id
         );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn playlist_editor_stays_visible_when_android_ime_takes_window_focus() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join(format!("../../target/playlist-ime-{}", std::process::id()));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let model = app.model.as_mut().unwrap();
+        let id = model.playlists.create("Café nocturno").unwrap();
+        for _ in 0..8 {
+            model.playlists.append(id, songs()[0].clone()).unwrap();
+        }
+        model.start_context(vec![songs()[0].clone()], 0);
+        model.command(Command::Pause);
+        app.open_playlist(id);
+        let mut time = 0.0;
+        fn frame(
+            app: &mut DoremiApp,
+            ctx: &egui::Context,
+            time: &mut f64,
+            height: f32,
+            focused: bool,
+            events: Vec<egui::Event>,
+        ) {
+            *time += 0.1;
+            let mut input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(384.0, height),
+                )),
+                focused,
+                time: Some(*time),
+                events,
+                ..Default::default()
+            };
+            input
+                .viewports
+                .get_mut(&egui::ViewportId::ROOT)
+                .unwrap()
+                .native_pixels_per_point = Some(1.875);
+            let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+            output.textures_delta.clear();
+        }
+        for _ in 0..4 {
+            frame(&mut app, &ctx, &mut time, 658.65625, true, vec![]);
+        }
+        let edit = app
+            .controls
+            .iter()
+            .find(|control| control.name == "playlist-edit")
+            .unwrap();
+        let point = egui::pos2(
+            (edit.rect[0] + edit.rect[2]) / 2.0,
+            (edit.rect[1] + edit.rect[3]) / 2.0,
+        );
+        for pressed in [true, false] {
+            frame(
+                &mut app,
+                &ctx,
+                &mut time,
+                658.65625,
+                true,
+                vec![
+                    egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton {
+                        pos: point,
+                        button: egui::PointerButton::Primary,
+                        pressed,
+                        modifiers: egui::Modifiers::NONE,
+                    },
+                ],
+            );
+        }
+        for _ in 0..4 {
+            frame(&mut app, &ctx, &mut time, 658.65625, true, vec![]);
+        }
+        // Android's native editor owns focus while its IME is open. Its target
+        // remains explicit even when egui's TextEdit no longer has focus.
+        app.editor = TextField::PlaylistRename;
+        app.receive_editor_text("playlist-rename", "Café · lectura");
+        for _ in 0..6 {
+            frame(&mut app, &ctx, &mut time, 332.28125, false, vec![]);
+        }
+        for name in ["playlist-rename", "playlist-rename-save"] {
+            let control = app
+                .controls
+                .iter()
+                .find(|control| control.name == name)
+                .unwrap();
+            assert!(
+                control.rect[1] >= app.page_rect[1] && control.rect[3] <= app.page_rect[3],
+                "{name} {:?} outside {:?} with native IME",
+                control.rect,
+                app.page_rect
+            );
+        }
         drop(app);
         DoremiApp::shutdown();
         let _ = std::fs::remove_dir_all(directory);
