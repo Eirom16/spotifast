@@ -12,7 +12,8 @@ use std::{
     thread::JoinHandle,
 };
 
-const CAPACITY: usize = 8;
+// At 250×250 RGBA this bounds decoded artwork to 6 MiB, plus GPU textures.
+const CAPACITY: usize = 24;
 struct Job {
     generation: u64,
     id: MediaId,
@@ -149,6 +150,8 @@ pub(super) struct State {
     pending: bool,
     cache_hit: bool,
     cache: VecDeque<Cached>,
+    requested: Vec<(MediaId, String)>,
+    failures: VecDeque<(MediaId, Instant)>,
     worker: Option<Worker>,
 }
 impl State {
@@ -164,8 +167,45 @@ impl State {
             pending: false,
             cache_hit: false,
             cache: VecDeque::new(),
+            requested: Vec::new(),
+            failures: VecDeque::new(),
             worker: None,
         }
+    }
+    /// Visible rows register work; selection and HTTP happen on the next poll.
+    pub fn request_thumbnail(&mut self, id: &MediaId, url: Option<String>, ctx: &egui::Context) {
+        let Some(url) = url else { return };
+        if self.requested.len() < CAPACITY && self.requested.iter().all(|(known, _)| known != id) {
+            self.requested.push((id.clone(), url));
+            if self.needs_thumbnail(id) {
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
+    }
+    fn needs_thumbnail(&self, id: &MediaId) -> bool {
+        let now = Instant::now();
+        !self
+            .cache
+            .iter()
+            .any(|item| item.id == *id && item.expires > now)
+            && !self
+                .failures
+                .iter()
+                .any(|(known, expiry)| known == id && *expiry > now)
+    }
+    fn next_thumbnail(&mut self) -> Option<(MediaId, String)> {
+        let requested = std::mem::take(&mut self.requested);
+        // Finish the visible in-flight image instead of restarting it every frame.
+        if self.waiting
+            && let Some(current) = requested
+                .iter()
+                .find(|(id, _)| Some(id) == self.selected.as_ref())
+        {
+            return Some(current.clone());
+        }
+        requested
+            .into_iter()
+            .find(|(id, _)| self.needs_thumbnail(id))
     }
     pub fn select(&mut self, id: Option<MediaId>) {
         if self.selected == id {
@@ -238,7 +278,19 @@ impl State {
                         });
                     }
                 }
-                Err(error) => self.error = Some(error),
+                Err(error) => {
+                    self.error = Some(error);
+                    if error != ProviderError::Cancelled {
+                        let id = self.selected.clone().unwrap();
+                        self.failures
+                            .retain(|(known, expiry)| *known != id && *expiry > Instant::now());
+                        if self.failures.len() == CAPACITY {
+                            self.failures.pop_front();
+                        }
+                        self.failures
+                            .push_back((id, Instant::now() + Duration::from_secs(300)));
+                    }
+                }
             }
         }
         if self.pending {
@@ -271,14 +323,25 @@ impl State {
         })
     }
     pub fn caption(&self, expected: &MediaId) -> &'static str {
-        if self.selected.as_ref() != Some(expected) || self.waiting {
-            "Cargando carátula…"
-        } else if self.pixels.is_some() {
+        if self
+            .cache
+            .iter()
+            .any(|item| item.id == *expected && item.expires > Instant::now())
+            || (self.selected.as_ref() == Some(expected) && self.pixels.is_some())
+        {
             if expected.provider.as_str() == doremi_youtube::PROVIDER {
                 "Carátula: YouTube Music · derechos de sus autores"
             } else {
                 "Carátula: Cover Art Archive · derechos de sus autores"
             }
+        } else if self
+            .failures
+            .iter()
+            .any(|(id, expiry)| id == expected && *expiry > Instant::now())
+        {
+            "No se pudo cargar la carátula de esta edición."
+        } else if self.selected.as_ref() != Some(expected) || self.waiting {
+            "Cargando carátula…"
         } else if self.error == Some(ProviderError::Unavailable) {
             "Esta edición no tiene carátula disponible."
         } else {
@@ -318,15 +381,21 @@ impl Textures {
         expected: &MediaId,
         ctx: &egui::Context,
     ) -> Option<egui::TextureHandle> {
-        let id = state.selected.as_ref()?;
-        if id != expected {
-            return None;
-        }
-        let pixels = state.pixels.as_ref()?;
+        let (pixels, version) = match (state.selected.as_ref(), &state.pixels) {
+            (Some(selected), Some(pixels)) if selected == expected => (pixels, state.version),
+            _ => {
+                let cached = state
+                    .cache
+                    .iter()
+                    .find(|item| item.id == *expected && item.expires > Instant::now())?;
+                (&cached.image, cached.version)
+            }
+        };
+        let id = expected;
         if let Some(index) = self
             .0
             .iter()
-            .position(|(key, version, _)| key == id && *version == state.version)
+            .position(|(key, known_version, _)| key == id && *known_version == version)
         {
             let item = self.0.remove(index).unwrap();
             let handle = item.2.clone();
@@ -342,8 +411,7 @@ impl Textures {
         if self.0.len() == CAPACITY {
             self.0.pop_front();
         }
-        self.0
-            .push_back((id.clone(), state.version, handle.clone()));
+        self.0.push_back((id.clone(), version, handle.clone()));
         Some(handle)
     }
 }
@@ -351,7 +419,7 @@ impl Textures {
 impl DoremiApp {
     pub(super) fn poll_artwork(&mut self, ctx: &egui::Context) {
         let model = self.model.as_mut().unwrap();
-        let id = (model.page == Page::Search && model.music.selected)
+        let detail = (model.page == Page::Search && model.music.selected)
             .then_some(model.music.detail.as_ref())
             .flatten()
             .filter(|entry| {
@@ -359,7 +427,7 @@ impl DoremiApp {
                     || entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
             })
             .map(|entry| entry.media.id.clone());
-        let url = id.as_ref().and_then(|id| {
+        let url = detail.as_ref().and_then(|id| {
             model
                 .music
                 .session
@@ -373,7 +441,17 @@ impl DoremiApp {
                         .and_then(|client| client.thumbnail(id))
                 })
         });
-        if model.artwork.url != url {
+        let thumbnail = model.artwork.next_thumbnail();
+        let (id, url) = if detail.as_ref().is_some_and(|id| {
+            id.provider.as_str() != doremi_youtube::PROVIDER || model.artwork.needs_thumbnail(id)
+        }) {
+            (detail, url)
+        } else if model.page == Page::Search && model.music.selected && model.music.youtube {
+            thumbnail.map_or((None, None), |(id, url)| (Some(id), Some(url)))
+        } else {
+            (None, None)
+        };
+        if model.artwork.selected == id && model.artwork.url != url {
             model.artwork.select(None);
         }
         model.artwork.select(id);
@@ -388,6 +466,90 @@ mod tests {
     use super::*;
     fn id(value: &str) -> MediaId {
         MediaId::new(ProviderId::new("musicbrainz").unwrap(), value).unwrap()
+    }
+    #[test]
+    fn visible_thumbnails_finish_in_order_and_remain_available_without_stealing_the_hero() {
+        let ctx = egui::Context::default();
+        let (commands, requests) = mpsc::sync_channel(1);
+        let (send, events) = mpsc::sync_channel(1);
+        let mut state = State::new();
+        state.worker = Some(Worker {
+            commands,
+            events,
+            generation: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        });
+        let first = doremi_youtube::id("abcdefghijk").unwrap();
+        let second = doremi_youtube::id("lmnopqrstuv").unwrap();
+        let url = Some("https://i.ytimg.com/fixture.jpg".to_owned());
+        state.request_thumbnail(&first, url.clone(), &ctx);
+        state.request_thumbnail(&second, url.clone(), &ctx);
+        assert_eq!(state.next_thumbnail().unwrap().0, first);
+        state.select(Some(first.clone()));
+        state.poll(&ctx);
+        assert_eq!(requests.try_recv().unwrap().id, first);
+        let generation = state.generation;
+        // Layout/scroll frames cannot keep cancelling a visible image mid-read.
+        state.request_thumbnail(&second, url.clone(), &ctx);
+        state.request_thumbnail(&first, url.clone(), &ctx);
+        assert_eq!(state.next_thumbnail().unwrap().0, first);
+        assert_eq!(state.generation, generation);
+        send.send(Completion {
+            generation,
+            result: Ok(Pixels {
+                image: Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED)),
+                expires: Instant::now() + Duration::from_secs(60),
+                reusable: true,
+            }),
+        })
+        .unwrap();
+        state.poll(&ctx);
+        state.request_thumbnail(&first, url.clone(), &ctx);
+        state.request_thumbnail(&second, url.clone(), &ctx);
+        assert_eq!(state.next_thumbnail().unwrap().0, second);
+        state.select(Some(second.clone()));
+        state.poll(&ctx);
+        assert_eq!(requests.try_recv().unwrap().id, second);
+        let mut textures = Textures::default();
+        assert!(textures.current(&state, &first, &ctx).is_some());
+        assert!(state.caption(&first).starts_with("Carátula: YouTube Music"));
+        send.send(Completion {
+            generation: state.generation,
+            result: Err(ProviderError::AccessDenied),
+        })
+        .unwrap();
+        state.poll(&ctx);
+        state.request_thumbnail(&second, url, &ctx);
+        assert!(
+            state.next_thumbnail().is_none(),
+            "Do not retry refused artwork every frame"
+        );
+        state.select(None);
+        assert!(textures.current(&state, &first, &ctx).is_some());
+        assert!(textures.current(&state, &second, &ctx).is_none());
+        assert!(state.caption(&second).starts_with("No se pudo"));
+        assert!(requests.try_recv().is_err());
+    }
+    #[test]
+    fn visible_thumbnail_work_is_bounded_and_drops_offscreen_candidates() {
+        let ctx = egui::Context::default();
+        let mut state = State::new();
+        for i in 0..CAPACITY * 2 {
+            let id = doremi_youtube::id(&format!("video{i:06}")).unwrap();
+            state.request_thumbnail(&id, Some("https://i.ytimg.com/fixture.jpg".into()), &ctx);
+        }
+        assert_eq!(state.requested.len(), CAPACITY);
+        let first = state.next_thumbnail().unwrap().0;
+        state.select(Some(first));
+        assert!(
+            state.next_thumbnail().is_none(),
+            "No visible rows means no background prefetch"
+        );
+        assert!(
+            state.worker.is_none(),
+            "Registering visible rows must never start network IO"
+        );
     }
     #[test]
     fn stale_work_cannot_replace_release_and_only_reusable_pixels_survive_navigation() {

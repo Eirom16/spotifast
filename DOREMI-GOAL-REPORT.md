@@ -732,3 +732,63 @@ Preview `ec06121` verificada sin reinstalar: 73 hashes internos, origen/versión
 y ELF x86_64; archivo SHA-256 `56394e84e3c8ee9893cff389d192ee256fe8420c92ec2d06c0805bb67a4a4b41`.
 Prueba ADB adicional: `target/android-qa/34795754129e/lenovo-adb-smoke/summary.json`
 PASS con 110600 frames/221174 muestras no nulas y pausa con reloj estable.
+
+
+Lenovo, comprobaciones adicionales: `manual-lenovo/report.json` bajo
+`target/android-qa/34795754129e/` PASS: navegación, búsqueda/teclado, favoritos,
+cola con duplicados/edición, controles demo, acentos, tema, background y
+restauración tras cerrar el proceso. `accent-pixel-check.json` confirma por
+píxeles que el texto de acento cambia verde/morado y se restaura; no se
+acepta únicamente el booleano del diagnóstico. Lanzamiento COLD observado:
+610 ms según `am start -W` (no tiempo hasta audio ni primera interacción).
+
+APK `c35a9c1` instalada, nativo `ec06121`.
+`target/android-qa/c35a9c15379e/lenovo-streaming-adb/summary.json` PASS: WAV
+largo original, más de 23 segundos/1107976 frames, canal 65536 bytes, cero
+underruns/xruns reportados, seek en pausa, background/foreground y proceso
+nuevo restaurado sin audio automático. PSS estable observado 51272 KiB.
+Muestra de CPU de hilos propios: 1202,7 ms de pared, decoder 40 ms, hilo GL
+principal 140 ms (contadores `/proc` propios, CLK_TCK del dispositivo).
+Condiciones distintas a las muestras instrumentadas anteriores; no son
+un benchmark controlado ni una medición acústica. Logs de ambos procesos
+sin crash/panic/JNI crítico.
+
+La regresión general `c35a9c1` volvió a fallar al cancelar búsqueda después
+de restaurar la orientación original horizontal. La espera de foco/geometría
+no basta: sigue abierta la diferencia entre inyección/prueba y host. Capturas
+reales vertical/horizontal conservadas; no se declara resuelta la rotación.
+QA `ea71b92` cambia a inyección explícita touchscreen con confirmación y
+captura del fallo antes de destruir la Activity. Referencia inspeccionada:
+[Instrumentation de Android 10](https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-10.0.0_r47/core/java/android/app/Instrumentation.java).
+La confirmación de inyección nunca sustituye las aserciones sobre el estado.
+
+Candidato MP3 `2ca3a85` en compilación remota: CI enfocada `41262350061` aprobada en ambos hosts; completa `41262358298`
+aún en curso. MP3 Linux ya está probado e instalado; Android pendiente de instalación. Lectura de
+frames acotada para duración exacta CBR/VBR, límites de metadatos/archivo,
+preroll acotado de seek para reconstruir el reservorio, entrada cancelable
+y mismo resampler/canal PCM compartido. Veintidós tests locales de player
+(FLAC/MP3/Ogg sin salida nativa), Clippy y circuito ligero aprobados; los
+tests del host y la salida MP3 real están pendientes de CI/hardware.
+
+
+MP3 Linux `2ca3a85`: `target/native-local-mp3-2ca3a85/report.json` PASS.
+Fuente original CC0 estéreo/16 kHz/120 s, selector GTK real y arrastre Xdnd,
+PCM nativo acotado, pausa/seek, duplicados, previous/forward, favorito/ID,
+claro/oscuro y proceso nuevo sin audio automático; original preservado.
+La regresión WAV del mismo binario (`target/native-local-wav-2ca3a85/`) PASS;
+FLAC sigue en ejecución. Instalado y disponible como Doremi Native Dev,
+binario SHA-256 `ad342cfc2565ec5577111b40ecdeb54177392d0e78e967e459c2ff34e84c32b4`.
+Preview, perfiles y builds anteriores conservados. APK `2ca3a85` descargado
+y verificado: `85d71411a96b1a2c0732cf24f8d9aaa12e73d42e1138bd487c3c0c3a1a935612`,
+min 26/target 36, ARM64 y ARMv7. Se instalará la iteración Java `ea71b92`,
+con ese mismo Rust tras verificación de entradas idénticas; CI `41263029245`
+PASS en APK/reutilización, host omitido como reutilización explícita.
+
+Diagnóstico adicional de rotación `rotation-injection-diagnostic` no llegó
+a rotar: dos ejecuciones fallidas habían dejado cuatro ocurrencias demo:dawn
+y la precondición esperaba dos. No hubo toque externo ni resultado aceptado
+de esa ejecución. Se retiraron exclusivamente esas cuatro ocurrencias mediante
+botones de cola, tras verificar provider=demo/id=dawn en el snapshot propio;
+before/after en `prepare-owned-queue`, sin borrar datos ni editar archivos
+persistentes directamente. La próxima regresión completa empieza sin esos
+fixtures residuales; sus resultados siguen pendientes.

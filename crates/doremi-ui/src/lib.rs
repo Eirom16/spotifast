@@ -702,6 +702,12 @@ pub struct ListRowResponse {
     actions: usize,
 }
 impl ListRowResponse {
+    pub fn cover_rect(&self) -> Rect {
+        Rect::from_center_size(
+            pos2(self.rect.left() + 28.0, self.rect.center().y),
+            Vec2::splat(40.0),
+        )
+    }
     pub fn action_rect(&self, index: usize) -> Rect {
         assert!(index < self.actions);
         let width = self.actions as f32 * 48.0 + self.actions.saturating_sub(1) as f32 * 8.0;
