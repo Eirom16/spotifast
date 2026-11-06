@@ -463,13 +463,12 @@ fn continuation(node: &Value) -> Option<String> {
     match node {
         Value::Object(map) => {
             for key in ["nextContinuationData", "continuationCommand"] {
-                if let Some(data) = map.get(key) {
-                    if let Some(token) = data["continuation"]
+                if let Some(data) = map.get(key)
+                    && let Some(token) = data["continuation"]
                         .as_str()
                         .or_else(|| data["token"].as_str())
-                    {
-                        return Some(token.into());
-                    }
+                {
+                    return Some(token.into());
                 }
             }
             map.values().find_map(continuation)

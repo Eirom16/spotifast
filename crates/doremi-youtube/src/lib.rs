@@ -164,10 +164,10 @@ impl Client {
                 self.remember_thumbnail(id, &item.thumb);
             }
         }
-        if let (Request::Browse { id: local }, Some(header)) = (request, &page.header) {
-            if let Ok(id) = id(local) {
-                self.remember_thumbnail(id, &header.thumb);
-            }
+        if let (Request::Browse { id: local }, Some(header)) = (request, &page.header)
+            && let Ok(id) = id(local)
+        {
+            self.remember_thumbnail(id, &header.thumb);
         }
         Ok(page)
     }
