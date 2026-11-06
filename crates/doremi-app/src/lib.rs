@@ -21,6 +21,7 @@ mod file_input;
 mod local_media;
 mod playlists;
 mod presentation;
+mod queue_ui;
 mod saved;
 #[cfg(not(target_os = "android"))]
 mod wav_probe;
@@ -1129,53 +1130,7 @@ impl DoremiApp {
                 self.rows(ui, library.items());
             }
             Page::Playlist => self.playlist_page(ui),
-            Page::Queue => {
-                ui.heading("Cola");
-                if self.button(ui, "clear", "Vaciar cola manual", 210.0) {
-                    self.model.as_mut().unwrap().command(Command::ClearManual);
-                }
-                ui.label("Las canciones que siguen, en orden.");
-                let entries = self
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .queue
-                    .upcoming()
-                    .cloned()
-                    .collect::<Vec<_>>();
-                let manual = self
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .queue
-                    .manual()
-                    .iter()
-                    .map(|e| e.id)
-                    .collect::<Vec<_>>();
-                for entry in entries {
-                    ui.strong(&entry.media.title);
-                    if let Some(index) = manual.iter().position(|id| *id == entry.id) {
-                        ui.small("Añadida por ti");
-                        ui.horizontal_wrapped(|ui| {
-                            if self.button(ui, &format!("remove:{index}"), "Quitar", 90.0) {
-                                self.model
-                                    .as_mut()
-                                    .unwrap()
-                                    .command(Command::Remove(entry.id));
-                            }
-                            if index > 0 && self.button(ui, &format!("up:{index}"), "Subir", 90.0) {
-                                self.model.as_mut().unwrap().command(Command::Move {
-                                    entry: entry.id,
-                                    gap: index - 1,
-                                });
-                            }
-                        });
-                    } else {
-                        ui.small("Continuación");
-                    }
-                    ui.separator();
-                }
-            }
+            Page::Queue => self.queue_page(ui),
             Page::Settings => {
                 ui.heading("Configuración");
                 ui.label("Acento");
@@ -1213,6 +1168,10 @@ impl DoremiApp {
                     let prefs = &self.model.as_ref().unwrap().prefs;
                     let palette = doremi_ui::palette(prefs.light, prefs.green);
                     self.mobile_player(ui, &palette);
+                    return;
+                }
+                if self.model.as_ref().unwrap().queue.current().is_none() {
+                    self.empty_player(ui);
                     return;
                 }
                 let model = self.model.as_ref().unwrap();
@@ -1529,6 +1488,26 @@ mod tests {
                             "{} overlaps {}",
                             left.name,
                             right.name
+                        );
+                    }
+                }
+                if size[0] > size[1] {
+                    let notice = app
+                        .controls
+                        .iter()
+                        .find(|control| control.name == "player-background-notice")
+                        .unwrap();
+                    assert!(
+                        notice.rect[1] >= app.page_rect[1] && notice.rect[3] <= app.page_rect[3],
+                        "Background notice clipped at {size:?}: {:?}",
+                        notice.rect
+                    );
+                    for control in &controls {
+                        assert!(
+                            notice.rect[2] <= control.rect[0]
+                                || control.rect[2] <= notice.rect[0]
+                                || notice.rect[3] <= control.rect[1]
+                                || control.rect[3] <= notice.rect[1]
                         );
                     }
                 }

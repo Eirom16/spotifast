@@ -718,21 +718,63 @@ pub fn list_row(
     id: egui::Id,
     row: ListRow<'_>,
 ) -> ListRowResponse {
+    list_row_inner(ui, palette, id, row, true)
+}
+/// The same compact geometry for a queue occurrence with no body action.
+/// Trailing controls remain independent; the text is neither a button nor a
+/// keyboard stop. This prevents suggesting an unsupported jump in the queue.
+pub fn static_list_row(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    id: egui::Id,
+    row: ListRow<'_>,
+) -> ListRowResponse {
+    list_row_inner(ui, palette, id, row, false)
+}
+fn list_row_inner(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    id: egui::Id,
+    row: ListRow<'_>,
+    interactive: bool,
+) -> ListRowResponse {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
     let reserved = row.actions as f32 * 48.0 + row.actions.saturating_sub(1) as f32 * 8.0;
     let body_rect = Rect::from_min_max(rect.min, pos2(rect.right() - reserved, rect.bottom()));
-    let body = ui.interact(body_rect, id, Sense::click());
+    let body = ui.interact(
+        body_rect,
+        id,
+        if interactive {
+            Sense::click()
+        } else {
+            Sense::hover()
+        },
+    );
     body.widget_info(|| {
         egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
+            if interactive {
+                egui::WidgetType::Button
+            } else {
+                egui::WidgetType::Label
+            },
             true,
-            format!("{} {}", row.action_label, row.title),
+            if interactive {
+                format!("{} {}", row.action_label, row.title)
+            } else {
+                row.title.to_owned()
+            },
         )
     });
     if body.gained_focus() {
         body.scroll_to_me(None);
     }
-    row_background(ui, palette, rect, false, body.hovered() || body.has_focus());
+    row_background(
+        ui,
+        palette,
+        rect,
+        false,
+        interactive && (body.hovered() || body.has_focus()),
+    );
     focus_ring(ui, &body);
     if ui.is_rect_visible(rect) {
         let cover =

@@ -576,11 +576,7 @@ impl DoremiApp {
         }
         let model = self.model.as_ref().unwrap();
         let Some(current) = model.queue.current() else {
-            ui.heading("Elige qué escuchar");
-            ui.weak("Busca música o abre una canción de tu biblioteca.");
-            if self.button(ui, "player-search", "Buscar música", 200.0) {
-                self.navigate(Page::Search);
-            }
+            self.empty_player(ui);
             return;
         };
         let title = current.media.title.clone();
@@ -640,13 +636,29 @@ impl DoremiApp {
                 self.go_back();
             }
             columns[0].vertical_centered(|ui| {
-                let art = (height - TOUCH - 16.0)
+                #[cfg(any(target_os = "android", test))]
+                let notice = ui.painter().layout(
+                    "La reproducción se pausa al salir de Doremi.".into(),
+                    theme::regular(12.5),
+                    palette.secondary,
+                    ui.available_width(),
+                );
+                #[cfg(any(target_os = "android", test))]
+                let notice_height = notice.size().y;
+                #[cfg(not(any(target_os = "android", test)))]
+                let notice_height = 0.0;
+                let art = (height - TOUCH - 2.0 * GAP - notice_height)
                     .clamp(96.0, 200.0)
                     .min(ui.available_width());
                 let (rect, response) =
                     ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
                 theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
                 self.record("player-art", &response);
+                #[cfg(any(target_os = "android", test))]
+                {
+                    let response = ui.add(egui::Label::new(notice));
+                    self.record("player-background-notice", &response);
+                }
             });
             columns[1].spacing_mut().item_spacing.y = 4.0;
             columns[1].vertical_centered(|ui| {
@@ -674,8 +686,14 @@ impl DoremiApp {
         if failed {
             ui.colored_label(palette.danger, notice);
         }
-        #[cfg(target_os = "android")]
-        ui.weak("La reproducción se pausa al salir de Doremi.");
+    }
+
+    pub(super) fn empty_player(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Elige qué escuchar");
+        ui.weak("Busca música o abre una canción de tu biblioteca.");
+        if self.button(ui, "player-search", "Buscar música", 200.0) {
+            self.navigate(Page::Search);
+        }
     }
 
     fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
@@ -886,7 +904,7 @@ fn navigation_icon(page: Page) -> Icon {
         _ => Icon::Settings,
     }
 }
-fn playback_caption(model: &Model) -> &'static str {
+pub(super) fn playback_caption(model: &Model) -> &'static str {
     if model.queue.current().is_none() {
         "Sin reproducción activa"
     } else if model.queue.playback() == Playback::Failed {

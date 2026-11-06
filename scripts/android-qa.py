@@ -129,12 +129,15 @@ def main():
                 tap('demo-examples')
             if not present(name) and name.startswith(('add:','forget:','save-again:')):
                 tap('row-more:'+name.split(':',1)[1])
+            if not present(name) and name.startswith(('up:','down:','remove:')):
+                occurrence=state()['manual_occurrences'][int(name.split(':',1)[1])]
+                tap(f'queue-more:{occurrence}')
             if not present(name) and data['viewport'][0]<760 and name in {'previous','stop','shuffle','repeat','seek','volume'}:
                 tap('player')
             for _ in range(30):
                 data=state();control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect'];scale=data['pixels_per_point'];left,top,right,bottom=data['page_rect']
-                fixed=name in {'home','search','library','queue','settings'} or name.startswith(('add:','forget:','save-again:')) or (data['page']!='Player' and name in {'play','pause','next','player'})
+                fixed=name in {'home','search','library','queue','settings'} or name.startswith(('add:','forget:','save-again:','up:','down:','remove:')) or (data['page']!='Player' and name in {'play','pause','next','player'})
                 if fixed or top<=y1<y2<=bottom: break
                 height=bottom-top;above=y1<top
                 x=round((left+right)/2*scale);start=round((top+height*(.25 if above else .8))*scale+args.origin_y);end=round((top+height*(.8 if above else .25))*scale+args.origin_y)

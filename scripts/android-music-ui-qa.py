@@ -63,7 +63,7 @@ def main():
     assert adb('get-state').decode().strip() == 'device'
     before = normal_library()
     (output/'normal-library-before.json').write_text(json.dumps({'sha256':before})+'\n')
-    captures = CAPTURES + (('qa-playlist-empty','qa-playlist-playing','qa-playlist-edited-dark','qa-playlist-edited-light') if args.playlists else ())
+    captures = CAPTURES + (('qa-playlist-empty','qa-playlist-playing','qa-playlist-edited-dark','qa-playlist-edited-light','qa-queue-dark','qa-queue-menu','qa-queue-light','qa-queue-cleared') if args.playlists else ())
     private = f'files/qa/{args.profile}/'
     exists = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'test', '-e', private],
                             capture_output=True, timeout=30)
@@ -96,7 +96,7 @@ def main():
                 png = adb('exec-out', 'run-as', PACKAGE, 'cat', private+name+'.png')
                 assert png.startswith(b'\x89PNG\r\n\x1a\n')
                 (output/(name+'.png')).write_bytes(png)
-            for name in ('qa-music-first-pcm', 'qa-mobile-checks', 'qa-playlist-checks'):
+            for name in ('qa-music-first-pcm', 'qa-mobile-checks', 'qa-playlist-checks','qa-queue-checks'):
                 saved = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'cat',
                                         private+name+'.json'], capture_output=True, timeout=30)
                 if saved.returncode == 0:
@@ -110,6 +110,8 @@ def main():
             if args.playlists:
                 playlist_checks=json.loads((output/'qa-playlist-checks.json').read_text())
                 assert playlist_checks['result']=='pass' and playlist_checks['queue_preserved'] and playlist_checks['unicode_ime']
+                queue_checks=json.loads((output/'qa-queue-checks.json').read_text())
+                assert queue_checks['result']=='pass' and queue_checks['duplicate_identity'] and queue_checks['current_context_saved_preserved'] and queue_checks['menu_targets_at_least_48']
             geometry = json.loads((output/'qa-mobile-cancelled.json').read_text())
             old_pid = latest['pid']
             adb('shell', 'am', 'force-stop', PACKAGE)
@@ -177,7 +179,7 @@ def main():
     summary = dict(result='pass', source_commit=args.commit,
                    native_source_commit=manifest['native_source_commit'], apk_sha256=digest(apk.read_bytes()),
                    physical_device=True, device=device, normal_library_preserved=True, selected_id=args.id, query=args.query, fixed_block_audit=args.id=='26896924',
-                   acoustic_capture=False, playlists=bool(args.playlists), fresh_process_restore=True, playback_without_search=True,
+                   acoustic_capture=False, playlists=bool(args.playlists), queue_controls=bool(args.playlists), fresh_process_restore=True, playback_without_search=True,
                    qa_script_sha256=digest(Path(__file__).read_bytes()), checks=checks)
     (output/'summary.json').write_text(json.dumps(summary, indent=2)+'\n')
     print(output)

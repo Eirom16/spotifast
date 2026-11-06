@@ -53,6 +53,9 @@ def main():
                     media_id=name.split(':',2)[2]
                     if not any(c['name']=='playlist-choose:'+media_id for c in data['controls']):tap('row-more:'+media_id)
                     tap('playlist-choose:'+media_id);data=state()
+                if name.startswith(('up:','down:','remove:')) and not any(c['name']==name for c in data['controls']):
+                    occurrence=data['manual_occurrences'][int(name.split(':',1)[1])]
+                    tap(f'queue-more:{occurrence}');data=state()
                 if name.startswith(('playlist-up:','playlist-down:','playlist-remove:')) and not any(c['name']==name for c in data['controls']):
                     tap('playlist-row-more:'+name.split(':',1)[1]);data=state()
                 if data['viewport'][0]<760 and data['page']!='Player' and name in {'previous','stop','shuffle','repeat','seek','volume'}:
@@ -62,10 +65,11 @@ def main():
                 control=next(c for c in data['controls'] if c['name']==name)
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
-                is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:'))
+                is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:','up:','down:','remove:'))
                 is_fixed=name in {'home','search','library','queue','settings'} or (data['viewport'][0]>=760 and name in fixed) or (data['page']!='Player' and name in {'play','pause','next','player'})
                 if is_menu or is_fixed or top<=y1<y2<=bottom:
-                    assert 0<=x1<x2<=data['viewport'][0],(name,control['rect'])
+                    assert 0<=x1<x2<=data['viewport'][0] and 0<=y1<y2<=data['viewport'][1],(name,control['rect'])
+                    assert int(xdo('getwindowfocus'))==int(window), 'Own window lost focus; do not inject input'
                     xdo('mousemove','--window',window,round((x1+x2)*scale/2),round((y1+y2)*scale/2),'click',1)
                     time.sleep(.4)
                     return
@@ -77,6 +81,10 @@ def main():
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
         capture('home-dark')
+        if state()['viewport'][0]>=760:
+            tap('player');wait(lambda s:s['page']=='Player' and s['current'] is None)
+            capture('player-empty')
+            tap('player-search');wait(lambda s:s['page']=='Search');tap('home')
         tap('demo-examples');tap('save:dawn');wait(lambda s:'dawn' in s['library'])
         for name,page in [('library','Library'),('queue','Queue'),('settings','Settings')]:
             tap(name);wait(lambda s:s['page']==page);capture(name)
@@ -88,7 +96,21 @@ def main():
         tap('cancel-search');wait(lambda s:s['query']=='')
         tap('home');wait(lambda s:s['page']=='Home')
         tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
-        tap('select:rain');wait(lambda s:s['current']=='rain');capture('player')
+        tap('add:cafe');wait(lambda s:len(s['manual'])==3)
+        tap('select:rain');wait(lambda s:s['current']=='rain')
+        tap('queue');wait(lambda s:s['page']=='Queue');capture('queue-occurrences')
+        current=state()['current_occurrence'];context=state()['context_occurrences'];manual=state()['manual_occurrences']
+        tap(f'queue-more:{manual[0]}');capture('queue-menu')
+        tap('down:0');wait(lambda s:s['manual_occurrences']==[manual[1],manual[0],manual[2]])
+        tap('up:1');wait(lambda s:s['manual_occurrences']==manual)
+        tap('remove:1');wait(lambda s:s['manual_occurrences']==[manual[0],manual[2]])
+        assert state()['current_occurrence']==current and state()['context_occurrences']==context
+        capture('queue-edited')
+        tap('clear');wait(lambda s:not s['manual'])
+        assert state()['current_occurrence']==current and state()['context_occurrences']==context
+        tap('queue-current');wait(lambda s:s['page']=='Player');capture('player')
+        tap('home');tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
+        tap('player')
         tap('library');capture('mini-player-light');tap('player')
         tap('next');wait(lambda s:s['current']=='dawn' and len(s['manual'])==1)
         tap('next');wait(lambda s:s['current']=='dawn' and len(s['manual'])==0)
@@ -158,7 +180,7 @@ def main():
         tap('playlist-delete');tap('playlist-delete-confirm');wait(lambda s:not s['playlists'] and s['page']=='Library')
         for key,value in before_delete.items():assert state()[key]==value, 'Deleting a playlist changed queue/favorites: '+key
         capture('playlist-deleted')
-        (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'platform':'Linux X11','input':'XTest mouse and keyboard','audio':bool(args.playlist_music),'acoustic_capture':False,'playlists':['create Unicode name','append duplicate entries','select exact duplicate','reorder/remove','rename','preserve current queue','process restoration without IO','play without search','cancel deletion','delete while preserving queue/favorites'],'sequence':'rain -> manual dawn -> manual dawn -> cafe'},indent=2))
+        (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'platform':'Linux X11','input':'XTest mouse and keyboard','audio':bool(args.playlist_music),'acoustic_capture':False,'queue':['move exact duplicate down/up','remove second duplicate','clear manual while preserving current/context','open current player'],'playlists':['create Unicode name','append duplicate entries','select exact duplicate','reorder/remove','rename','preserve current queue','process restoration without IO','play without search','cancel deletion','delete while preserving queue/favorites'],'sequence':'rain -> manual dawn -> manual dawn -> cafe'},indent=2))
         print(output)
     except Exception:
         if window and process.poll() is None:

@@ -331,9 +331,10 @@ siguen pendientes. Audibilidad acústica no capturada.
 
 El corte progresivo CC0 ya pasó en Linux y Android físico: Vorbis por rangos,
 primer PCM antes del archivo completo, pausa/seek/cambio/cancelación y biblioteca.
-El siguiente corte amplía la selección fija a resultados CC0/Own-work compatibles
-con metadatos y grants efímeros del proveedor. Mendelssohn 17687586 pasó el
-recorrido nativo Linux; CI y Android de esta ampliación siguen en validación.
+El corte musical amplía la selección fija a resultados CC0/Own-work compatibles
+con metadatos y grants efímeros del proveedor en 5aa9fbf. CI 42131761479 verde;
+Mendelssohn 17687586 pasó Linux y Android físico, incluida biblioteca/playlists
+y restauración sin búsqueda. Detalles y límites en DOREMI-PRODUCT-REPORT.md.
 Los hashes por bloque de la selección auditada se conservan; los resultados
 nuevos usan identidad de objeto del proveedor sobre TLS. No cierra EQ/sesiones.
 
@@ -372,6 +373,11 @@ entradas, el historial completo ni el resto de F3b.
 ### F4: integrar producto desktop/Android compartido
 
 Depende de F2, F3a y F3b.
+
+Corte UI en validación: Cola neutral con filas compartidas, menús por aparición
+y edición manual que conserva current/context. Player vacío compartido y aviso
+Android horizontal con espacio reservado. Pruebas locales y capturas aprobadas;
+CI/APK y verificación física pendientes. No cierra la migración visual completa.
 
 UI neutral con catálogo → cola → reproducción → favoritos/resume. Adaptar
 shell y capacidades por plataforma; conservar vistas/DSP/skins viables.

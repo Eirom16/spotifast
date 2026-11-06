@@ -147,7 +147,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private boolean fixedControl(JSONObject data,String name) {
         if(java.util.Arrays.asList("home","search","library","queue","settings").contains(name)) return true;
-        if(name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:") || name.startsWith("playlist-add:") || name.startsWith("playlist-choose:") || name.startsWith("playlist-up:") || name.startsWith("playlist-down:") || name.startsWith("playlist-remove:")) return true;
+        if(name.startsWith("up:") || name.startsWith("down:") || name.startsWith("remove:") || name.startsWith("add:") || name.startsWith("forget:") || name.startsWith("save-again:") || name.startsWith("playlist-add:") || name.startsWith("playlist-choose:") || name.startsWith("playlist-up:") || name.startsWith("playlist-down:") || name.startsWith("playlist-remove:")) return true;
         if(data.optJSONArray("viewport").optDouble(0)>=760) return java.util.Arrays.asList("play","pause","next","previous","stop","repeat","shuffle","seek","volume","player").contains(name);
         return !"Player".equals(data.optString("page")) && java.util.Arrays.asList("play","pause","next","player").contains(name);
     }
@@ -182,6 +182,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         lastAction="tap:"+name;
         foreground();
         JSONObject data=state();JSONArray rect=controlRect(data,name);
+        if(rect==null && (name.startsWith("up:") || name.startsWith("down:") || name.startsWith("remove:"))) {
+            int index=Integer.parseInt(name.substring(name.indexOf(':')+1));
+            tap("queue-more:"+data.getJSONArray("manual_occurrences").getLong(index));data=state();rect=controlRect(data,name);
+        }
         if(rect==null && name.startsWith("playlist-add:")) {
             String id=name.substring(name.indexOf(':',name.indexOf(':')+1)+1);
             if(!hasControl(data,"playlist-choose:"+id)) tap("row-more:"+id);
@@ -692,7 +696,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         int original=activity.getRequestedOrientation();
         runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
         until(s -> s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1));
-        visibleRect("volume");capture("qa-mobile-landscape");
+        visibleRect("volume");
+        JSONObject landscape=state();JSONArray page=landscape.getJSONArray("page_rect");
+        for(String name:new String[]{"volume","player-background-notice"}) {
+            JSONArray rect=controlRect(landscape,name);
+            if(rect==null || rect.getDouble(1)<page.getDouble(1) || rect.getDouble(3)>page.getDouble(3)) throw new AssertionError("Landscape content clipped: "+name);
+        }
+        capture("qa-mobile-landscape");
         runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
         until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));settledForeground();
         tap("stop");until(s -> "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics") && s.optJSONObject("online").isNull("network"));
@@ -701,6 +711,27 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> activity.setRequestedOrientation(original));capture("qa-mobile-cancelled");
         JSONObject checks=new JSONObject().put("result","pass").put("acoustic_capture",false).put("first_pcm_received_bytes",network.getLong("received_bytes")).put("total_bytes",network.getLong("total_bytes")).put("pcm_bytes",metrics.getLong("pcm_bytes")).put("private_profile",profile).put("selected_id",musicId).put("query",musicQuery).put("expected_duration_ms",musicDurationMs).put("checks",new JSONArray(java.util.Arrays.asList("conditional mini-player","IME query","dark and light","real CC0 music search","idempotent save","native PCM before whole file","paused clock","HTTP seek","resume","mini-player controls","Android Back to origin","Activity recreation","landscape reachable controls","cancel stops output and transport")));
         Files.write(new File(profileDirectory(),"qa-mobile-checks.json").toPath(),checks.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private void queueUi() throws Exception {
+        tap("library");
+        JSONObject before=state();long current=before.getLong("current_occurrence");String context=before.getJSONArray("context_occurrences").toString(),saved=before.getJSONArray("saved_media").toString();
+        if(before.getJSONArray("manual_occurrences").length()!=0) throw new AssertionError("Queue trace requires an empty manual prefix");
+        tap("add:"+musicId);tap("add:"+musicId);until(s -> s.optJSONArray("manual_occurrences").length()==2);
+        long first=state().getJSONArray("manual_occurrences").getLong(0),second=state().getJSONArray("manual_occurrences").getLong(1);
+        tap("queue");capture("qa-queue-dark");tap("queue-more:"+first);capture("qa-queue-menu");
+        for(String name:new String[]{"down:0","remove:0"}) {
+            JSONArray rect=visibleRect(name);
+            if(rect.getDouble(2)-rect.getDouble(0)<48 || rect.getDouble(3)-rect.getDouble(1)<48) throw new AssertionError("Queue menu touch target too small: "+name);
+        }
+        tap("down:0");until(s -> s.optJSONArray("manual_occurrences").optLong(0)==second && s.optJSONArray("manual_occurrences").optLong(1)==first);
+        tap("up:1");until(s -> s.optJSONArray("manual_occurrences").optLong(0)==first && s.optJSONArray("manual_occurrences").optLong(1)==second);
+        tap("settings");tap("light");tap("queue");capture("qa-queue-light");tap("settings");tap("dark");tap("queue");
+        tap("remove:1");until(s -> s.optJSONArray("manual_occurrences").length()==1 && s.optJSONArray("manual_occurrences").optLong(0)==first);
+        tap("clear");until(s -> s.optJSONArray("manual_occurrences").length()==0);capture("qa-queue-cleared");
+        JSONObject after=state();
+        if(after.getLong("current_occurrence")!=current || !context.equals(after.getJSONArray("context_occurrences").toString()) || !saved.equals(after.getJSONArray("saved_media").toString())) throw new AssertionError("Manual queue editing changed current/context/favorites");
+        tap("queue-current");until(s -> "Player".equals(s.optString("page")));sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK);until(s -> "Queue".equals(s.optString("page")));
+        Files.write(new File(profileDirectory(),"qa-queue-checks.json").toPath(),new JSONObject().put("result","pass").put("duplicate_identity",true).put("current_context_saved_preserved",true).put("menu_targets_at_least_48",true).put("back_to_queue",true).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void playlistUi() throws Exception {
         tap("library");tap("playlist-name");editorText("Café nocturno",false,"playlist-name");hideKeyboard();tap("playlist-create");
@@ -747,7 +778,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-startup");
             if("music-ui".equals(mode) || "music-playlists".equals(mode)) {
                 musicUi();
-                if("music-playlists".equals(mode)) playlistUi();result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
+                if("music-playlists".equals(mode)) {queueUi();playlistUi();}result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
             }
             if("document-import".equals(mode) || "document-restore".equals(mode)) {
                 documentImport("document-restore".equals(mode));
