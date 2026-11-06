@@ -8,6 +8,8 @@ use doremi_core::{
 #[cfg(target_os = "android")]
 mod android_native;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+mod artwork;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod music_catalog;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod online;
@@ -151,6 +153,8 @@ struct Model {
     online: online_model::State,
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     music: music_catalog::State,
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    artwork: artwork::State,
 }
 
 const DEMO_TRACKS: [(&str, &str); 4] = [
@@ -226,6 +230,8 @@ impl Model {
             online: online_model::State::new(),
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             music: music_catalog::State::new(),
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            artwork: artwork::State::new(),
         }
     }
     fn load(directory: &std::path::Path) -> Self {
@@ -712,6 +718,8 @@ pub struct DoremiApp {
     last_queue_persist: Instant,
     saved_revision: u64,
     saved_controls: Vec<Control>,
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    artwork_textures: artwork::Textures,
 }
 
 impl DoremiApp {
@@ -746,6 +754,8 @@ impl DoremiApp {
             last_queue_persist: Instant::now(),
             saved_revision: u64::MAX,
             saved_controls: vec![],
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            artwork_textures: artwork::Textures::default(),
         }
     }
     fn button(&mut self, ui: &mut egui::Ui, name: &str, label: &str, width: f32) -> bool {
@@ -795,7 +805,11 @@ impl DoremiApp {
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
         }));
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        let music_catalog = model.music.snapshot();
+        let music_catalog = {
+            let mut value = model.music.snapshot();
+            value["artwork"] = model.artwork.snapshot();
+            value
+        };
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         let music_catalog = serde_json::Value::Null;
         let state = serde_json::json!({
@@ -909,6 +923,7 @@ impl DoremiApp {
         {
             self.model.as_mut().unwrap().poll_online(&ctx);
             self.model.as_mut().unwrap().music.poll(&ctx);
+            self.poll_artwork(&ctx);
         }
         self.model.as_mut().unwrap().poll_audio();
         let model = self.model.as_ref().unwrap();
@@ -1213,6 +1228,7 @@ impl Drop for DoremiApp {
             {
                 model.suspend_online();
                 model.music.suspend();
+                model.artwork.select(None);
             }
             // The Android system picker pauses the Activity. Keep its explicit
             // import intent while suspending playback and the GL renderer.
@@ -1230,6 +1246,10 @@ impl DoremiApp {
     /// Desktop calls this only after its UI event loop has exited.
     pub fn shutdown() {
         if let Some(retained) = RETAINED.lock().unwrap().take() {
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            let mut retained = retained;
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            retained.model.artwork.shutdown();
             retained.writer.shutdown();
         }
     }

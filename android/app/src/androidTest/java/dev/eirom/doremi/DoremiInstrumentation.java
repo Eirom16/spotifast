@@ -660,6 +660,37 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(500);
         if(!text.equals(state().getString("editor_text"))) throw new AssertionError("A late frame undid text input");
     }
+    private void artworkUi() throws Exception {
+        final String release="release:12b57d46-a192-499e-a91f-7da66790a1c1";
+        tap("search");tap("source-musicbrainz");tap("catalog-kind:Release");tap("query");text("The Slip",false);hideKeyboard();
+        until(25000,"exact licensed album edition",state -> hasControl(state,"catalog-open:"+release));
+        capture("qa-artwork-results");tap("catalog-open:"+release);
+        JSONObject loaded=until(25000,"release artwork decoded",state -> {
+            JSONObject art=state.optJSONObject("music_catalog").optJSONObject("artwork");
+            return art!=null && release.equals(art.optString("id")) && art.optJSONArray("dimensions")!=null;
+        });
+        JSONArray dimensions=loaded.getJSONObject("music_catalog").getJSONObject("artwork").getJSONArray("dimensions");
+        if(dimensions.getInt(0)>250 || dimensions.getInt(1)>250 || !loaded.isNull("current") || !loaded.isNull("audio_metrics")) throw new AssertionError("Artwork identity/limits or unexpected album playback");
+        SystemClock.sleep(800);capture("qa-artwork-dark");
+        tap("settings");tap("light");tap("search");
+        until(state -> state.optJSONObject("music_catalog").optJSONObject("artwork").optBoolean("cache_hit"));capture("qa-artwork-light");
+        tap("catalog-back");until(state -> state.optJSONObject("music_catalog").isNull("detail"));
+        tap("catalog-open:"+release);until(state -> state.optJSONObject("music_catalog").optJSONObject("artwork").optBoolean("cache_hit"));
+        long instance=state().getLong("instance");
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
+        Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
+        if(recreated==null) throw new AssertionError("Artwork Activity recreation did not return");activity=recreated;
+        until(state -> state.optLong("instance")!=instance && state.optJSONObject("music_catalog").optJSONObject("artwork").optBoolean("cache_hit"));
+        settledForeground();SystemClock.sleep(800);capture("qa-artwork-recreated");
+        Files.write(new File(profileDirectory(),"qa-artwork-checks.json").toPath(),new JSONObject()
+            .put("result","pass").put("release",release).put("dimensions",dimensions).put("cached_reopen",true)
+            .put("activity_recreation",true).put("album_audio",false)
+            .put("artwork_credit","The Slip — art direction Rob Sheridan and Trent Reznor")
+            .put("artwork_license","CC BY-NC-SA 3.0 US; thumbnail resized for private noncommercial UI QA")
+            .put("license_url","https://creativecommons.org/licenses/by-nc-sa/3.0/us/")
+            .put("license_evidence","https://wiki.creativecommons.org/wiki/Nine_Inch_Nails_The_Slip")
+            .toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private void musicUi() throws Exception {
         if(hasControl(state(),"player") || hasControl(state(),"play") || !state().isNull("current")) throw new AssertionError("Fresh browsing screen must not show an empty mini-player");
         capture("qa-mobile-empty");
@@ -776,6 +807,10 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("artwork-ui".equals(mode)) {
+                artworkUi();result.putString("stream","PASS: exact release artwork, cache, themes and Activity recreation; no album audio\n");
+                finish(Activity.RESULT_OK,result);return;
+            }
             if("music-ui".equals(mode) || "music-playlists".equals(mode)) {
                 musicUi();
                 if("music-playlists".equals(mode)) {queueUi();playlistUi();}result.putString("stream","PASS: private-profile mobile UI and progressive CC0 music / native callback / Android Back / lifecycle / no acoustic capture\n");finish(Activity.RESULT_OK,result);return;

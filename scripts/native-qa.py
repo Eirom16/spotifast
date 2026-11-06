@@ -15,6 +15,7 @@ def main():
     parser.add_argument('output',type=Path)
     parser.add_argument('--size',type=int,nargs=2,metavar=('WIDTH','HEIGHT'))
     parser.add_argument('--playlist-music',action='store_true',help='Opt-in Commons requests and native playback of the audited CC0 music')
+    parser.add_argument('--artwork',action='store_true',help='Opt-in public metadata and licensed The Slip artwork; no album audio')
     args=parser.parse_args()
     output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
     (output/'qa-script.py').write_bytes(Path(__file__).read_bytes())
@@ -80,6 +81,41 @@ def main():
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
+        if args.artwork:
+            release='release:12b57d46-a192-499e-a91f-7da66790a1c1'
+            tap('search');tap('source-musicbrainz');tap('catalog-kind:Release');tap('query')
+            xdo('type','--clearmodifiers','The Slip')
+            wait(lambda s:any(c['name']=='catalog-open:'+release for c in s['controls']),25)
+            capture('album-results')
+            tap('catalog-open:'+release)
+            wait(lambda s:s['music_catalog']['detail']==release)
+            capture('album-loading')
+            loaded=wait(lambda s:s['music_catalog']['artwork']['dimensions'] is not None,25)
+            art=loaded['music_catalog']['artwork']
+            assert art['id']==release and all(0<n<=250 for n in art['dimensions']) and not art['error']
+            assert loaded['current'] is None and loaded['audio_metrics'] is None
+            time.sleep(.8);capture('album-dark')
+            tap('settings');tap('light');tap('search')
+            wait(lambda s:s['music_catalog']['artwork']['cache_hit'])
+            capture('album-light-cached')
+            tap('catalog-back');wait(lambda s:s['music_catalog']['detail'] is None and s['music_catalog']['artwork']['id'] is None)
+            tap('catalog-open:'+release)
+            wait(lambda s:s['music_catalog']['artwork']['cache_hit'])
+            capture('album-reopened-cached')
+            tap('settings');tap('dark');tap('search');wait(lambda s:s['music_catalog']['artwork']['cache_hit'])
+            capture('album-dark-cached')
+            (output/'report.json').write_text(json.dumps({
+                'result':'pass','binary_sha256':binary_hash,'platform':'Linux X11',
+                'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                'release':release,'dimensions':art['dimensions'],'cached_reopen':True,'album_audio':False,
+                'artwork_credit':'The Slip — art direction Rob Sheridan and Trent Reznor',
+                'artwork_license':'CC BY-NC-SA 3.0 US; thumbnail resized for private noncommercial UI QA',
+                'license_url':'https://creativecommons.org/licenses/by-nc-sa/3.0/us/',
+                'license_evidence':'https://wiki.creativecommons.org/wiki/Nine_Inch_Nails_The_Slip',
+                'source':'https://coverartarchive.org/release/12b57d46-a192-499e-a91f-7da66790a1c1/front-250',
+            },indent=2)+'\n')
+            print(output)
+            return
         capture('home-dark')
         if state()['viewport'][0]>=760:
             tap('player');wait(lambda s:s['page']=='Player' and s['current'] is None)

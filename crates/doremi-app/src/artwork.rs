@@ -1,0 +1,418 @@
+//! One bounded artwork worker, retained across Android Activities. Only CPU
+//! pixels survive a GL context; texture handles belong to the current view.
+use super::*;
+use doremi_core::{catalog::ProviderError, media::EntityKind};
+use doremi_musicbrainz::cover_art;
+use std::{
+    collections::VecDeque,
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        mpsc::{self, Receiver, SyncSender, TrySendError},
+    },
+    thread::JoinHandle,
+};
+
+const CAPACITY: usize = 8;
+struct Job {
+    generation: u64,
+    id: MediaId,
+    ctx: egui::Context,
+}
+struct Pixels {
+    image: Arc<egui::ColorImage>,
+    expires: Instant,
+    reusable: bool,
+}
+struct Completion {
+    generation: u64,
+    result: Result<Pixels, ProviderError>,
+}
+struct Worker {
+    commands: SyncSender<Job>,
+    events: Receiver<Completion>,
+    generation: Arc<AtomicU64>,
+    closed: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+impl Worker {
+    fn new() -> Result<Self, ProviderError> {
+        let (commands, receive) = mpsc::sync_channel::<Job>(1);
+        let (send, events) = mpsc::sync_channel(1);
+        let generation = Arc::new(AtomicU64::new(0));
+        let closed = Arc::new(AtomicBool::new(false));
+        let active = generation.clone();
+        let stopped = closed.clone();
+        let thread = std::thread::Builder::new()
+            .name("doremi-artwork".into())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .max_blocking_threads(1)
+                    .enable_all()
+                    .build();
+                let client = cover_art::Client::new();
+                'jobs: while let Ok(job) = receive.recv() {
+                    let cancelled = || {
+                        stopped.load(Ordering::Acquire)
+                            || job.generation != active.load(Ordering::Acquire)
+                    };
+                    if cancelled() {
+                        continue;
+                    }
+                    let result = client.as_ref().map_err(|error| *error).and_then(|client| {
+                        let source = runtime
+                            .as_ref()
+                            .map_err(|_| ProviderError::Unavailable)?
+                            .block_on(client.fetch(&job.id, cancelled))?;
+                        let image = doremi_ui::bitmap::decode(
+                            &source.bytes,
+                            doremi_ui::bitmap::DecodeLimits {
+                                encoded_bytes: cover_art::MAX_BYTES,
+                                side: 1024,
+                                allocation_bytes: 8 * 1024 * 1024,
+                            },
+                        )
+                        .map_err(|_| ProviderError::UnsupportedFormat)?;
+                        if cancelled() {
+                            return Err(ProviderError::Cancelled);
+                        }
+                        Ok(Pixels {
+                            image: Arc::new(doremi_ui::bitmap::scaled(image, cover_art::PIXELS)),
+                            expires: Instant::now() + source.lifetime,
+                            reusable: source.reusable,
+                        })
+                    });
+                    let mut event = Completion {
+                        generation: job.generation,
+                        result,
+                    };
+                    while !cancelled() {
+                        match send.try_send(event) {
+                            Ok(()) => {
+                                job.ctx.request_repaint();
+                                break;
+                            }
+                            Err(TrySendError::Full(pending)) => {
+                                event = pending;
+                                job.ctx.request_repaint();
+                                std::thread::sleep(Duration::from_millis(20));
+                            }
+                            Err(TrySendError::Disconnected(_)) => break 'jobs,
+                        }
+                    }
+                }
+                // OS DNS may outlive a cancelled async request. Its pool has one
+                // thread; never wait indefinitely for it during desktop shutdown.
+                drop(client);
+                if let Ok(runtime) = runtime {
+                    runtime.shutdown_timeout(Duration::from_millis(100));
+                }
+            })
+            .map_err(|_| ProviderError::Unavailable)?;
+        Ok(Self {
+            commands,
+            events,
+            generation,
+            closed,
+            thread: Some(thread),
+        })
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        // No join on a drawing/lifecycle thread. Desktop explicitly shuts down
+        // after the event loop. Android retains this owner while the process lives.
+    }
+}
+struct Cached {
+    id: MediaId,
+    version: u64,
+    image: Arc<egui::ColorImage>,
+    expires: Instant,
+}
+pub(super) struct State {
+    selected: Option<MediaId>,
+    generation: u64,
+    version: u64,
+    pixels: Option<Arc<egui::ColorImage>>,
+    error: Option<ProviderError>,
+    waiting: bool,
+    pending: bool,
+    cache_hit: bool,
+    cache: VecDeque<Cached>,
+    worker: Option<Worker>,
+}
+impl State {
+    pub fn new() -> Self {
+        Self {
+            selected: None,
+            generation: 0,
+            version: 0,
+            pixels: None,
+            error: None,
+            waiting: false,
+            pending: false,
+            cache_hit: false,
+            cache: VecDeque::new(),
+            worker: None,
+        }
+    }
+    pub fn select(&mut self, id: Option<MediaId>) {
+        if self.selected == id {
+            return;
+        }
+        self.generation = self
+            .generation
+            .checked_add(1)
+            .expect("artwork generation exhausted");
+        if let Some(worker) = &self.worker {
+            worker.generation.store(self.generation, Ordering::Release);
+        }
+        self.selected = id;
+        self.pixels = None;
+        self.error = None;
+        self.waiting = self.selected.is_some();
+        self.pending = self.waiting;
+        self.cache_hit = false;
+        self.cache.retain(|item| item.expires > Instant::now());
+        if let Some(index) = self
+            .cache
+            .iter()
+            .position(|item| Some(&item.id) == self.selected.as_ref())
+        {
+            let item = self.cache.remove(index).unwrap();
+            self.pixels = Some(item.image.clone());
+            self.version = item.version;
+            self.cache.push_back(item);
+            self.waiting = false;
+            self.pending = false;
+            self.cache_hit = true;
+        }
+    }
+    pub fn poll(&mut self, ctx: &egui::Context) {
+        if self.pending && self.worker.is_none() {
+            match Worker::new() {
+                Ok(worker) => {
+                    worker.generation.store(self.generation, Ordering::Release);
+                    self.worker = Some(worker);
+                }
+                Err(error) => {
+                    self.error = Some(error);
+                    self.pending = false;
+                    self.waiting = false;
+                }
+            }
+        }
+        let Some(worker) = &self.worker else { return };
+        // At most one completion and one queued command. A stale completion
+        // cannot replace the pixels belonging to a different selected release.
+        if let Ok(event) = worker.events.try_recv()
+            && event.generation == self.generation
+        {
+            self.waiting = false;
+            match event.result {
+                Ok(pixels) => {
+                    self.version = self.generation;
+                    self.pixels = Some(pixels.image.clone());
+                    if pixels.reusable && pixels.expires > Instant::now() {
+                        let id = self.selected.clone().unwrap();
+                        self.cache.retain(|item| item.id != id);
+                        if self.cache.len() == CAPACITY {
+                            self.cache.pop_front();
+                        }
+                        self.cache.push_back(Cached {
+                            id,
+                            version: self.version,
+                            image: pixels.image,
+                            expires: pixels.expires,
+                        });
+                    }
+                }
+                Err(error) => self.error = Some(error),
+            }
+        }
+        if self.pending {
+            let job = Job {
+                generation: self.generation,
+                id: self.selected.clone().unwrap(),
+                ctx: ctx.clone(),
+            };
+            match worker.commands.try_send(job) {
+                Ok(()) => self.pending = false,
+                Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => {
+                    self.pending = false;
+                    self.waiting = false;
+                    self.error = Some(ProviderError::Unavailable);
+                }
+            }
+        }
+        if self.waiting {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
+    }
+    pub fn snapshot(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.selected.as_ref().map(MediaId::local), "generation": self.generation,
+            "waiting": self.waiting, "dimensions": self.pixels.as_ref().map(|image| image.size),
+            "cache_hit": self.cache_hit, "cached_images": self.cache.len(),
+            "error": self.error.map(|error| format!("{error:?}")),
+        })
+    }
+    pub fn caption(&self, expected: &MediaId) -> &'static str {
+        if self.selected.as_ref() != Some(expected) || self.waiting {
+            "Cargando carátula…"
+        } else if self.pixels.is_some() {
+            "Carátula: Cover Art Archive · derechos de sus autores"
+        } else if self.error == Some(ProviderError::Unavailable) {
+            "Esta edición no tiene carátula disponible."
+        } else {
+            "No se pudo cargar la carátula de esta edición."
+        }
+    }
+    pub fn shutdown(&mut self) {
+        self.select(None);
+        if let Some(mut worker) = self.worker.take() {
+            worker.closed.store(true, Ordering::Release);
+            // Wake an idle receiver by dropping the sender before joining.
+            let thread = worker.thread.take();
+            drop(worker);
+            if let Some(thread) = thread {
+                let _ = thread.join();
+            }
+        }
+    }
+}
+
+#[derive(Default)]
+pub(super) struct Textures(VecDeque<(MediaId, u64, egui::TextureHandle)>);
+impl Textures {
+    pub fn prune(&mut self, state: &State) {
+        self.0.retain(|(id, version, _)| {
+            (state.selected.as_ref() == Some(id)
+                && state.version == *version
+                && state.pixels.is_some())
+                || state.cache.iter().any(|item| {
+                    item.id == *id && item.version == *version && item.expires > Instant::now()
+                })
+        });
+    }
+    pub fn current(
+        &mut self,
+        state: &State,
+        expected: &MediaId,
+        ctx: &egui::Context,
+    ) -> Option<egui::TextureHandle> {
+        let id = state.selected.as_ref()?;
+        if id != expected {
+            return None;
+        }
+        let pixels = state.pixels.as_ref()?;
+        if let Some(index) = self
+            .0
+            .iter()
+            .position(|(key, version, _)| key == id && *version == state.version)
+        {
+            let item = self.0.remove(index).unwrap();
+            let handle = item.2.clone();
+            self.0.push_back(item);
+            return Some(handle);
+        }
+        self.0.retain(|(key, _, _)| key != id);
+        let handle = ctx.load_texture(
+            "release-cover",
+            egui::ImageData::Color(pixels.clone()),
+            doremi_ui::bitmap::COVER_TEXTURE,
+        );
+        if self.0.len() == CAPACITY {
+            self.0.pop_front();
+        }
+        self.0
+            .push_back((id.clone(), state.version, handle.clone()));
+        Some(handle)
+    }
+}
+
+impl DoremiApp {
+    pub(super) fn poll_artwork(&mut self, ctx: &egui::Context) {
+        let model = self.model.as_mut().unwrap();
+        let id = (model.page == Page::Search && model.music.selected)
+            .then_some(model.music.detail.as_ref())
+            .flatten()
+            .filter(|entry| entry.kind == EntityKind::Release)
+            .map(|entry| entry.media.id.clone());
+        model.artwork.select(id);
+        model.artwork.poll(ctx);
+        self.artwork_textures.prune(&model.artwork);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn id(value: &str) -> MediaId {
+        MediaId::new(ProviderId::new("musicbrainz").unwrap(), value).unwrap()
+    }
+    #[test]
+    fn stale_work_cannot_replace_release_and_only_reusable_pixels_survive_navigation() {
+        let (commands, _requests) = mpsc::sync_channel(1);
+        let (send, events) = mpsc::sync_channel(1);
+        let mut state = State::new();
+        state.worker = Some(Worker {
+            commands,
+            events,
+            generation: Arc::new(AtomicU64::new(0)),
+            closed: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        });
+        let first = id("release:12b57d46-a192-499e-a91f-7da66790a1c1");
+        let second = id("release:00000000-0000-0000-0000-000000000002");
+        state.select(Some(first.clone()));
+        let old_generation = state.generation;
+        state.select(Some(second.clone()));
+        send.send(Completion {
+            generation: old_generation,
+            result: Err(ProviderError::AccessDenied),
+        })
+        .unwrap();
+        let ctx = egui::Context::default();
+        state.poll(&ctx);
+        assert!(state.waiting && state.error.is_none() && state.pixels.is_none());
+        let image = Arc::new(egui::ColorImage::filled([2, 2], egui::Color32::RED));
+        send.send(Completion {
+            generation: state.generation,
+            result: Ok(Pixels {
+                image: image.clone(),
+                expires: Instant::now() + Duration::from_secs(60),
+                reusable: false,
+            }),
+        })
+        .unwrap();
+        state.poll(&ctx);
+        assert!(state.pixels.is_some() && state.cache.is_empty());
+        let mut textures = Textures::default();
+        assert!(textures.current(&state, &second, &ctx).is_some());
+        assert!(textures.current(&state, &first, &ctx).is_none());
+        state.select(None);
+        textures.prune(&state);
+        assert!(textures.0.is_empty() && state.pixels.is_none());
+        state.select(Some(first.clone()));
+        send.send(Completion {
+            generation: state.generation,
+            result: Ok(Pixels {
+                image,
+                expires: Instant::now() + Duration::from_secs(60),
+                reusable: true,
+            }),
+        })
+        .unwrap();
+        state.poll(&ctx);
+        state.select(None);
+        state.select(Some(first));
+        assert!(state.cache_hit && state.pixels.is_some() && !state.pending && !state.waiting);
+        state.select(None);
+        state.cache[0].expires = Instant::now();
+        state.select(Some(second));
+        assert!(state.cache.is_empty() && state.pixels.is_none() && state.pending);
+    }
+}

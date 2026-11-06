@@ -1,5 +1,6 @@
 //! Public MusicBrainz metadata. No credentials, audio extraction or title matching.
 //! <https://musicbrainz.org/doc/MusicBrainz_API>
+pub mod cover_art;
 use doremi_core::{
     catalog::ProviderError as Error,
     media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId},

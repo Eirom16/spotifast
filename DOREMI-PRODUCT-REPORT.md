@@ -10,7 +10,7 @@ main ni cambios a upstream. Informe previo y skills locales del usuario conserva
   comparten Queue/Engine. La migración visual completa sigue abierta.
 - MusicBrainz público: grabaciones, artistas, ediciones, canciones de álbum y
   grabaciones de artista, paginación/caché acotadas y guardado por ID. Solo
-  metadatos, sin audio/artwork y sin sustituir grabaciones por otra búsqueda.
+  metadatos, sin audio y sin sustituir grabaciones por otra búsqueda.
 - **Commons ampliado en 5aa9fbf**: búsqueda real de hasta diez resultados CC0 con
   fuente Own work, un stream Vorbis, 1–2 canales/8–192 kHz, hasta 10 min/32 MiB.
   Títulos de tags cuando existen, nombre de archivo como fallback; duración real.
@@ -79,7 +79,7 @@ current/context/favoritos. Player vacío compartido con acceso real a Buscar.
 aprobada en los tres jobs. Artefactos del mismo commit descargados, verificados e
 instalados en Linux y Android. Windows conserva el límite OpenGL/NoDevice del
 runner; PE64, checksums y nuevo ejecutable comprobados. La CI completa 42136883688
-aprobó tests, Clippy/Rustdoc, Android, macOS y Preview Linux; Windows sigue pendiente.
+terminó verde en todos sus jobs, incluido Windows.
 Linux GUI a 393 px pasó duplicados, movimiento exacto, vaciado y playlists.
 
 La primera prueba física de 2d04a41 pasó búsqueda/PCM/seek/recreación pero detectó
@@ -93,10 +93,37 @@ Capturas antes/después 360/393/430 px y claro/oscuro revisadas en el corte de C
 Se conservaron dos fallos de QA local que compartieron accidentalmente el display
 X11; las repeticiones aisladas pasaron y el driver ahora comprueba el foco.
 
+## Carátulas de álbum: corte local preparado
+
+La vista de una edición MusicBrainz pide su portada frontal de 250 px a Cover Art
+Archive por MBID exacto. Carga/errores y crédito de fuente visibles; artistas y
+canciones sin imagen continúan con placeholder. No asigna esa portada a una pista
+Commons por similitud de título. Esta fuente de imágenes no habilita audio.
+
+Un worker con comandos/eventos acotados, generación y cancelación hace HTTP,
+decode y escalado. Reutiliza esas funciones y opciones de textura del loader del
+legado, conservando sus límites anteriores. Miniatura: 512 KiB codificados,
+1024 px por lado/8 MiB de límite del decoder, salida hasta 250 px; caché LRU de
+ocho imágenes y ocho texturas. HTTP: HTTPS/hosts CAA e Internet Archive, cuatro
+saltos, 3/8/12 s de conexión/petición/recorrido, sin retry ante negativa; cooldown
+Retry-After y Cache-Control/Age. no-store/no-cache no se reutilizan al salir.
+Caché solo en memoria, hasta diez minutos; no se persisten URLs ni covers.
+Android conserva CPU/cache y crea texturas nuevas por Activity/contexto GL.
+
+Tests locales: app 33, MusicBrainz 5 y bitmap 1 aprobados; Clippy estricto,
+Rustdoc, build, check-local y compilación Java aprobados. GUI Linux: edición real
+The Slip 12b57d46-a192-499e-a91f-7da66790a1c1, carga y regreso desde caché;
+pruebas finales 360/393/430 px y escritorio aprobadas, con capturas revisadas.
+La versión con HTTP asíncrono pasó de nuevo a 393 px; cierre WM_DELETE_WINDOW
+con exit 0. La cancelación también interrumpe una respuesta pendiente en fixture. Imagen usada en QA bajo
+CC BY-NC-SA 3.0 US, dirección artística Rob Sheridan/Trent Reznor; licencia y
+atribución junto a la evidencia externa. No se incluye en los assets del producto.
+CI, regresión de imágenes del legado y prueba Android de este corte pendientes.
+
 Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-05/.
 Incluye ci-5aa9fbf/{linux-mendelssohn-final,android-mendelssohn,windows}/,
 queue-{before,after}-layouts/, queue-ui-{phone360,desktop}-isolated/,
-queue-player-phone393/, queue-player-final-checks/ y ci-2d04a41/. No se repitieron suites
+queue-player-phone393/, queue-player-final-checks/, ci-2d04a41/ y artwork-final-*/. No se repitieron suites
 físicas extensas de formatos locales ni se añadieron formatos/importadores.
 
 ## Pendiente del objetivo completo

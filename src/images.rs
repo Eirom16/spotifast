@@ -44,8 +44,7 @@ const SUPERSEDED: Duration = Duration::from_secs(5);
 /// turns to grain. Mipmaps let the GPU read a prefiltered level instead.
 /// Every painter of a cover must use these same options: egui keys its
 /// textures by URI and options, so a second set would upload the cover twice.
-pub const COVER_TEXTURE: egui::TextureOptions =
-    egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+pub const COVER_TEXTURE: egui::TextureOptions = doremi_ui::bitmap::COVER_TEXTURE;
 
 /// A cover's GPU texture, RGBA, with its mipmap chain adding a third of the
 /// base level. Once the texture exists the decoded image is let go (see
@@ -1006,18 +1005,14 @@ fn blurred_image(image: image::DynamicImage, sigma: f32) -> egui::ColorImage {
 
 /// Decodes artwork, within the same bounds as every other decode here.
 fn decode(bytes: &[u8]) -> Result<image::DynamicImage, String> {
-    if bytes.len() > MAX_ART_BYTES {
-        return Err("artwork is too large".to_string());
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|error| error.to_string())?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(64 * 1024 * 1024);
-    reader.limits(limits);
-    reader.decode().map_err(|error| error.to_string())
+    doremi_ui::bitmap::decode(
+        bytes,
+        doremi_ui::bitmap::DecodeLimits {
+            encoded_bytes: MAX_ART_BYTES,
+            side: 8192,
+            allocation_bytes: 64 * 1024 * 1024,
+        },
+    )
 }
 
 /// `image` scaled so its longer side is `pixels`, with a Lanczos filter:
@@ -1029,28 +1024,7 @@ fn decode(bytes: &[u8]) -> Result<image::DynamicImage, String> {
 /// wanted, which is cheap: Lanczos then weighs a few source pixels for each
 /// pixel rather than dozens, for the same picture.
 fn scaled(image: image::DynamicImage, pixels: u32) -> egui::ColorImage {
-    let longer = image.width().max(image.height());
-    let image = if longer > pixels {
-        let scale = pixels as f32 / longer as f32;
-        let width = ((image.width() as f32 * scale).round() as u32).max(1);
-        let height = ((image.height() as f32 * scale).round() as u32).max(1);
-        let image = if longer > pixels * 2 {
-            image.thumbnail(width * 2, height * 2)
-        } else {
-            image
-        };
-        // Through DynamicImage, whose resize is compiled in the image crate
-        // and so optimised even in a development build of this one.
-        image
-            .resize_exact(width, height, image::imageops::FilterType::Lanczos3)
-            .to_rgba8()
-    } else {
-        image.to_rgba8()
-    };
-    egui::ColorImage::from_rgba_unmultiplied(
-        [image.width() as usize, image.height() as usize],
-        image.as_raw(),
-    )
+    doremi_ui::bitmap::scaled(image, pixels)
 }
 
 /// How many covers are scaled at once. Each takes a core while it lasts. A

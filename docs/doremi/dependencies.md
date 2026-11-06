@@ -143,11 +143,14 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-ui: dependencies` | `fastframe-fonts` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
 | `crates/doremi-ui: dependencies` | `fastframe-icons` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
 | `crates/doremi-ui: dependencies` | `fastframe-theme` | `git=https://github.com/crmne/fastframe; optional=True; tag=v0.15.2` |
+| `crates/doremi-ui: dependencies` | `image` | `default-features=False; features=['png', 'jpeg']; version=0.25` |
 | `crates/doremi-ui: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-musicbrainz: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-musicbrainz: dependencies` | `httpdate` | `1` |
 | `crates/doremi-musicbrainz: dependencies` | `reqwest` | `default-features=False; version=0.12` |
 | `crates/doremi-musicbrainz: dependencies` | `serde_json` | `1` |
-| `crates/doremi-musicbrainz: dependencies` | `tokio` | `features=['time', 'sync']; version=1` |
+| `crates/doremi-musicbrainz: dependencies` | `tokio` | `features=['time', 'sync', 'macros']; version=1` |
+| `crates/doremi-musicbrainz: dev-dependencies` | `tokio` | `features=['rt', 'net']; version=1` |
 | `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 

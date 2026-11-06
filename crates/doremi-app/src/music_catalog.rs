@@ -391,6 +391,11 @@ impl DoremiApp {
         };
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
+        let cover = self.artwork_textures.current(
+            &self.model.as_ref().unwrap().artwork,
+            &entry.media.id,
+            ui.ctx(),
+        );
         collection::hero(
             ui,
             &palette,
@@ -402,17 +407,32 @@ impl DoremiApp {
                 cover_clickable: false,
             },
             |ui, slot| match slot {
-                HeroSlot::Cover { rect, radius, .. } => theme::cover_placeholder(
-                    ui,
-                    &palette,
+                HeroSlot::Cover {
                     rect,
                     radius,
-                    if entry.kind == EntityKind::Artist {
-                        Icon::User
+                    response,
+                } => {
+                    if let Some(cover) = &cover {
+                        egui::Image::new((cover.id(), cover.size_vec2()))
+                            .fit_to_exact_size(rect.size())
+                            .maintain_aspect_ratio(true)
+                            .corner_radius(radius)
+                            .paint_at(ui, rect);
                     } else {
-                        Icon::Music
-                    },
-                ),
+                        theme::cover_placeholder(
+                            ui,
+                            &palette,
+                            rect,
+                            radius,
+                            if entry.kind == EntityKind::Artist {
+                                Icon::User
+                            } else {
+                                Icon::Music
+                            },
+                        );
+                    }
+                    self.record("catalog-artwork", response);
+                }
                 HeroSlot::Text { text, font, color } => {
                     ui.add(
                         egui::Label::new(egui::RichText::new(text).font(font).color(color)).wrap(),
@@ -443,7 +463,16 @@ impl DoremiApp {
                 }
             },
         );
-        ui.weak("Esta fuente no proporciona audio ni carátula.");
+        ui.weak("MusicBrainz proporciona metadatos; esta selección no incluye audio.");
+        if entry.kind == EntityKind::Release {
+            ui.small(
+                self.model
+                    .as_ref()
+                    .unwrap()
+                    .artwork
+                    .caption(&entry.media.id),
+            );
+        }
         ui.small(format!("ID de MusicBrainz: {}", entry.media.id.local()));
         if entry.kind == EntityKind::Recording {
             let saved = self

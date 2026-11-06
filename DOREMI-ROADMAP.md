@@ -370,6 +370,12 @@ Linux/Android; Windows sin hardware físico. Detalles en DOREMI-PRODUCT-REPORT.m
 Límites iniciales: 32 listas/256 entradas totales. No cierra el gate de 10.000
 entradas, el historial completo ni el resto de F3b.
 
+Carátulas: corte compartido de portada frontal por MBID exacto de edición,
+CAA/Internet Archive y caché de memoria acotada. Decode/escalado extraídos del
+loader legado; ninguna búsqueda por título para atribuir imágenes. Sin caché
+persistente ni imagen de artista/grabación aún. Estado de CI/dispositivos y
+atribuciones de QA en DOREMI-PRODUCT-REPORT.md; no cierra F3b.
+
 ### F4: integrar producto desktop/Android compartido
 
 Depende de F2, F3a y F3b.

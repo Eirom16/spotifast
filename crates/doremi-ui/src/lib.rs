@@ -1,6 +1,7 @@
 //! Presentation primitives extracted from Spotifast's real theme and sidebar.
 //! Copyright (c) Carmine Paolino. MIT; see the repository LICENSE.
 //! No catalog, player, filesystem, processes, or platform services run while drawing.
+pub mod bitmap;
 pub mod collection;
 
 use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, pos2, vec2};

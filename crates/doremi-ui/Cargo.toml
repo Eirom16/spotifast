@@ -13,6 +13,7 @@ theme-files = ["dep:fastframe-theme"]
 egui = { version = "0.36.2", default-features = false, features = ["serde"] }
 egui_extras = { version = "0.36.2", default-features = false, features = ["image", "svg"] }
 serde = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 # Reuse the exact inherited sources/revision already frozen in Cargo.lock.
 fastframe-fonts = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
 fastframe-icons = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
