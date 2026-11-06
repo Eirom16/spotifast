@@ -85,6 +85,8 @@ impl DoremiApp {
                                 navigation_icon(page),
                                 label,
                                 self.model.as_ref().unwrap().page == page
+                                    || (page == Page::Home
+                                        && self.model.as_ref().unwrap().page == Page::History)
                                     || (page == Page::Library
                                         && self.model.as_ref().unwrap().page == Page::Playlist),
                                 width,
@@ -125,6 +127,8 @@ impl DoremiApp {
                             icon,
                             label,
                             self.model.as_ref().unwrap().page == page
+                                || (page == Page::Home
+                                    && self.model.as_ref().unwrap().page == Page::History)
                                 || (page == Page::Library
                                     && self.model.as_ref().unwrap().page == Page::Playlist),
                             40.0,
@@ -745,6 +749,14 @@ impl DoremiApp {
     }
 
     pub(super) fn rows(&mut self, ui: &mut egui::Ui, rows: &[Media]) {
+        self.rows_with_subtitle(ui, rows, None);
+    }
+    pub(super) fn rows_with_subtitle(
+        &mut self,
+        ui: &mut egui::Ui,
+        rows: &[Media],
+        prefix: Option<&str>,
+    ) {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
         for (index, media) in rows.iter().enumerate() {
@@ -758,6 +770,10 @@ impl DoremiApp {
                 } else {
                     "Audio local"
                 };
+                let subtitle = prefix.map_or_else(
+                    || subtitle.to_owned(),
+                    |prefix| format!("{prefix} · {subtitle}"),
+                );
                 let duration = media
                     .duration_ms
                     .filter(|_| media.id.provider.as_str() == "wikimedia-commons");

@@ -1,148 +1,106 @@
 # Doremi — avance de producto
 
 Rama feature/doremi-product-ui. Objetivo completo abierto; sin release, merge a
-main ni cambios a upstream. Informe previo y skills locales del usuario conservados.
+main ni cambios a upstream. DOREMI-GOAL-REPORT.md y skills del usuario conservados.
 
-## Funcionalidad disponible
+## Disponible y verificado
 
 - UI neutral que reutiliza paleta, Inter, iconos, sidebar, filas, sliders, player y
-  cabeceras de colección del legado. Inicio, Buscar, Biblioteca, Cola y Ajustes
-  comparten Queue/Engine. La migración visual completa sigue abierta.
-- MusicBrainz público: grabaciones, artistas, ediciones, canciones de álbum y
-  grabaciones de artista, paginación/caché acotadas y guardado por ID. Solo
-  metadatos, sin audio y sin sustituir grabaciones por otra búsqueda.
-- **Commons ampliado en 5aa9fbf**: búsqueda real de hasta diez resultados CC0 con
-  fuente Own work, un stream Vorbis, 1–2 canales/8–192 kHz, hasta 10 min/32 MiB.
-  Títulos de tags cuando existen, nombre de archivo como fallback; duración real.
-  No inventa intérprete ni portada. Sin paginación Commons todavía.
-- Cada selección o reapertura resuelve otra vez el ID. Grant opaco de diez minutos
-  ligado a URL exacta, tamaño y SHA-1; no se guarda en biblioteca. Rangos HTTPS
-  exigen 206/longitud/identidad de objeto y ETag coherente. Esta identidad sobre TLS
-  no equivale a hashes por bloque; la selección auditada de Chopin por Membeth
-  **conserva sus hashes por bloque**. Los dos tonos auditados conservan su ruta.
-- Primer PCM sin esperar al archivo completo, Vorbis incremental y Feed/CPAL
-  existentes. Pausa, seek, siguiente/anterior, volumen, buffering, cancelación y
-  caducidad. Setup Vorbis limitado antes de construir el decoder. UI/callback
-  libres de red/decodificación; errores visibles, sin retry ni método alternativo
-  ante una negativa. Demo continúa etiquetada y sin audio.
-- Biblioteca y playlists propias: guardar/quitar, CRUD, duplicados ordenados,
-  selección de la aparición concreta, mover/quitar y confirmación de eliminación.
-  Editar no cambia favoritos ni la cola activa. Snapshots y JSON v1 privado/atómico
-  fuera de UI; documentos futuros conservados. Límite inicial 32 listas/256
-  entradas totales; no cierra el gate de 10.000 ni el historial completo de F3b.
-- Móvil: navegación por iconos, mini-player condicional, player dedicado y
-  composición horizontal, filas compactas/menús, Atrás al origen y editor Android
-  con destino/generación. Temas claro/oscuro y morado/verde. Android pausa al salir;
-  MediaSession y reproducción en segundo plano siguen pendientes.
+  cabeceras del legado. Inicio, Buscar, Biblioteca, Cola, playlists y Ajustes
+  comparten Queue/Engine; la migración visual completa continúa.
+- MusicBrainz: grabaciones, artistas, ediciones, canciones de álbum y grabaciones
+  de artista, paginación/caché acotadas y guardado por ID. Solo metadatos.
+- Portada frontal CAA por MBID exacto de edición: 250 px, worker cancelable,
+  decode/escalado extraídos del legado y caché en memoria de ocho imágenes/ocho
+  texturas, hasta diez minutos de reutilización. no-store/no-cache se respetan.
+  HTTPS/hosts permitidos, saltos/bytes/tiempos/cooldown acotados. CPU retenida y
+  texturas nuevas tras recrear Activity. No habilita audio ni inventa carátulas
+  para una pista Commons. Artistas/grabaciones sin imagen mantienen placeholder.
+- Commons: hasta diez resultados CC0 declarados por su autor/Own work, Vorbis
+  hasta 10 min/32 MiB, 1–2 canales/8–192 kHz. Resolución fresca por ID al tocar o
+  reabrir; grant opaco de diez minutos ligado a URL/tamaño/SHA-1, nunca persistido.
+  Rangos 206/longitud/identidad de objeto/ETag coherentes sobre TLS; no son hashes
+  criptográficos por bloque. Chopin/Membeth y dos tonos auditados conservan sus
+  comprobaciones especiales. Sin sustitución Spotify→búsqueda de otro servicio.
+- Feed/CPAL/Symphonia existentes: PCM antes del archivo completo, pausa, seek,
+  siguiente/anterior, volumen, buffering, cancelación, caducidad y EOF. UI/callback
+  sin red/decode pesado. Setup Vorbis limitado antes de construir el decoder.
+  Demo sigue etiquetada y sin audio. Commons aún no tiene paginación.
+- Biblioteca/playlists propias: guardar/quitar, CRUD, duplicados ordenados,
+  selección de aparición, mover/quitar, confirmación de borrado, JSON v1 privado
+  y atómico fuera de UI. Editar conserva cola/favoritos. Límites iniciales:
+  32 listas/256 entradas; el gate de biblioteca de 10.000 sigue abierto.
+- Cola en filas de 56 pt, actual separada y futuras por aparición, menús de 48 pt,
+  vaciado sin alterar current/context/favoritos. Mini-player condicional, player
+  dedicado, Atrás al origen, claro/oscuro y morado/verde. Aviso horizontal respeta
+  escala física 1,875. Editor nativo mantiene nombre/Guardar visibles al abrir IME.
+  Android pausa al salir; MediaSession/background pendientes.
 
-## Plataformas y artefactos verificados
+## Evidencia por plataforma
 
-[CI 42131761479](https://github.com/Eirom16/spotifast/actions/runs/42131761479),
-**5aa9fbf: los tres jobs aprobados**. Tests y Clippy de los paquetes afectados,
-Rustdoc, GUI Linux, nuevo ejecutable Windows nativo y ambas ABI/APK Android.
-La regresión completa del legado más reciente es 42086375132/3201c4b, verde;
-no se atribuye esa ejecución completa a este corte. El legado no cambió aquí.
-
-| Plataforma | Evidencia de 5aa9fbf | Límite |
-| --- | --- | --- |
-| Linux/CachyOS | Artifact instalado; manifiesto/checksums y versión verificados. Recorrido GUI X11 con Mendelssohn 17687586, fuera de la lista fija, y callback nativo positivo. | Sin captura acústica. La ventana normal Wayland abierta antes sigue en d56ac45; launcher actualizado a 5aa9fbf. |
-| Android SM-J701M/API 28/ARMv7 | APK instalada y hash del paquete instalado comprobado. Búsqueda/IME, claro/oscuro, guardar, pausa/seek/reanudar, Atrás, recreación y landscape; playlists y reapertura nativa sin buscar otra vez: PASS físico. | ARM64 verificado en paquete/CI, no en hardware; sin captura acústica. |
-| Windows x64/MSVC | Nuevo doremi.exe compilado/testeado en runner; checksums, PE64, versión y manifiesto descargados/verificados. | GUI smoke: OpenGL insuficiente; audio: NoDevice. Sin Windows físico; no se declara playback probado. |
-
-SHA256 Linux: 43a09932a2acc98afd4a9a058f9809b61903c48cc2bcc59a6113b5dcef3d408e.
-APK: e6218b204c76c9475ced4d8ac32ffffc7df3fd89972440789ffd698a00f189ad.
-Windows: 31bcbab948160b877566a554ede5f76776fcb3c98c344e023e2e0bd078852ac7.
-
-Linux y Android observaron PCM con **196.490/3.342.218 B** recibidos de Mendelssohn.
-Linux también pasó siguiente a otro recurso CC0, anterior, cancelación, proceso
-nuevo y fin Vorbis natural tras seek cerca del final: Stopped, sin current/audio/
-red activos. Cierre por WM_DELETE_WINDOW: exit 0; dos procesos observados y ninguno
-huérfano. Máximo RSS muestreado 136.468 KiB, 19 threads/40 FD; es una observación,
-no una cota de memoria. PCM 65.536 B; buffers comprimidos propios 262.146 B,
-además de HTTP/TLS/decoder. La biblioteca normal Android mantuvo su hash exacto
-b5d5ead52096157402aa54f217bf93672acabd395bea418352135657b29f7918.
-
-Se conservan los fallos previos: timeouts/429 y geometría; CI 42095842479 falló
-por sync de directorio Unix aplicado en Windows y timeout APT previo a tests.
-Corregidos en e0d1744/d56ac45. La prueba de cierre inicial usó una petición al
-window manager ausente en Xvfb; otra expectativa del driver confundía EOF con
-Paused. Se corrigieron los controladores conforme al protocolo y al contrato
-Stopped existente, sin cambiar el núcleo ni borrar los fallos.
-
-## Cola/player y regresión de escala
-
-2d04a41 unifica la Cola en filas de 56 pt, con actual separada y futuras por
-aparición. Menús de 48 pt para subir/bajar/quitar y vaciado que conserva
-current/context/favoritos. Player vacío compartido con acceso real a Buscar.
-
-[CI enfocada 42136724946](https://github.com/Eirom16/spotifast/actions/runs/42136724946)
-aprobada en los tres jobs. Artefactos del mismo commit descargados, verificados e
-instalados en Linux y Android. Windows conserva el límite OpenGL/NoDevice del
-runner; PE64, checksums y nuevo ejecutable comprobados. La CI completa 42136883688
-terminó verde en todos sus jobs, incluido Windows.
-Linux GUI a 393 px pasó duplicados, movimiento exacto, vaciado y playlists.
-
-La primera prueba física de 2d04a41 pasó búsqueda/PCM/seek/recreación pero detectó
-que el aviso horizontal sobresalía 0,28125 pt en el Samsung a escala 1,875.
-Biblioteca normal preservada con el mismo hash. El fallo y su captura se conservan.
-3e8ccf5 reserva un GAP adicional: en hardware el aviso termina en 275,28125 pt,
-dentro de la página que termina en 283 pt. La Cola pasó en Android, incluidos
-menús de 48 pt, duplicados, vaciado, conservación de current/context/favoritos y
-Atrás. La ejecución completa falló después en renombrar una playlist con IME;
-no se declara un PASS global. Android/Windows CI de 3e8ccf5 pasaron; el job Linux
-fue sustituido automáticamente por la compilación del siguiente corte.
-
-Regresión IME preparada: el editor nativo puede quitar el foco de ventana a egui;
-el campo activo ahora se conserva al centrarlo cuando se reduce el viewport.
-Test reproduce el fallo a 384×332,28125 pt/escala 1,875 con mini-player y luego
-comprueba campo/Guardar visibles. Antes FAIL, después PASS; app 34 tests y
-Clippy/check-local aprobados. La corrección necesita su nueva APK y prueba física.
-
-Capturas antes/después 360/393/430 px y claro/oscuro revisadas en el corte de Cola.
-Se conservaron dos fallos de QA local que compartieron accidentalmente el display
-X11; las repeticiones aisladas pasaron y el driver ahora comprueba el foco.
-
-## Carátulas de álbum: f641177 en CI
-
-La vista de una edición MusicBrainz pide su portada frontal de 250 px a Cover Art
-Archive por MBID exacto. Carga/errores y crédito de fuente visibles; artistas y
-canciones sin imagen continúan con placeholder. No asigna esa portada a una pista
-Commons por similitud de título. Esta fuente de imágenes no habilita audio.
-
-Un worker con comandos/eventos acotados, generación y cancelación hace HTTP,
-decode y escalado. Reutiliza esas funciones y opciones de textura del loader del
-legado, conservando sus límites anteriores. Miniatura: 512 KiB codificados,
-1024 px por lado/8 MiB de límite del decoder, salida hasta 250 px; caché LRU de
-ocho imágenes y ocho texturas. HTTP: HTTPS/hosts CAA e Internet Archive, cuatro
-saltos, 3/8/12 s de conexión/petición/recorrido, sin retry ante negativa; cooldown
-Retry-After y Cache-Control/Age. no-store/no-cache no se reutilizan al salir.
-Caché solo en memoria, hasta diez minutos; no se persisten URLs ni covers.
-Android conserva CPU/cache y crea texturas nuevas por Activity/contexto GL.
-
-Tests locales: app 33, MusicBrainz 5 y bitmap 1 aprobados; Clippy estricto,
-Rustdoc, build, check-local y compilación Java aprobados. GUI Linux: edición real
-The Slip 12b57d46-a192-499e-a91f-7da66790a1c1, carga y regreso desde caché;
-pruebas finales 360/393/430 px y escritorio aprobadas, con capturas revisadas.
-La versión con HTTP asíncrono pasó de nuevo a 393 px; cierre WM_DELETE_WINDOW
-con exit 0. La cancelación también interrumpe una respuesta pendiente en fixture. Imagen usada en QA bajo
-CC BY-NC-SA 3.0 US, dirección artística Rob Sheridan/Trent Reznor; licencia y
-atribución junto a la evidencia externa. No se incluye en los assets del producto.
+[CI enfocada 42228990808](https://github.com/Eirom16/spotifast/actions/runs/42228990808),
+562a5ba: Linux, Windows y APK aprobados. La
 [CI completa 42142254641](https://github.com/Eirom16/spotifast/actions/runs/42142254641)
-ya aprobó tests del workspace (incluidas imágenes del legado), Clippy/Rustdoc y
-Preview Linux; builds restantes aún en curso. La CI enfocada 42142253959 aprobó
-la APK y continúa Linux/Windows. Carátulas en Android físico aún pendientes.
+de f641177 terminó verde en todos los jobs: workspace/default/all-features,
+Clippy/Rustdoc, legado, Preview y plataformas. No se atribuye esa CI completa a
+los cambios nuevos de tarjetas/historial de este worktree.
 
-Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-05/.
-Incluye ci-5aa9fbf/{linux-mendelssohn-final,android-mendelssohn,windows}/,
-queue-{before,after}-layouts/, queue-ui-{phone360,desktop}-isolated/,
-queue-player-phone393/, queue-player-final-checks/, ci-2d04a41/ y artwork-final-*/. No se repitieron suites
-físicas extensas de formatos locales ni se añadieron formatos/importadores.
+| Plataforma | Comprobado | Límite |
+| --- | --- | --- |
+| Linux/CachyOS | f641177 instalado; SHA/manifest/version, GUI X11 de portada real, caché y cierre normal exit 0. Arranque Wayland normal, PID 2091 al verificar; biblioteca/playlists con hashes idénticos. Artifacts 562a5ba descargados. | La ventana normal arranca en f641177; sin captura de esa ventana Wayland. Sin captura acústica. |
+| Android SM-J701M/API 28/ARMv7 | f641177: portada The Slip, claro/oscuro, caché y Activity recreada: PASS físico. 562a5ba: música CC0/PCM, IME, guardar, pausa/seek, mini-player, Cola/duplicados, landscape, playlists/renombrado y proceso nuevo/reproducción sin buscar: PASS físico. APK instalada/hash comprobado. | ARM64 comprobado en CI/paquete, sin hardware. Sin captura acústica. |
+| Windows x64/MSVC | Nuevo doremi.exe 562a5ba compilado/testeado nativamente, descargado; manifest, SHA y PE64 comprobados. | Smoke GUI: OpenGL insuficiente; audio: NoDevice. Sin Windows físico ni playback declarado. |
 
-## Pendiente del objetivo completo
+Linux f641177: a8a6f6bcb22e5bf81e9eacb007c781ba9b63b50504c5ca196451ecae21fd2c76.
+APK 562a5ba: 3136cd79d177842cf0a5ac396394ede44da3e3a134f144d023f021caa0ef2e52.
+La biblioteca habitual Android conservó b5d5ead52096157402aa54f217bf93672acabd395bea418352135657b29f7918.
+Chopin dio PCM con 197.167/4.260.399 B recibidos. La prueba anterior 5aa9fbf con
+Mendelssohn 17687586, fuera de la lista fija, dio PCM con 196.490/3.342.218 B;
+Linux también pasó EOF natural, cancelación, siguiente/anterior y reapertura.
+PCM 65.536 B; buffers comprimidos propios 262.146 B más HTTP/TLS/decoder.
+RSS Linux muestreado en aquella prueba: 136.468 KiB; observación, no cota global.
 
-Cerrar el corte de Cola/player en las tres plataformas. Ampliar navegación y
-artwork, historial, cuenta opcional compatible, EQ/DSP/visualizadores, integración
-multimedia y background Android. Audius sigue investigado, sin integrar; sus
-condiciones de caché/sesión y acceso requieren adaptación. Sin integración YouTube
-ni promesa de acceso universal. El inventario del legado y los gates completos
-permanecen en el roadmap; no hay release estable ni objetivo completado.
+Se conservan fallos y correcciones: sync de directorio Windows/APT, cierre X11
+con controlador equivocado, displays compartidos, aviso horizontal 0,28125 pt
+fuera de página y Guardar con IME. 562a5ba corrigió este último y pasó la suite
+física completa. Una regresión del runner generalizado de carátulas recibió
+Timeout de MusicBrainz el 6/11; error visible y biblioteca preservada, sin PASS
+fabricado ni ampliar límites. La portada ya tiene PASS físico previo en f641177.
+
+## Corte de historial en preparación
+
+Escuchas reales → tarjetas recientes en Inicio → Historial → reproducir otra vez
+→ restaurar tras proceso nuevo. Comparte la regla heredada de 30 s o media pista
+corta (mínimo 1 s); cuenta frames de audio entregados, excluyendo pausas,
+buffering y desplazamientos de seek. Cada escucha separada permanece; Inicio
+muestra hasta 16 canciones únicas por ID cualificado. 500 escuchas/JSON v1 hasta
+2 MiB, snapshots O(1), writer existente, privado/atómico y formatos futuros en
+solo lectura. Confirmar vaciado conserva favoritos/playlists/cola y suprime la
+reinserción de la escucha actual. No se importan perfiles Spotify ni URLs efímeras.
+
+Tarjetas, sombras y filas virtuales extraídas de los widgets reales; el legado
+conserva covers, RTL, traducciones, menús y autoscroll. Historial solo mide filas
+visibles. Prueba local con 500 registros, 360/393/430 pt/escritorio, escala 1,875 y
+ambos temas. Tests lib: app 36/core 3/library 22/MusicBrainz 5/bitmap 1, aprobados;
+Clippy estricto, Rustdoc, build, Java y check-local aprobados.
+
+GUI Linux del corte: música Chopin CC0, 30,0755625 s de salida nativa sumando los
+dos requests alrededor del seek; guardar historial sin favorito, cancelar vaciado,
+reiniciar sin IO automático, reproducir desde reciente sin buscar y vaciar
+conservando cola/favoritos: PASS. Dos cierres WM_DELETE_WINDOW, exit 0. Capturas
+360/393/430/1180 y ambos temas revisadas; los tamaños adicionales usan el snapshot
+real del recorrido, sin volver a reproducir. Android UI/restore preparados, pero
+este historial necesita CI, regresión del legado y prueba física de su propia APK.
+
+## Evidencia y trabajo pendiente
+
+Evidencia fuera del árbol: /home/eirom/.local/share/doremi/product-qa/2026-11-05/
+y 2026-11-06/: ci-f641177/, ci-562a5ba/, history-{final393,layout-*}/,
+history-before-legacy-preview/. La imagen The Slip de QA tiene atribución Rob
+Sheridan/Trent Reznor y CC BY-NC-SA 3.0 US junto a las capturas; no se incluye en assets.
+
+Cerrar historial en las tres plataformas; continuar navegación, cuenta opcional
+oficial compatible, EQ/DSP/visualizadores, letras, integración multimedia, tray y
+atajos, background Android y matriz de releases. Audius investigado, sin integrar;
+sus condiciones requieren adaptación. Sin integración YouTube ni promesa de
+acceso universal. El inventario/gates completos siguen en DOREMI-ROADMAP.md.

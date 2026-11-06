@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod listening;
 pub mod manual;
 pub mod media;
 pub mod queue;

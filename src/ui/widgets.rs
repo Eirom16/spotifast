@@ -12,10 +12,10 @@ use crate::model::{Action, Dialog, DragEntry, DragTrack, Page, RowContext, RowPi
 use crate::theme::{self, Icon, Palette};
 use crate::util;
 
-pub const CARD_WIDTH: f32 = 172.0;
+pub const CARD_WIDTH: f32 = doremi_ui::cards::CARD_WIDTH;
 /// The cover inside a card, within its 12 point padding.
-pub const CARD_ART: f32 = CARD_WIDTH - 24.0;
-pub const CARD_GAP: f32 = 14.0;
+pub const CARD_ART: f32 = doremi_ui::cards::CARD_ART;
+pub const CARD_GAP: f32 = doremi_ui::cards::CARD_GAP;
 pub const PAGE_PADDING: f32 = 24.0;
 
 /// Draws an image (or a placeholder) in a square.
@@ -300,17 +300,7 @@ fn paint_cover_texture(
 
 /// A soft drop shadow under a cover or card.
 pub fn paint_shadow(ui: &Ui, palette: &Palette, rect: Rect, radius: f32) {
-    if !palette.dark {
-        return;
-    }
-    let shadow = egui::epaint::Shadow {
-        offset: [0, 10],
-        blur: 28,
-        spread: 0,
-        color: Color32::from_black_alpha(120),
-    };
-    ui.painter()
-        .add(shadow.as_shape(rect, CornerRadius::same(radius as u8)));
+    doremi_ui::cards::shadow(ui, palette, rect, radius)
 }
 
 /// Fills `rect` with a vertical gradient from `top` to `bottom`.
@@ -327,35 +317,8 @@ pub fn paint_vertical_gradient(ui: &Ui, rect: Rect, top: Color32, bottom: Color3
 
 /// Lays out only the rows that intersect the visible area of the enclosing
 /// scroll view. Every row must occupy exactly `row_height`.
-pub fn virtual_rows(
-    ui: &mut Ui,
-    count: usize,
-    row_height: f32,
-    mut row: impl FnMut(&mut Ui, usize),
-) {
-    if count == 0 {
-        return;
-    }
-    let previous_spacing = ui.spacing().item_spacing;
-    ui.spacing_mut().item_spacing.y = 0.0;
-    let clip = ui.clip_rect();
-    let start_y = ui.cursor().top();
-    let width = ui.available_width();
-    // Retain a neighbour on either side so Tab can focus it and scroll it in.
-    let first = (((clip.top() - start_y) / row_height).floor().max(0.0) as usize)
-        .min(count)
-        .saturating_sub(1);
-    let last = (((clip.bottom() - start_y) / row_height).ceil().max(0.0) as usize + 1).min(count);
-    if first > 0 {
-        ui.allocate_space(vec2(width, first as f32 * row_height));
-    }
-    for index in first..last {
-        row(ui, index);
-    }
-    if last < count {
-        ui.allocate_space(vec2(width, (count - last) as f32 * row_height));
-    }
-    ui.spacing_mut().item_spacing = previous_spacing;
+pub fn virtual_rows(ui: &mut Ui, count: usize, row_height: f32, row: impl FnMut(&mut Ui, usize)) {
+    doremi_ui::virtual_rows(ui, count, row_height, row)
 }
 
 /// A wrapping grid of cards, laid out row by row so only visible cards are
@@ -2521,63 +2484,15 @@ pub fn ellipsized(
     )
 }
 
-pub struct CardResponse {
-    /// Give attached menus an item-based ID: hovering a Play button can shift
-    /// later cards' automatic response IDs.
-    pub response: egui::Response,
-    pub clicked: bool,
-    pub play: bool,
-}
+pub use doremi_ui::cards::{CardCover, CardResponse};
 
-/// The cover a [`card`] shows: its shape and what its play control does.
-#[derive(Clone, Copy, Default)]
-pub struct CardCover {
-    /// A circular cover, as an artist's portrait.
-    pub circular: bool,
-    /// Hover offers a play control; cards that only navigate leave it off.
-    pub playable: bool,
-    /// The card's context is the one playing, so the control pauses.
-    pub playing: bool,
-}
-
-impl CardCover {
-    /// A square cover that plays on hover.
-    pub fn square(playing: bool) -> Self {
-        Self {
-            playable: true,
-            playing,
-            ..Self::default()
-        }
-    }
-
-    /// A circular artist portrait that plays on hover.
-    pub fn portrait(playing: bool) -> Self {
-        Self {
-            circular: true,
-            ..Self::square(playing)
-        }
-    }
-}
-
-/// Fixed height of a [`card`] row for virtualised grids.
+/// Fixed height of a card row for virtualised grids.
 pub fn card_row_height(ui: &mut Ui) -> f32 {
-    const PAD: f32 = 12.0;
-    const TITLE_GAP: f32 = 10.0;
-    const SUBTITLE_GAP: f32 = 2.0;
-    const BOTTOM_PAD: f32 = 8.0;
-    let image_size = CARD_ART;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
-    let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
-        (
-            fonts.row_height(&title_font),
-            fonts.row_height(&subtitle_font),
-        )
-    });
-    PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD
+    doremi_ui::cards::row_height(ui)
 }
 
-/// A cover-and-title card for grids and shelves.
+/// A cover-and-title card for grids and shelves. Preserve the legacy artwork,
+/// bidirectional text, autoscroll and action policy around the shared geometry.
 pub fn card(
     ui: &mut Ui,
     app: &mut App,
@@ -2586,132 +2501,54 @@ pub fn card(
     subtitle: &str,
     cover: CardCover,
 ) -> CardResponse {
-    let CardCover {
-        circular,
-        playable,
-        playing,
-    } = cover;
     let palette = app.palette;
-    const PAD: f32 = 12.0;
-    const TITLE_GAP: f32 = 10.0;
-    const SUBTITLE_GAP: f32 = 2.0;
-    const BOTTOM_PAD: f32 = 8.0;
-    let image_size = CARD_ART;
-    let text_width = image_size;
-    let title_font = theme::semibold(14.0);
-    let subtitle_font = theme::regular(12.5);
-    // Every card reserves the title row and two subtitle rows, whatever its
-    // own subtitle needs: a two-line subtitle then sits inside the hover
-    // background, and a shelf that mixes one- and two-line subtitles keeps
-    // its covers on one line instead of centring cards of different heights.
-    let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
-        (
-            fonts.row_height(&title_font),
-            fonts.row_height(&subtitle_font),
-        )
-    });
-    let height =
-        PAD + image_size + TITLE_GAP + title_row + SUBTITLE_GAP + 2.0 * subtitle_row + BOTTOM_PAD;
-    let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::click());
-    response.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            egui::WidgetType::Button,
-            ui.is_enabled(),
-            format!("{title}, {subtitle}"),
-        )
-    });
-    if response.gained_focus() {
-        response.scroll_to_me(None);
-    }
-    let mut play = false;
-    if ui.is_rect_visible(rect) {
-        let hovered = ui.rect_contains_pointer(rect);
-        if hovered {
-            ui.painter().rect_filled(
-                rect,
-                CornerRadius::same(theme::RADIUS),
-                palette
-                    .surface_hover
-                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
-            );
-        }
-        let image_rect = Rect::from_min_size(rect.min + vec2(PAD, PAD), Vec2::splat(image_size));
-        let radius = if circular { image_size / 2.0 } else { 6.0 };
-        paint_shadow(ui, &palette, image_rect, radius);
-        paint_cover(
-            ui,
-            &palette,
-            image,
-            image_rect,
-            radius,
-            if circular { Icon::User } else { Icon::Music },
-            Some(app.backend.art()),
-        );
-        let text_left = rect.left() + PAD;
-        let title_galley = ellipsized(ui, title, title_font, palette.text, text_width, 1);
-        let title_rect = Rect::from_min_size(
-            pos2(text_left, image_rect.bottom() + TITLE_GAP),
-            vec2(text_width, title_row),
-        );
-        let title_pos = match title_galley.job.halign {
-            Align::RIGHT => pos2(title_rect.right(), title_rect.top()),
-            Align::Center => pos2(title_rect.center().x, title_rect.top()),
-            _ => title_rect.min,
-        };
-        ui.painter().galley(title_pos, title_galley, palette.text);
-        let subtitle_galley = ellipsized(
-            ui,
+    let play_label = gettext(app.locale, if cover.playing { "Pause" } else { "Play" });
+    let result = doremi_ui::cards::card(
+        ui,
+        &palette,
+        doremi_ui::cards::Card {
+            title,
             subtitle,
-            subtitle_font,
-            palette.secondary,
-            text_width,
-            2,
-        );
-        let subtitle_rect = Rect::from_min_size(
-            pos2(text_left, title_rect.bottom() + SUBTITLE_GAP),
-            vec2(text_width, 2.0 * subtitle_row),
-        );
-        let subtitle_pos = match subtitle_galley.job.halign {
-            Align::RIGHT => pos2(subtitle_rect.right(), subtitle_rect.top()),
-            Align::Center => pos2(subtitle_rect.center().x, subtitle_rect.top()),
-            _ => subtitle_rect.min,
-        };
-        ui.painter()
-            .galley(subtitle_pos, subtitle_galley, palette.secondary);
-
-        if playable && hovered {
-            let button_rect = Rect::from_center_size(
-                pos2(image_rect.right() - 26.0, image_rect.bottom() - 26.0),
-                Vec2::splat(44.0),
-            );
-            let mut child = ui.new_child(
-                UiBuilder::new()
-                    .max_rect(button_rect)
-                    .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
-            );
-            play = theme::circle_button(
-                &mut child,
-                if playing {
-                    Icon::PauseFilled
-                } else {
-                    Icon::PlayFilled
-                },
-                44.0,
-                palette.accent,
-                palette.accent_hover,
-                palette.on_accent,
-                &gettext(app.locale, if playing { "Pause" } else { "Play" }),
-            )
-            .clicked();
-        }
-    }
-    crate::autoscroll::row(ui, &response);
-    theme::focus_ring(ui, &response);
-    CardResponse {
-        clicked: response.clicked() && !play,
-        response,
-        play,
-    }
+            cover,
+            play_label: &play_label,
+            play_size: 44.0,
+        },
+        |ui, slot| match slot {
+            doremi_ui::cards::Slot::Cover { rect, radius } => {
+                paint_shadow(ui, &palette, rect, radius);
+                paint_cover(
+                    ui,
+                    &palette,
+                    image,
+                    rect,
+                    radius,
+                    if cover.circular {
+                        Icon::User
+                    } else {
+                        Icon::Music
+                    },
+                    Some(app.backend.art()),
+                );
+            }
+            doremi_ui::cards::Slot::Text {
+                text,
+                rect,
+                font,
+                color,
+                rows,
+            } => {
+                let galley = ellipsized(ui, text, font, color, rect.width(), rows);
+                let pos = match galley.job.halign {
+                    Align::RIGHT => pos2(rect.right(), rect.top()),
+                    Align::Center => pos2(rect.center().x, rect.top()),
+                    _ => rect.min,
+                };
+                ui.painter().galley(pos, galley, color);
+            }
+        },
+    );
+    crate::autoscroll::row(ui, &result.response);
+    result
 }
 
 /// A horizontal shelf of cards with a title.

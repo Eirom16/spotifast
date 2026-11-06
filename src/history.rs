@@ -12,9 +12,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::api::models::{Album, Image, PlayHistory, Track};
 
-/// A play counts after 30 seconds, or halfway through a shorter track.
-const COUNTS_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
-
 /// Maximum number of stored local plays.
 const KEPT: usize = 500;
 
@@ -24,10 +21,9 @@ const SAME_PLAY: i64 = 60;
 
 /// When a song has been listened to long enough to count.
 pub fn counts_after(duration_ms: u32) -> std::time::Duration {
-    let half = std::time::Duration::from_millis(u64::from(duration_ms) / 2);
-    COUNTS_AFTER
-        .min(half)
-        .max(std::time::Duration::from_secs(1))
+    std::time::Duration::from_millis(doremi_core::listening::counts_after_ms(Some(u64::from(
+        duration_ms,
+    ))))
 }
 
 /// The plays made here, newest first.

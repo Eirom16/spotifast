@@ -20,6 +20,7 @@ mod online_probe;
 use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
+mod listening;
 mod local_media;
 mod playlists;
 mod presentation;
@@ -117,6 +118,7 @@ enum Page {
     Settings,
     Player,
     Playlist,
+    History,
 }
 
 struct Model {
@@ -132,6 +134,11 @@ struct Model {
     write_queue: bool,
     library: persistence::collection::Collection,
     write_library: bool,
+    history: persistence::history::History,
+    write_history: bool,
+    history_clear_pending: bool,
+    listening: doremi_core::listening::Counter,
+    listening_media: Option<Media>,
     playlists: persistence::playlists::Playlists,
     write_playlists: bool,
     selected_playlist: Option<u64>,
@@ -212,6 +219,11 @@ impl Model {
             write_queue: true,
             library,
             write_library,
+            history: persistence::history::History::default(),
+            write_history: true,
+            history_clear_pending: false,
+            listening: doremi_core::listening::Counter::default(),
+            listening_media: None,
             playlists: persistence::playlists::Playlists::default(),
             write_playlists: true,
             selected_playlist: None,
@@ -270,6 +282,7 @@ impl Model {
         }
         model.load_library(directory);
         model.load_playlists(directory);
+        model.load_history(directory);
         model.load_local_files(directory);
         match persistence::read(directory, "queue-v1.json") {
             Ok(Some(bytes)) => match persistence::decode(&bytes).and_then(|checkpoint| {
@@ -301,6 +314,7 @@ impl Model {
         self.command_with_import_policy(command, true);
     }
     fn command_with_import_policy(&mut self, command: Command, cancel_import: bool) {
+        self.note_history();
         let cancelled = matches!(&command, Command::Cancel);
         if cancelled && cancel_import {
             self.cancel_local_import();
@@ -359,6 +373,7 @@ impl Model {
         }
     }
     fn effects(&mut self, effects: Vec<Effect>) {
+        self.note_history();
         for effect in effects {
             match effect {
                 Effect::Load {
@@ -367,6 +382,8 @@ impl Model {
                     position_ms,
                     ..
                 } => {
+                    self.listening.bind(&entry, request);
+                    self.listening_media = Some(entry.media.clone());
                     let result =
                         if let Some((_, pcm)) =
                             self.prepared.iter().find(|(id, _)| *id == entry.media.id)
@@ -458,6 +475,7 @@ impl Model {
         }
     }
     fn poll_audio(&mut self) {
+        self.note_history();
         let event = self.audio.as_ref().and_then(Engine::poll);
         if let Some(event) = event {
             let request = match event {
@@ -483,7 +501,11 @@ impl Model {
                         .into();
                         self.event(Event::Ready(r));
                     }
-                    EngineEvent::Ended(r) => self.event(Event::Ended(r)),
+                    EngineEvent::Ended(r) => {
+                        self.listening.reset();
+                        self.listening_media = None;
+                        self.event(Event::Ended(r));
+                    }
                     EngineEvent::Failed(r, error) => {
                         self.notice = format!("La salida de audio falló: {error:?}");
                         #[cfg(any(
@@ -812,7 +834,7 @@ impl DoremiApp {
         };
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
         let music_catalog = serde_json::Value::Null;
-        let state = serde_json::json!({
+        let mut state = serde_json::json!({
             "input":ctx.input(|input|serde_json::json!({"focused":input.raw.focused,"primary_down":input.pointer.primary_down(),"position":input.pointer.hover_pos().map(|point|[point.x,point.y])})),
             "local_import":model.local_files.snapshot(),"notice":model.notice,
             "editor_target":self.editor.key(),"editor_text":self.editor_text(),
@@ -836,6 +858,7 @@ impl DoremiApp {
             "controls": self.controls,"page_rect":self.page_rect,
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
         });
+        state["listening_history"] = serde_json::json!({"count":model.history.plays().len(),"writable":model.write_history,"recent":model.history.recent(16).iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>()});
         let state = serde_json::to_vec(&state).unwrap();
         if !self.pending && self.saved_state == state {
             return;
@@ -861,13 +884,16 @@ impl DoremiApp {
         let prefs = model
             .write_prefs
             .then(|| serde_json::to_vec(&model.prefs).unwrap());
-        match self.writer.as_ref().unwrap().submit_user_documents(
+        match self.writer.as_ref().unwrap().submit_snapshot(
             prefs,
             queue,
-            model.write_library.then(|| model.library.clone()),
-            (model.local_files.writable && !model.local_files.index.is_empty())
-                .then(|| model.local_files.index.clone()),
-            model.write_playlists.then(|| model.playlists.clone()),
+            persistence::UserDocuments {
+                library: model.write_library.then(|| model.library.clone()),
+                local_files: (model.local_files.writable && !model.local_files.index.is_empty())
+                    .then(|| model.local_files.index.clone()),
+                playlists: model.write_playlists.then(|| model.playlists.clone()),
+                history: model.write_history.then(|| model.history.clone()),
+            },
             state.clone(),
         ) {
             Ok(id) => {
@@ -957,6 +983,7 @@ impl DoremiApp {
                 if self.button(ui, "browse-catalog", "Buscar música", 220.0) {
                     self.navigate(Page::Search);
                 }
+                self.recent_shelf(ui);
                 ui.add_space(16.0);
                 ui.heading("Tu biblioteca");
                 let library = self.model.as_ref().unwrap().library.clone();
@@ -978,6 +1005,7 @@ impl DoremiApp {
                 });
                 self.record("demo-examples", &response.header_response);
             }
+            Page::History => self.history_page(ui),
             Page::Search => {
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 if self.model.as_ref().unwrap().music.selected
@@ -1233,6 +1261,13 @@ impl Drop for DoremiApp {
             // The Android system picker pauses the Activity. Keep its explicit
             // import intent while suspending playback and the GL renderer.
             model.command_with_import_policy(Command::Cancel, !cfg!(target_os = "android"));
+            if model.write_history {
+                let _ = self
+                    .writer
+                    .as_ref()
+                    .unwrap()
+                    .submit_history(model.history.clone());
+            }
             // Retain the owner and its idle writer across Activity lifetimes.
             // Never join disk work from the drawing/lifecycle thread.
             *RETAINED.lock().unwrap() = Some(Retained {
@@ -1250,7 +1285,12 @@ impl DoremiApp {
             let mut retained = retained;
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             retained.model.artwork.shutdown();
-            retained.writer.shutdown();
+            retained.writer.shutdown_with_history(
+                retained
+                    .model
+                    .write_history
+                    .then(|| retained.model.history.clone()),
+            );
         }
     }
 }
@@ -1399,6 +1439,123 @@ mod tests {
         drop(app);
         DoremiApp::shutdown();
         let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn recent_cards_and_full_history_render_bounded_rows_at_phone_and_desktop_sizes() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/listening-layout-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        // Own synthetic metadata exercises the layout only. The opt-in GUI
+        // journey separately proves history produced by real CC0 playback.
+        for index in 0..500 {
+            app.model
+                .as_mut()
+                .unwrap()
+                .history
+                .record(
+                    Media {
+                        id: MediaId::new(ProviderId::new("qa").unwrap(), index.to_string())
+                            .unwrap(),
+                        title: format!("QA · Música original {index}"),
+                        duration_ms: Some(90_000),
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let mut time = 0.0;
+        for light in [false, true] {
+            for size in [
+                [360.0, 800.0],
+                [393.0, 852.0],
+                [430.0, 932.0],
+                [1180.0, 820.0],
+            ] {
+                app.model.as_mut().unwrap().prefs.light = light;
+                for page in [Page::Home, Page::History] {
+                    app.navigate(page);
+                    for _ in 0..3 {
+                        time += 0.1;
+                        let mut input = egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                size.into(),
+                            )),
+                            time: Some(time),
+                            ..Default::default()
+                        };
+                        input
+                            .viewports
+                            .get_mut(&egui::ViewportId::ROOT)
+                            .unwrap()
+                            .native_pixels_per_point = Some(1.875);
+                        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+                        output.textures_delta.clear();
+                    }
+                    if page == Page::Home {
+                        assert_eq!(
+                            app.controls
+                                .iter()
+                                .filter(|c| c.name.starts_with("history-play:"))
+                                .count(),
+                            16
+                        );
+                        let heading = app
+                            .controls
+                            .iter()
+                            .find(|c| c.name == "history-open")
+                            .unwrap();
+                        assert!(
+                            heading.rect[3] - heading.rect[1]
+                                >= if size[0] < 760.0 { 48.0 } else { 32.0 }
+                        );
+                    } else {
+                        let visible = app
+                            .controls
+                            .iter()
+                            .filter(|c| c.name.starts_with("select:"))
+                            .count();
+                        assert!(
+                            (1..25).contains(&visible),
+                            "Measured {visible} history rows at {size:?}"
+                        );
+                        assert_eq!(app.model.as_ref().unwrap().history.plays().len(), 500);
+                    }
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+    #[test]
+    fn future_history_stays_untouched_during_real_ui_persistence_and_shutdown() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/future-listening-history-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let future = br#"{"schema":2,"plays":[],"future":"keep"}"#;
+        std::fs::write(directory.join("history-v1.json"), future).unwrap();
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        assert!(!app.model.as_ref().unwrap().write_history);
+        for _ in 0..3 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.draw(ui));
+            output.textures_delta.clear();
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        assert_eq!(
+            std::fs::read(directory.join("history-v1.json")).unwrap(),
+            future
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
     fn playlist_editor_stays_visible_when_android_ime_takes_window_focus() {

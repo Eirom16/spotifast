@@ -660,6 +660,53 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(500);
         if(!text.equals(state().getString("editor_text"))) throw new AssertionError("A late frame undid text input");
     }
+    private JSONObject listeningHistory(JSONObject state) { return state.optJSONObject("listening_history"); }
+    private void historyUi(boolean restore) throws Exception {
+        final String id="26896924";
+        if(!restore) {
+            if(listeningHistory(state()).optInt("count")!=0) throw new AssertionError("History QA requires a fresh profile");
+            tap("demo-examples");tap("select:dawn");tap("pause");slide("volume",0.08f);
+            tap("search");tap("source-commons");tap("query");text("Chopin",false);hideKeyboard();
+            until(25000,"audited CC0 music",state -> hasControl(state,"select:"+id));tap("select:"+id);
+            until(25000,"native history source",state -> onlinePlaying(state,id) && state.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+            tap("pause");JSONObject beforeSeek=state().getJSONObject("audio_metrics");slide("seek",0.6f);
+            until(30000,"paused seek before listening",state -> "Paused".equals(state.optString("playback")) && state.optLong("position_ms")>100000);
+            if(listeningHistory(state()).optInt("count")!=0) throw new AssertionError("Seeking fabricated a listen");
+            tap("play");
+            JSONObject counted=until(45000,"thirty seconds of delivered source frames",state -> listeningHistory(state).optInt("count")==1);
+            JSONObject metrics=counted.getJSONObject("audio_metrics");
+            double listenedSeconds=beforeSeek.getDouble("frames")/beforeSeek.getDouble("output_rate")+metrics.getDouble("frames")/metrics.getDouble("output_rate");
+            if(listenedSeconds<30) throw new AssertionError("History counted less than thirty seconds of native output");
+            if(metrics.getLong("frames")<29*metrics.getLong("output_rate")) throw new AssertionError("History counted a seek position instead of output frames");
+            Files.write(new File(profileDirectory(),"qa-history-counted-frames.json").toPath(),counted.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            tap("pause");tap("home");capture("qa-history-recent-dark");
+            JSONArray link=visibleRect("history-open");if(link.getDouble(3)-link.getDouble(1)<48) throw new AssertionError("History heading touch target too small");
+            tap("history-open");until(state -> "History".equals(state.optString("page")));capture("qa-history-dark");
+            tap("history-clear");tap("history-clear-cancel");
+            if(listeningHistory(state()).optInt("count")!=1) throw new AssertionError("Cancelling history clear changed its records");
+            tap("save:"+id);until(state -> savedCount(state,id)==1);
+            tap("settings");tap("light");tap("home");capture("qa-history-recent-light");tap("history-open");capture("qa-history-light");
+            long instance=state().getLong("instance");
+            ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
+            Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
+            if(recreated==null) throw new AssertionError("History recreation did not return");activity=recreated;
+            until(state -> state.optLong("instance")!=instance && listeningHistory(state).optInt("count")==1);
+            settledForeground();capture("qa-history-recreated");
+        } else {
+            if(!state().getString("query").isEmpty() || state().getJSONObject("online").getBoolean("worker_initialized") || listeningHistory(state()).getInt("count")!=1) throw new AssertionError("History restoration required search or provider IO");
+            capture("qa-history-restored");tap("history-play:"+id);
+            until(25000,"native replay from restored history without search",state -> onlinePlaying(state,id) && state.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000);
+            if(!state().getString("query").isEmpty()) throw new AssertionError("History replay performed a text search");
+            tap("pause");tap("home");tap("history-open");
+            JSONObject before=state();long occurrence=before.getLong("current_occurrence");
+            String context=before.getJSONArray("context_occurrences").toString(),manual=before.getJSONArray("manual_occurrences").toString(),saved=before.getJSONArray("saved_media").toString();
+            tap("history-clear");capture("qa-history-clear-confirmation");tap("history-clear-confirm");until(state -> listeningHistory(state).optInt("count")==0);
+            JSONObject after=state();
+            if(after.getLong("current_occurrence")!=occurrence || !context.equals(after.getJSONArray("context_occurrences").toString()) || !manual.equals(after.getJSONArray("manual_occurrences").toString()) || !saved.equals(after.getJSONArray("saved_media").toString())) throw new AssertionError("Clearing history changed queue/favorites");
+            capture("qa-history-cleared");
+        }
+        Files.write(new File(profileDirectory(),restore?"qa-history-restore-checks.json":"qa-history-checks.json").toPath(),new JSONObject().put("result","pass").put("physical_device",true).put("id",id).put("acoustic_capture",false).put("restored_process",restore).put("state",state()).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private void artworkUi() throws Exception {
         final String release="release:12b57d46-a192-499e-a91f-7da66790a1c1";
         tap("search");tap("source-musicbrainz");tap("catalog-kind:Release");tap("query");text("The Slip",false);hideKeyboard();
@@ -807,6 +854,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("history-ui".equals(mode) || "history-restore".equals(mode)) {
+                historyUi("history-restore".equals(mode));result.putString("stream","PASS: actual native listening history, shared recent cards, seek exclusion and persistence\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("artwork-ui".equals(mode)) {
                 artworkUi();result.putString("stream","PASS: exact release artwork, cache, themes and Activity recreation; no album audio\n");
                 finish(Activity.RESULT_OK,result);return;

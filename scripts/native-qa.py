@@ -16,11 +16,19 @@ def main():
     parser.add_argument('--size',type=int,nargs=2,metavar=('WIDTH','HEIGHT'))
     parser.add_argument('--playlist-music',action='store_true',help='Opt-in Commons requests and native playback of the audited CC0 music')
     parser.add_argument('--artwork',action='store_true',help='Opt-in public metadata and licensed The Slip artwork; no album audio')
+    parser.add_argument('--history-music',action='store_true',help='Opt-in actual CC0 listening, history, native replay and process restoration')
+    parser.add_argument('--history-layout',type=Path,help='Offline geometry QA from an actual listening-history fixture directory')
+    parser.add_argument('--close-helper',type=Path,help='Optional owned-window WM_DELETE_WINDOW helper; required by history QA')
     args=parser.parse_args()
     output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
     (output/'qa-script.py').write_bytes(Path(__file__).read_bytes())
     with args.binary.open('rb') as handle: binary_hash=hashlib.file_digest(handle,'sha256').hexdigest()
     directory=output/'profile'
+    if args.history_layout:
+        directory.mkdir(exist_ok=False)
+        for name in ['history-v1.json','queue-v1.json']:
+            data=(args.history_layout/name).read_bytes();json.loads(data)
+            (directory/name).write_bytes(data)
     env=os.environ.copy(); env.pop('WAYLAND_DISPLAY',None);env.pop('WAYLAND_SOCKET',None)
     env['DOREMI_DATA_DIR']=str(directory)
     logfile=(output/'runtime.log').open('w')
@@ -114,6 +122,79 @@ def main():
                 'license_evidence':'https://wiki.creativecommons.org/wiki/Nine_Inch_Nails_The_Slip',
                 'source':'https://coverartarchive.org/release/12b57d46-a192-499e-a91f-7da66790a1c1/front-250',
             },indent=2)+'\n')
+            print(output)
+            return
+        if args.history_layout:
+            assert state()['listening_history']['count']>0 and not state()['online']['worker_initialized']
+            for setting in ['dark','light']:
+                tap('settings');tap(setting);tap('home');capture('recent-'+setting)
+                rect=next(c['rect'] for c in state()['controls'] if c['name']=='history-open')
+                assert rect[3]-rect[1]>=(48 if state()['viewport'][0]<760 else 32)
+                tap('history-open');capture('history-'+setting)
+                assert not state()['online']['worker_initialized']
+            (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'fixture':str(args.history_layout.resolve()),'network':False,'audio':False,'viewport':state()['viewport'],'themes':['dark','light']},indent=2)+'\n')
+            if args.close_helper:
+                subprocess.run([str(args.close_helper.resolve()),str(window),str(process.pid)],check=True);assert process.wait(timeout=8)==0
+            print(output)
+            return
+        if args.history_music:
+            assert args.close_helper and args.close_helper.is_file()
+            music='26896924'
+            def count(s):return s['listening_history']['count']
+            def close_history_window():
+                began=time.monotonic();owned=process.pid
+                subprocess.run([str(args.close_helper.resolve()),str(window),str(owned)],check=True)
+                status=process.wait(timeout=8)
+                assert status==0
+                with (output/'window-closes.jsonl').open('a') as log:log.write(json.dumps({'pid':owned,'exit_code':status,'wm_delete_window':True,'seconds':time.monotonic()-began})+'\n')
+            def slide_history(name,fraction):
+                data=state();rect=next(c['rect'] for c in data['controls'] if c['name']==name);scale=data['pixels_per_point']
+                assert int(xdo('getwindowfocus'))==int(window)
+                xdo('mousemove','--window',window,round((rect[0]+(rect[2]-rect[0])*fraction)*scale),round((rect[1]+rect[3])*scale/2),'mousedown',1)
+                time.sleep(.15);xdo('mouseup',1)
+            assert count(state())==0
+            tap('demo-examples');tap('select:dawn');tap('pause')
+            if state()['viewport'][0]<760 and state()['page']!='Player':tap('player')
+            slide_history('volume',.08);wait(lambda s:.02<s['volume']<.15)
+            tap('search');tap('source-commons');tap('query');xdo('type','--clearmodifiers','Chopin')
+            wait(lambda s:any(c['name']=='select:'+music for c in s['controls']),25)
+            tap('select:'+music)
+            if state()['page']!='Player':tap('player')
+            first=wait(lambda s:s['playback']=='Playing' and s['audio_metrics'] and s['audio_metrics']['nonzero_samples']>1000,25)
+            assert count(first)==0 and not first['saved_media']
+            tap('pause');before_seek=state()['audio_metrics'];slide_history('seek',.6)
+            wait(lambda s:s['playback']=='Paused' and s['position_ms']>100000 and s['audio_metrics'] is not None,25)
+            assert count(state())==0,'Seek fabricated a listening record'
+            tap('play')
+            listened=wait(lambda s:count(s)==1,45)
+            assert listened['audio_metrics']['frames']>=29*listened['audio_metrics']['output_rate']
+            actual_seconds=before_seek['frames']/before_seek['output_rate']+listened['audio_metrics']['frames']/listened['audio_metrics']['output_rate']
+            assert actual_seconds>=30,actual_seconds
+            (output/'counted-native-frames.json').write_text(json.dumps(listened,indent=2)+'\n')
+            tap('pause');tap('home');capture('recent-dark')
+            assert state()['listening_history']['recent']==[{'provider':'wikimedia-commons','id':music}]
+            tap('history-open');wait(lambda s:s['page']=='History');capture('history-dark')
+            tap('history-clear');tap('history-clear-cancel');assert count(state())==1
+            tap('settings');tap('light');tap('home');capture('recent-light');tap('history-open');capture('history-light')
+            wait(lambda s:len(json.loads((directory/'history-v1.json').read_text())['plays'])==1)
+            fixture=output/'restoration-fixture';fixture.mkdir()
+            for name in ['history-v1.json','queue-v1.json']:(fixture/name).write_bytes((directory/name).read_bytes())
+            close_history_window();old_pid=process.pid
+            process=subprocess.Popen([str(args.binary.resolve())],env=env,stdout=logfile,stderr=subprocess.STDOUT)
+            window=xdo('search','--sync','--onlyvisible','--pid',process.pid).splitlines()[0];xdo('windowfocus','--sync',window)
+            if args.size:xdo('windowsize','--sync',window,*args.size)
+            restored=wait(lambda s:s['pid']!=old_pid and s['page']=='Home' and bool(s['controls']) and (not args.size or all(abs(a-b)<1 for a,b in zip(s['viewport'],args.size))))
+            assert count(restored)==1 and restored['query']=='' and not restored['online']['worker_initialized']
+            capture('recent-restored');tap('history-play:'+music)
+            played=wait(lambda s:s['current']==music and s['playback']=='Playing' and s['audio_metrics'] and s['audio_metrics']['nonzero_samples']>1000,25)
+            assert played['query']=='' and count(played)==1
+            tap('pause');tap('home');tap('history-open');tap('save:'+music)
+            before={key:state()[key] for key in ['current_occurrence','context_occurrences','manual_occurrences','saved_media','playlists']}
+            tap('history-clear');capture('history-clear-confirmation');tap('history-clear-confirm');wait(lambda s:count(s)==0)
+            for key,value in before.items():assert state()[key]==value,key
+            capture('history-cleared');wait(lambda s:not json.loads((directory/'history-v1.json').read_text())['plays'])
+            close_history_window()
+            (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'qa_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),'source':'audited Commons CC0 Chopin by Membeth','id':music,'actual_native_listening_seconds':actual_seconds,'pre_seek_frames':before_seek['frames'],'post_seek_frames':listened['audio_metrics']['frames'],'seek_does_not_count':True,'separate_from_favorites':True,'fresh_process_without_io':True,'replay_without_search':True,'clear_preserves_queue_and_favorites':True,'acoustic_capture':False},indent=2)+'\n')
             print(output)
             return
         capture('home-dark')

@@ -376,6 +376,13 @@ loader legado; ninguna búsqueda por título para atribuir imágenes. Sin caché
 persistente ni imagen de artista/grabación aún. Estado de CI/dispositivos y
 atribuciones de QA en DOREMI-PRODUCT-REPORT.md; no cierra F3b.
 
+Historial en preparación: regla heredada compartida (30 s o media pista corta),
+medición de frames realmente entregados y 500 escuchas privadas/versionadas.
+Inicio reutiliza las tarjetas del legado; listado virtual, replay y vaciado con
+conservación de cola/favoritos. Recorrido musical Linux y restauración aprobados
+localmente; CI/Android y regresión de los wrappers heredados aún pendientes.
+No cierra la biblioteca de 10.000 entradas ni el resto de F3b.
+
 ### F4: integrar producto desktop/Android compartido
 
 Depende de F2, F3a y F3b.

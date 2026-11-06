@@ -2,6 +2,7 @@
 //! Copyright (c) Carmine Paolino. MIT; see the repository LICENSE.
 //! No catalog, player, filesystem, processes, or platform services run while drawing.
 pub mod bitmap;
+pub mod cards;
 pub mod collection;
 
 use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, pos2, vec2};
@@ -1051,4 +1052,36 @@ pub fn thin_slider_sized(
         }
     }
     (event, response)
+}
+
+/// Virtual rows extracted from the original widgets, with adjacent focus targets.
+pub fn virtual_rows(
+    ui: &mut egui::Ui,
+    count: usize,
+    row_height: f32,
+    mut row: impl FnMut(&mut egui::Ui, usize),
+) {
+    if count == 0 {
+        return;
+    }
+    let previous_spacing = ui.spacing().item_spacing;
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let clip = ui.clip_rect();
+    let start_y = ui.cursor().top();
+    let width = ui.available_width();
+    // Retain a neighbour on either side so Tab can focus it and scroll it in.
+    let first = (((clip.top() - start_y) / row_height).floor().max(0.0) as usize)
+        .min(count)
+        .saturating_sub(1);
+    let last = (((clip.bottom() - start_y) / row_height).ceil().max(0.0) as usize + 1).min(count);
+    if first > 0 {
+        ui.allocate_space(vec2(width, first as f32 * row_height));
+    }
+    for index in first..last {
+        row(ui, index);
+    }
+    if last < count {
+        ui.allocate_space(vec2(width, (count - last) as f32 * row_height));
+    }
+    ui.spacing_mut().item_spacing = previous_spacing;
 }

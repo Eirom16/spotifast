@@ -1,6 +1,7 @@
 //! Host-owned JSON encoding. No provider resources, requests or credentials.
 pub mod collection;
 pub mod document_copy;
+pub mod history;
 pub mod local_files;
 pub mod playlists;
 use doremi_core::{
@@ -196,14 +197,23 @@ struct Status {
     completed: AtomicUsize,
     failed: AtomicBool,
 }
+/// Immutable O(1) snapshots, serialized only by the existing bounded writer.
+#[derive(Default)]
+pub struct UserDocuments {
+    pub library: Option<collection::Collection>,
+    pub playlists: Option<playlists::Playlists>,
+    pub local_files: Option<local_files::Index>,
+    pub history: Option<history::History>,
+}
 struct Write {
     id: usize,
     prefs: Option<Vec<u8>>,
     queue: Option<Vec<u8>>,
     library: Option<collection::Collection>,
     playlists: Option<playlists::Playlists>,
+    history: Option<history::History>,
     local_files: Option<local_files::Index>,
-    state: Vec<u8>,
+    state: Option<Vec<u8>>,
 }
 impl Write {
     fn supersede(self, mut newer: Self) -> Self {
@@ -220,8 +230,14 @@ impl Write {
         if newer.playlists.is_none() {
             newer.playlists = self.playlists;
         }
+        if newer.history.is_none() {
+            newer.history = self.history;
+        }
         if newer.local_files.is_none() {
             newer.local_files = self.local_files;
+        }
+        if newer.state.is_none() {
+            newer.state = self.state;
         }
         newer
     }
@@ -246,6 +262,7 @@ impl Writer {
             let mut previous_library: Option<collection::Collection> = None;
             let mut previous_files: Option<local_files::Index> = None;
             let mut previous_playlists: Option<playlists::Playlists> = None;
+            let mut previous_history: Option<history::History> = None;
             while let Ok(mut write) = receiver.recv() {
                 while let Ok(newer) = receiver.try_recv() {
                     write = write.supersede(newer);
@@ -312,10 +329,28 @@ impl Writer {
                         }
                     }
                 }
+                if let Some(history) = write.history
+                    && !previous_history
+                        .as_ref()
+                        .is_some_and(|previous| history.same_snapshot(previous))
+                {
+                    match history.encode() {
+                        Ok(bytes)
+                            if atomic_private_document(&directory, "history-v1.json", &bytes)
+                                .is_ok() =>
+                        {
+                            previous_history = Some(history)
+                        }
+                        _ => {
+                            failed = true;
+                            eprintln!("Doremi history persistence failed");
+                        }
+                    }
+                }
                 for (name, bytes) in [
                     ("preferences-v1.json", write.prefs),
                     ("queue-v1.json", write.queue),
-                    ("qa-state.json", Some(write.state)),
+                    ("qa-state.json", write.state),
                 ] {
                     let Some(bytes) = bytes else {
                         continue;
@@ -379,6 +414,51 @@ impl Writer {
         playlists: Option<playlists::Playlists>,
         state: Vec<u8>,
     ) -> Result<usize, SubmitError> {
+        self.submit_snapshot(
+            prefs,
+            queue,
+            UserDocuments {
+                library,
+                playlists,
+                local_files,
+                history: None,
+            },
+            state,
+        )
+    }
+    pub fn submit_snapshot(
+        &self,
+        prefs: Option<Vec<u8>>,
+        queue: Option<Vec<u8>>,
+        documents: UserDocuments,
+        state: Vec<u8>,
+    ) -> Result<usize, SubmitError> {
+        self.enqueue_snapshot(prefs, queue, documents, Some(state))
+    }
+    pub fn submit_history(&self, history: history::History) -> Result<usize, SubmitError> {
+        self.enqueue_snapshot(
+            None,
+            None,
+            UserDocuments {
+                history: Some(history),
+                ..Default::default()
+            },
+            None,
+        )
+    }
+    fn enqueue_snapshot(
+        &self,
+        prefs: Option<Vec<u8>>,
+        queue: Option<Vec<u8>>,
+        documents: UserDocuments,
+        state: Option<Vec<u8>>,
+    ) -> Result<usize, SubmitError> {
+        let UserDocuments {
+            library,
+            playlists,
+            local_files,
+            history,
+        } = documents;
         let id = NEXT_WRITE
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| SubmitError::Closed)?;
@@ -389,6 +469,7 @@ impl Writer {
                 queue,
                 library,
                 playlists,
+                history,
                 local_files,
                 state,
             })
@@ -402,6 +483,27 @@ impl Writer {
     pub fn completed(&self, id: usize) -> Option<bool> {
         (self.status.completed.load(Ordering::Acquire) >= id)
             .then(|| self.status.failed.load(Ordering::Acquire))
+    }
+    /// A final blocking enqueue is allowed only after the desktop event loop.
+    /// Keep the latest listening record even when the last UI enqueue was busy.
+    pub fn shutdown_with_history(self, history: Option<history::History>) {
+        if let Some(history) = history {
+            let id =
+                NEXT_WRITE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1));
+            if let Ok(id) = id {
+                let _ = self.sender.send(Write {
+                    id,
+                    prefs: None,
+                    queue: None,
+                    library: None,
+                    playlists: None,
+                    local_files: None,
+                    history: Some(history),
+                    state: None,
+                });
+            }
+        }
+        self.shutdown();
     }
     /// Join only after the desktop event loop exits, never during drawing.
     pub fn shutdown(self) {
@@ -420,6 +522,7 @@ fn atomic_private_document(directory: &Path, name: &str, bytes: &[u8]) -> std::i
     let stem = match name {
         "local-files-v1.json" => "local-files-v1",
         "playlists-v1.json" => "playlists-v1",
+        "history-v1.json" => "history-v1",
         _ => return Err(std::io::ErrorKind::InvalidInput.into()),
     };
     static TEMPORARY: AtomicUsize = AtomicUsize::new(1);
@@ -487,6 +590,7 @@ pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
             | "library-v1.json"
             | "local-files-v1.json"
             | "playlists-v1.json"
+            | "history-v1.json"
     ) {
         return Err(Error::Encoding);
     }
@@ -496,10 +600,24 @@ pub fn read(directory: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(_) => return Err(Error::Encoding),
     };
-    if metadata.len() > MAX_BYTES as u64 || !metadata.is_file() {
+    let limit = if name == "history-v1.json" {
+        history::MAX_BYTES
+    } else {
+        MAX_BYTES
+    };
+    if metadata.len() > limit as u64 || !metadata.is_file() {
         return Err(Error::TooLarge);
     }
-    std::fs::read(path).map(Some).map_err(|_| Error::Encoding)
+    use std::io::Read;
+    let file = std::fs::File::open(path).map_err(|_| Error::Encoding)?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| Error::Encoding)?;
+    if bytes.len() > limit {
+        return Err(Error::TooLarge);
+    }
+    Ok(Some(bytes))
 }
 
 #[cfg(test)]
@@ -560,6 +678,56 @@ mod storage_tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
     #[test]
+    fn accepted_history_and_final_listen_are_private_durable_and_do_not_replace_diagnostics() {
+        let directory = directory("history-writer");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("qa-state.json"), b"{\"keep\":true}").unwrap();
+        std::fs::write(directory.join(".history-v1.tmp"), b"unknown temporary").unwrap();
+        let mut history = history::History::default();
+        let media = Media {
+            id: MediaId::new(ProviderId::new("test").unwrap(), "song").unwrap(),
+            title: "Café".into(),
+            duration_ms: Some(90_000),
+        };
+        history.record(media.clone(), Some(1)).unwrap();
+        let writer = Writer::new(directory.clone());
+        let id = writer.submit_history(history.clone()).unwrap();
+        history.record(media, Some(2)).unwrap();
+        assert!(!wait(&writer, id));
+        let saved =
+            history::History::decode(&read(&directory, "history-v1.json").unwrap().unwrap())
+                .unwrap();
+        assert_eq!(saved.plays().len(), 1);
+        assert_eq!(saved.plays()[0].played_at_ms, Some(1));
+        writer.shutdown_with_history(Some(history.clone()));
+        assert_eq!(
+            history::History::decode(&read(&directory, "history-v1.json").unwrap().unwrap())
+                .unwrap(),
+            history
+        );
+        assert_eq!(
+            std::fs::read(directory.join("qa-state.json")).unwrap(),
+            b"{\"keep\":true}"
+        );
+        assert_eq!(
+            std::fs::read(directory.join(".history-v1.tmp")).unwrap(),
+            b"unknown temporary"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                std::fs::metadata(directory.join("history-v1.json"))
+                    .unwrap()
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
     fn newer_diagnostics_cannot_discard_an_accepted_queue_save() {
         let save = Write {
             id: 1,
@@ -568,7 +736,8 @@ mod storage_tests {
             library: Some(collection::Collection::default()),
             playlists: Some(playlists::Playlists::default()),
             local_files: Some(local_files::Index::default()),
-            state: vec![3],
+            history: Some(history::History::default()),
+            state: Some(vec![3]),
         };
         let diagnostics = Write {
             id: 2,
@@ -577,7 +746,8 @@ mod storage_tests {
             library: None,
             playlists: None,
             local_files: None,
-            state: vec![4],
+            history: None,
+            state: Some(vec![4]),
         };
         let merged = save.supersede(diagnostics);
         assert_eq!(merged.id, 2);
@@ -586,7 +756,8 @@ mod storage_tests {
         assert!(merged.library.is_some());
         assert!(merged.playlists.is_some());
         assert!(merged.local_files.is_some());
-        assert_eq!(merged.state, vec![4]);
+        assert_eq!(merged.state, Some(vec![4]));
+        assert!(merged.history.is_some());
         let update = Write {
             id: 3,
             prefs: Some(vec![5]),
@@ -594,7 +765,8 @@ mod storage_tests {
             library: None,
             playlists: None,
             local_files: None,
-            state: vec![7],
+            history: None,
+            state: Some(vec![7]),
         };
         let merged = merged.supersede(update);
         assert_eq!(merged.prefs, Some(vec![5]));
