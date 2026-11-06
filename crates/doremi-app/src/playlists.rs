@@ -66,6 +66,7 @@ impl DoremiApp {
             TextField::Search => &model.query,
             TextField::PlaylistName => &model.playlist_name,
             TextField::PlaylistRename => &model.playlist_edit_name,
+            TextField::SessionCookie => &model.music.session.pasted,
         }
     }
     #[cfg(any(target_os = "android", test))]
@@ -89,6 +90,9 @@ impl DoremiApp {
             (TextField::PlaylistRename, Page::Playlist) => {
                 model.playlist_edit_name = text.chars().take(64).collect();
                 model.revision += 1;
+            }
+            (TextField::SessionCookie, Page::Settings) => {
+                model.music.session.pasted = text.chars().take(16384).collect();
             }
             _ => {}
         }

@@ -246,6 +246,7 @@ pub struct Writer {
     sender: mpsc::SyncSender<Write>,
     worker: std::thread::JoinHandle<()>,
     status: Arc<Status>,
+    directory: PathBuf,
 }
 #[derive(Clone, Copy, Debug)]
 pub enum SubmitError {
@@ -253,129 +254,144 @@ pub enum SubmitError {
     Closed,
 }
 impl Writer {
+    pub fn directory(&self) -> &std::path::Path {
+        &self.directory
+    }
     pub fn new(directory: PathBuf) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<Write>(1);
         let status = Arc::new(Status::default());
         let output = status.clone();
-        let worker = std::thread::spawn(move || {
-            let mut previous = std::collections::BTreeMap::new();
-            let mut previous_library: Option<collection::Collection> = None;
-            let mut previous_files: Option<local_files::Index> = None;
-            let mut previous_playlists: Option<playlists::Playlists> = None;
-            let mut previous_history: Option<history::History> = None;
-            while let Ok(mut write) = receiver.recv() {
-                while let Ok(newer) = receiver.try_recv() {
-                    write = write.supersede(newer);
-                }
-                let mut failed = false;
-                if let Some(files) = write.local_files
-                    && !previous_files
-                        .as_ref()
-                        .is_some_and(|previous| files.same_snapshot(previous))
-                {
-                    // Publish locators before documents that can reference them.
-                    // On failure leave the previous library/queue intact and let
-                    // the caller retry the complete accepted snapshot.
-                    let saved = files
-                        .encode()
-                        .ok()
-                        .is_some_and(|bytes| atomic_locators(&directory, &bytes).is_ok());
-                    if !saved {
-                        eprintln!("Doremi local file index persistence failed");
-                        output.failed.store(true, Ordering::Release);
-                        output.completed.store(write.id, Ordering::Release);
-                        continue;
+        let worker = {
+            let directory = directory.clone();
+            std::thread::spawn(move || {
+                let mut previous = std::collections::BTreeMap::new();
+                let mut previous_library: Option<collection::Collection> = None;
+                let mut previous_files: Option<local_files::Index> = None;
+                let mut previous_playlists: Option<playlists::Playlists> = None;
+                let mut previous_history: Option<history::History> = None;
+                while let Ok(mut write) = receiver.recv() {
+                    while let Ok(newer) = receiver.try_recv() {
+                        write = write.supersede(newer);
                     }
-                    previous_files = Some(files);
-                }
-                if let Some(library) = write.library
-                    && !previous_library
-                        .as_ref()
-                        .is_some_and(|previous| library.same_snapshot(previous))
-                {
-                    // Snapshot cloning on the UI is O(1). Encode only changed
-                    // collections here, and acknowledge only a durable write.
-                    match library.encode() {
-                        Ok(bytes) => {
-                            match atomic_write(&directory, "library-v1.json", &bytes, true) {
-                                Ok(()) => previous_library = Some(library),
-                                Err(error) => {
-                                    failed = true;
-                                    eprintln!("Doremi library persistence: {error}");
+                    let mut failed = false;
+                    if let Some(files) = write.local_files
+                        && !previous_files
+                            .as_ref()
+                            .is_some_and(|previous| files.same_snapshot(previous))
+                    {
+                        // Publish locators before documents that can reference them.
+                        // On failure leave the previous library/queue intact and let
+                        // the caller retry the complete accepted snapshot.
+                        let saved = files
+                            .encode()
+                            .ok()
+                            .is_some_and(|bytes| atomic_locators(&directory, &bytes).is_ok());
+                        if !saved {
+                            eprintln!("Doremi local file index persistence failed");
+                            output.failed.store(true, Ordering::Release);
+                            output.completed.store(write.id, Ordering::Release);
+                            continue;
+                        }
+                        previous_files = Some(files);
+                    }
+                    if let Some(library) = write.library
+                        && !previous_library
+                            .as_ref()
+                            .is_some_and(|previous| library.same_snapshot(previous))
+                    {
+                        // Snapshot cloning on the UI is O(1). Encode only changed
+                        // collections here, and acknowledge only a durable write.
+                        match library.encode() {
+                            Ok(bytes) => {
+                                match atomic_write(&directory, "library-v1.json", &bytes, true) {
+                                    Ok(()) => previous_library = Some(library),
+                                    Err(error) => {
+                                        failed = true;
+                                        eprintln!("Doremi library persistence: {error}");
+                                    }
                                 }
                             }
-                        }
-                        Err(_) => {
-                            failed = true;
-                            eprintln!("Doremi library persistence: invalid bounded metadata");
+                            Err(_) => {
+                                failed = true;
+                                eprintln!("Doremi library persistence: invalid bounded metadata");
+                            }
                         }
                     }
-                }
-                if let Some(playlists) = write.playlists
-                    && !previous_playlists
-                        .as_ref()
-                        .is_some_and(|previous| playlists.same_snapshot(previous))
-                {
-                    match playlists.encode() {
-                        Ok(bytes)
-                            if atomic_private_document(&directory, "playlists-v1.json", &bytes)
+                    if let Some(playlists) = write.playlists
+                        && !previous_playlists
+                            .as_ref()
+                            .is_some_and(|previous| playlists.same_snapshot(previous))
+                    {
+                        match playlists.encode() {
+                            Ok(bytes)
+                                if atomic_private_document(
+                                    &directory,
+                                    "playlists-v1.json",
+                                    &bytes,
+                                )
                                 .is_ok() =>
-                        {
-                            previous_playlists = Some(playlists)
-                        }
-                        _ => {
-                            failed = true;
-                            eprintln!("Doremi playlists persistence failed");
+                            {
+                                previous_playlists = Some(playlists)
+                            }
+                            _ => {
+                                failed = true;
+                                eprintln!("Doremi playlists persistence failed");
+                            }
                         }
                     }
-                }
-                if let Some(history) = write.history
-                    && !previous_history
-                        .as_ref()
-                        .is_some_and(|previous| history.same_snapshot(previous))
-                {
-                    match history.encode() {
-                        Ok(bytes)
-                            if atomic_private_document(&directory, "history-v1.json", &bytes)
+                    if let Some(history) = write.history
+                        && !previous_history
+                            .as_ref()
+                            .is_some_and(|previous| history.same_snapshot(previous))
+                    {
+                        match history.encode() {
+                            Ok(bytes)
+                                if atomic_private_document(
+                                    &directory,
+                                    "history-v1.json",
+                                    &bytes,
+                                )
                                 .is_ok() =>
-                        {
-                            previous_history = Some(history)
-                        }
-                        _ => {
-                            failed = true;
-                            eprintln!("Doremi history persistence failed");
+                            {
+                                previous_history = Some(history)
+                            }
+                            _ => {
+                                failed = true;
+                                eprintln!("Doremi history persistence failed");
+                            }
                         }
                     }
+                    for (name, bytes) in [
+                        ("preferences-v1.json", write.prefs),
+                        ("queue-v1.json", write.queue),
+                        ("qa-state.json", write.state),
+                    ] {
+                        let Some(bytes) = bytes else {
+                            continue;
+                        };
+                        if previous.get(name) == Some(&bytes) {
+                            continue;
+                        }
+                        match atomic_write(&directory, name, &bytes, name != "qa-state.json") {
+                            Ok(()) => {
+                                previous.insert(name, bytes);
+                            }
+                            Err(error) => {
+                                failed = true;
+                                eprintln!("Doremi persistence: {error}");
+                            }
+                        }
+                    }
+                    output.failed.store(failed, Ordering::Release);
+                    output.completed.store(write.id, Ordering::Release);
                 }
-                for (name, bytes) in [
-                    ("preferences-v1.json", write.prefs),
-                    ("queue-v1.json", write.queue),
-                    ("qa-state.json", write.state),
-                ] {
-                    let Some(bytes) = bytes else {
-                        continue;
-                    };
-                    if previous.get(name) == Some(&bytes) {
-                        continue;
-                    }
-                    match atomic_write(&directory, name, &bytes, name != "qa-state.json") {
-                        Ok(()) => {
-                            previous.insert(name, bytes);
-                        }
-                        Err(error) => {
-                            failed = true;
-                            eprintln!("Doremi persistence: {error}");
-                        }
-                    }
-                }
-                output.failed.store(failed, Ordering::Release);
-                output.completed.store(write.id, Ordering::Release);
-            }
-        });
+            })
+        };
         Self {
             sender,
             worker,
             status,
+            directory,
         }
     }
     pub fn submit(

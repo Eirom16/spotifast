@@ -9,7 +9,10 @@ fn main() {
     let cookie = if import {
         credentials::import_doremi_rust()
     } else if connect {
-        browser::sign_in(&AtomicBool::new(false))
+        let base = std::env::current_dir()
+            .map(|directory| directory.join("target/qa-signin"))
+            .unwrap_or_else(|_| std::env::temp_dir());
+        browser::sign_in(&AtomicBool::new(false), &base)
     } else {
         credentials::load()
             .and_then(|value| value.ok_or(doremi_core::catalog::ProviderError::AccessDenied))

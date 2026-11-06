@@ -1,17 +1,23 @@
-//! Explicit sign-in in a disposable external browser profile; adapted from
-//! Tubefast auth.rs (MIT). Reads only youtube.com cookies from that profile.
+//! Explicit sign-in in a dedicated external browser profile; adapted from
+//! Tubefast auth.rs, MIT. The profile lives under Doremi's own data directory
+//! and is wiped out at the start of every attempt, so no external browser or
+//! browser state beyond that window is ever read. Only youtube.com cookies
+//! inside that one window are observed.
 use crate::authorization;
 use doremi_core::catalog::ProviderError as Error;
 use serde_json::{Value, json};
 use std::{
-    io::{Read, Write},
     net::TcpStream,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 const LOGIN: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
+const POLL: Duration = Duration::from_secs(1);
+/// Tubefast accepts a session that stays visible across several polls even
+/// when Google's LOGIN_INFO marker is not exposed through this extension API.
+const SETTLED_POLLS: u32 = 4;
 struct Browser {
     child: Child,
     profile: Option<tempfile::TempDir>,
@@ -30,6 +36,14 @@ impl Drop for Browser {
             }
         }
     }
+}
+/// Each attempt gets a private wiped profile inside Doremi's data directory.
+fn profile(base: &Path) -> Result<tempfile::TempDir, Error> {
+    let _ = std::fs::create_dir_all(base);
+    tempfile::Builder::new()
+        .prefix("doremi-signin-")
+        .tempdir_in(base)
+        .map_err(|_| Error::Unavailable)
 }
 fn programs() -> Vec<PathBuf> {
     if cfg!(windows) {
@@ -73,36 +87,78 @@ fn cookie(reply: &Value) -> Option<String> {
     let cookie = pairs.join("; ");
     authorization(&cookie, 0).is_some().then_some(cookie)
 }
-fn debugger(port: u16) -> Option<String> {
-    let mut stream = TcpStream::connect_timeout(
-        &format!("127.0.0.1:{port}").parse().ok()?,
-        Duration::from_secs(1),
-    )
-    .ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(1))).ok()?;
-    stream
-        .set_write_timeout(Some(Duration::from_secs(1)))
-        .ok()?;
-    write!(
-        stream,
-        "GET /json/version HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
-    )
-    .ok()?;
-    let mut bytes = Vec::new();
-    stream.take(16 * 1024).read_to_end(&mut bytes).ok()?;
-    let start = bytes.windows(4).position(|s| s == b"\r\n\r\n")? + 4;
-    let value: Value = serde_json::from_slice(&bytes[start..]).ok()?;
-    let address = value["webSocketDebuggerUrl"].as_str()?;
-    // Never follow a debugger URL to a non-loopback service.
-    address
-        .starts_with(&format!("ws://127.0.0.1:{port}/devtools/browser/"))
-        .then(|| address.to_owned())
+fn debugger(path: &Path) -> Option<u16> {
+    // Chrome writes the chosen port into our private profile; 0 is not a port.
+    std::fs::read_to_string(path.join("DevToolsActivePort"))
+        .ok()?
+        .lines()
+        .next()?
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port != 0)
 }
-pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
-    let profile = tempfile::Builder::new()
-        .prefix("doremi-signin-")
-        .tempdir()
-        .map_err(|_| Error::Unavailable)?;
+/// One control connection reused across polls, the way Tubefast keeps it.
+/// Recreating the connection per poll is wasteful.
+struct Control {
+    socket: tungstenite::WebSocket<TcpStream>,
+    calls: u64,
+}
+impl Control {
+    fn open(port: u16) -> Option<Self> {
+        let stream = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().ok()?,
+            Duration::from_secs(1),
+        )
+        .ok()?;
+        stream.set_read_timeout(Some(Duration::from_secs(2))).ok()?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .ok()?;
+        let (socket, _) = tungstenite::client::client_with_config(
+            format!("ws://127.0.0.1:{port}/devtools/browser/doremi").as_str(),
+            stream,
+            Some(
+                tungstenite::protocol::WebSocketConfig::default()
+                    .max_message_size(Some(128 * 1024))
+                    .max_frame_size(Some(128 * 1024)),
+            ),
+        )
+        .ok()?;
+        Some(Self { socket, calls: 0 })
+    }
+    fn cookies(&mut self) -> Option<Value> {
+        self.calls += 1;
+        let id = self.calls;
+        self.socket
+            .send(tungstenite::Message::Text(
+                json!({"id":id,"method":"Storage.getCookies","params":{}})
+                    .to_string()
+                    .into(),
+            ))
+            .ok()?;
+        for _ in 0..32 {
+            let reply = self.socket.read().ok()?;
+            let value = serde_json::from_slice::<Value>(&reply.into_data()).ok()?;
+            if value["id"].as_u64() == Some(id) {
+                // Never follow a debugger URL to a non-loopback service.
+                return Some(value);
+            }
+        }
+        None
+    }
+    fn close(&mut self) {
+        self.calls += 1;
+        let _ = self.socket.send(tungstenite::Message::Text(
+            json!({"id":self.calls,"method":"Browser.close","params":{}})
+                .to_string()
+                .into(),
+        ));
+        let _ = self.socket.flush();
+    }
+}
+pub fn sign_in(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
+    let profile = profile(base)?;
     // Chrome selects its own port and writes it into our private profile.
     let child = programs()
         .iter()
@@ -114,6 +170,7 @@ pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
                     "--remote-debugging-address=127.0.0.1",
                     "--no-first-run",
                     "--no-default-browser-check",
+                    "--window-size=520,760",
                 ])
                 .arg(format!("--app={LOGIN}"))
                 .stdout(Stdio::null())
@@ -127,7 +184,8 @@ pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
         profile: Some(profile),
     };
     let start = Instant::now();
-    let mut calls = 0_u64;
+    let mut control: Option<Control> = None;
+    let mut settled = 0_u32;
     while start.elapsed() < Duration::from_secs(600) {
         if cancel.load(Ordering::Acquire) {
             return Err(Error::Cancelled);
@@ -140,61 +198,37 @@ pub fn sign_in(cancel: &AtomicBool) -> Result<String, Error> {
         {
             return Err(Error::Cancelled);
         }
-        std::thread::sleep(Duration::from_millis(250));
-        let Some(port) = std::fs::read_to_string(
-            browser
-                .profile
-                .as_ref()
-                .unwrap()
-                .path()
-                .join("DevToolsActivePort"),
-        )
-        .ok()
-        .and_then(|v| v.lines().next()?.parse::<u16>().ok()) else {
+        std::thread::sleep(POLL);
+        let Some(port) = debugger(browser.profile.as_ref().unwrap().path()) else {
+            // Port file races with startup; closing a stale socket restarts it.
+            control = None;
             continue;
         };
-        let Some(address) = debugger(port) else {
+        if control.is_none() {
+            control = Control::open(port);
+        }
+        let Some(reply) = control.as_mut().and_then(Control::cookies) else {
+            control = None;
+            settled = 0;
             continue;
         };
-        let stream = TcpStream::connect(("127.0.0.1", port)).map_err(|_| Error::Transport)?;
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .map_err(|_| Error::Transport)?;
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .map_err(|_| Error::Transport)?;
-        let config = tungstenite::protocol::WebSocketConfig::default()
-            .max_message_size(Some(128 * 1024))
-            .max_frame_size(Some(128 * 1024));
-        let (mut socket, _) =
-            tungstenite::client::client_with_config(address.as_str(), stream, Some(config))
-                .map_err(|_| Error::Transport)?;
-        calls += 1;
-        socket
-            .send(tungstenite::Message::Text(
-                json!({"id":calls,"method":"Storage.getCookies","params":{}})
-                    .to_string()
-                    .into(),
-            ))
-            .map_err(|_| Error::Transport)?;
-        for _ in 0..32 {
-            let reply = socket.read().map_err(|_| Error::Transport)?;
-            if let Ok(value) = serde_json::from_slice::<Value>(&reply.into_data()) {
-                if value["id"].as_u64() != Some(calls) {
-                    continue;
+        match cookie(&reply) {
+            Some(next) if next.contains("LOGIN_INFO=") => {
+                if let Some(watch) = control.as_mut() {
+                    watch.close();
                 }
-                if let Some(cookie) = cookie(&value)
-                    .filter(|v| v.split(';').any(|p| p.trim().starts_with("LOGIN_INFO=")))
-                {
-                    let _ = socket.send(tungstenite::Message::Text(
-                        json!({"id":calls+1,"method":"Browser.close","params":{}})
-                            .to_string()
-                            .into(),
-                    ));
-                    return Ok(cookie);
-                }
-                break;
+                return Ok(next);
             }
+            Some(next) => {
+                settled += 1;
+                if settled == SETTLED_POLLS {
+                    if let Some(watch) = control.as_mut() {
+                        watch.close();
+                    }
+                    return Ok(next);
+                }
+            }
+            None => settled = 0,
         }
     }
     Err(Error::Timeout)

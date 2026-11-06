@@ -14,11 +14,12 @@ static PICKER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::Atom
 enum Intent {
     Restore,
     #[cfg(any(target_os = "linux", target_os = "windows"))]
-    Connect,
+    Connect(PathBuf),
     #[cfg(any(target_os = "linux", target_os = "windows"))]
     ImportLegacy,
     #[cfg(target_os = "android")]
     ImportDocument(String),
+    Paste(String),
     Disconnect,
     Expire,
 }
@@ -26,9 +27,10 @@ impl Intent {
     fn focus(&self) -> bool {
         match self {
             #[cfg(any(target_os = "linux", target_os = "windows"))]
-            Self::Connect | Self::ImportLegacy => true,
+            Self::Connect(_) | Self::ImportLegacy => true,
             #[cfg(target_os = "android")]
             Self::ImportDocument(_) => true,
+            Self::Paste(_) => true,
             _ => false,
         }
     }
@@ -49,6 +51,9 @@ pub(super) struct State {
     pub busy: bool,
     pub durable: bool,
     pub revision: u64,
+    /// Clipboard paste buffer for the documented cookie fallback path. Never
+    /// persisted; cookies must not enter snapshots or logs.
+    pub pasted: String,
     pending: Option<Intent>,
     restored: bool,
     #[cfg(target_os = "android")]
@@ -67,6 +72,7 @@ impl State {
             busy: false,
             durable: false,
             revision: 0,
+            pasted: String::new(),
             pending: None,
             restored: false,
             #[cfg(target_os = "android")]
@@ -83,15 +89,16 @@ impl State {
             self.pending = Some(Intent::Restore);
         }
     }
-    pub fn connect(&mut self) {
+    pub fn connect(&mut self, profile: PathBuf) {
         self.restored = true;
         self.error = None;
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
-            self.pending = Some(Intent::Connect);
+            self.pending = Some(Intent::Connect(profile));
         }
         #[cfg(target_os = "android")]
         {
+            let _ = profile;
             let Ok(previous) =
                 PICKER_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                     value.checked_add(1)
@@ -135,6 +142,13 @@ impl State {
     pub fn import_legacy(&mut self) {
         self.restored = true;
         self.pending = Some(Intent::ImportLegacy);
+        self.error = None;
+    }
+    /// The explicit clipboard fallback for platforms where the separate
+    /// browser window cannot hand over the session itself.
+    pub fn paste(&mut self) {
+        self.restored = true;
+        self.pending = Some(Intent::Paste(self.pasted.clone()));
         self.error = None;
     }
     pub fn disconnect(&mut self) {
@@ -309,13 +323,14 @@ fn run(
             Err(error) => return (Err(error), false),
         },
         #[cfg(any(target_os = "linux", target_os = "windows"))]
-        Intent::Connect => browser::sign_in(cancel),
+        Intent::Connect(profile) => browser::sign_in(cancel, &profile),
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         Intent::ImportLegacy => credentials::import_doremi_rust(),
         #[cfg(target_os = "android")]
         Intent::ImportDocument(uri) => {
             credentials::read_document(&uri).and_then(|bytes| doremi_youtube::legacy_cookie(&bytes))
         }
+        Intent::Paste(text) => doremi_youtube::paste_cookie(&text),
         Intent::Disconnect | Intent::Expire => unreachable!(),
     };
     let cookie = match cookie {
@@ -439,7 +454,22 @@ impl DoremiApp {
                 },
                 260.0,
             ) {
-                self.model.as_mut().unwrap().music.session.connect();
+                let model = self.model.as_mut().unwrap();
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                {
+                    let base = self
+                        .writer
+                        .as_ref()
+                        .map(|writer| writer.directory().to_owned())
+                        .unwrap_or_else(std::env::temp_dir);
+                    model.music.session.connect(base.join("signin-profile"));
+                }
+                #[cfg(target_os = "android")]
+                {
+                    // There is no desktop browser window on Android; connect
+                    // switches to the system document picker instead.
+                    model.music.session.connect(PathBuf::new());
+                }
             }
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
@@ -452,6 +482,31 @@ impl DoremiApp {
                 ) {
                     self.model.as_mut().unwrap().music.session.import_legacy();
                 }
+            }
+            ui.add_space(12.0);
+            ui.small("Alternativa: copia la cabecera Cookie de music.youtube.com con la sesión ya iniciada (F12, Red, copiar Cabeceras de solicitud) y pégala aquí.");
+            let pasted = ui.add_sized(
+                [ui.available_width(), 56.0],
+                egui::TextEdit::multiline(&mut self.model.as_mut().unwrap().music.session.pasted)
+                    .id(egui::Id::new(TextField::SessionCookie.key()))
+                    .hint_text("SID=…; SAPISID=…; LOGIN_INFO=…")
+                    .font(egui::TextStyle::Monospace)
+                    .char_limit(16384),
+            );
+            if pasted.has_focus() {
+                self.editor = TextField::SessionCookie;
+            }
+            self.follow_editor(ui, &pasted, TextField::SessionCookie);
+            self.record("session-cookie", &pasted);
+            if !self.model.as_ref().unwrap().music.session.pasted.is_empty()
+                && self.button(
+                    ui,
+                    "youtube-cookie-signin",
+                    "Conectar con esa cookie",
+                    260.0,
+                )
+            {
+                self.model.as_mut().unwrap().music.session.paste();
             }
         }
         if let Some(error) = self.model.as_ref().unwrap().music.session.error {

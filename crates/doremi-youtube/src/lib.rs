@@ -565,6 +565,58 @@ mod protocol_tests {
     }
 }
 
+/// A pasted session starts from the user's own clipboard copy of their
+/// music.youtube.com request headers (Tubefast's documented fallback path).
+/// It accepts the raw cookie body, a `Cookie:` header line, or a curl command
+/// that contains one. Authorization is always recomputed; nothing is granted
+/// by markers inside the pasted text.
+pub fn paste_cookie(input: &str) -> Result<String, Error> {
+    let at = input.to_ascii_lowercase().find("cookie:");
+    let header = at.map(|at| input[at + 7..].lines().next().unwrap_or_default());
+    let raw = header
+        .map_or_else(|| input.replace(['\r', '\n'], ""), str::to_owned)
+        .trim()
+        .trim_end_matches(['\\', ' '])
+        .trim_matches(['\'', '"'])
+        .to_owned();
+    if raw.len() > 64 * 1024 || raw.contains(['\r', '\n']) {
+        return Err(Error::InvalidRequest);
+    }
+    let cookie = raw
+        .split(';')
+        .map(str::trim)
+        .filter(|pair| !pair.is_empty() && pair.contains('='))
+        .collect::<Vec<_>>()
+        .join("; ");
+    if authorization(&cookie, 0).is_some() {
+        Ok(cookie)
+    } else if cookie.is_empty() {
+        Err(Error::InvalidResponse)
+    } else {
+        Err(Error::InvalidRequest)
+    }
+}
+
+#[cfg(test)]
+mod paste_tests {
+    use super::*;
+    #[test]
+    fn accepts_a_raw_cookie_a_header_line_or_a_curl_command() {
+        let raw = "SID=a;  SAPISID=k ; junk; LOGIN_INFO=x";
+        assert_eq!(paste_cookie(raw).unwrap(), "SID=a; SAPISID=k; LOGIN_INFO=x");
+        assert_eq!(
+            paste_cookie("accept: */*\r\nCookie: SID=a; SAPISID=k\r\nuser-agent: x").unwrap(),
+            "SID=a; SAPISID=k"
+        );
+        assert_eq!(
+            paste_cookie("curl 'https://x' \\\n  -H 'cookie: SID=a; SAPISID=k' \\\n  -H 'x: y'")
+                .unwrap(),
+            "SID=a; SAPISID=k"
+        );
+        assert_eq!(paste_cookie("SID=a; HSID=b"), Err(Error::InvalidRequest));
+    }
+}
+
 /// Compatibility with headers saved by Doremi-Rust. Authorization is always
 /// recomputed from the cookie; its legacy `SAPISIDHASH 1` marker is not a grant.
 /// This parser performs no IO and never discovers/imports another app's session.

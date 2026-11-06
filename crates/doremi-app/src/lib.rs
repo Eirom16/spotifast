@@ -721,6 +721,7 @@ enum TextField {
     Search,
     PlaylistName,
     PlaylistRename,
+    SessionCookie,
 }
 impl TextField {
     fn key(self) -> &'static str {
@@ -728,6 +729,7 @@ impl TextField {
             Self::Search => "search",
             Self::PlaylistName => "playlist-name",
             Self::PlaylistRename => "playlist-rename",
+            Self::SessionCookie => "session-cookie",
         }
     }
 }
