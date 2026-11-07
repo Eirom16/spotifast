@@ -108,7 +108,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libpipewire-0.3-dev \
-            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev cmake ninja-build libclang-dev dbus
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev libwebkit2gtk-4.1-dev cmake ninja-build libclang-dev dbus
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
@@ -142,9 +142,9 @@ jobs:
             --output target/preview-binary/manifest.json
       - name: Build and identify the new Doremi product host
         run: |
-          cargo build --locked -p doremi-app --bins
+          cargo build --locked -p doremi-app -p doremi-auth --bins
           mkdir -p target/native-binary/licenses
-          cp target/ci/debug/doremi target/ci/debug/doremi-app LICENSE Cargo.lock target/native-binary/
+          cp target/ci/debug/doremi target/ci/debug/doremi-app target/ci/debug/doremi-auth LICENSE Cargo.lock target/native-binary/
           cp assets/doremi/LICENSE target/native-binary/licenses/Doremi-assets-GPL-3.txt
           cp assets/doremi/PROVENANCE.md assets/fonts/Inter-LICENSE.txt assets/icons/LICENSE.txt target/native-binary/licenses/
           cp assets/audio/LICENSE.txt target/native-binary/licenses/Audio-CC0.txt
@@ -153,6 +153,7 @@ jobs:
           cp crates/doremi-commons/music-corpus.json target/native-binary/licenses/Commons-CC0-music-corpus.json
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-binary/licenses/Symphonia-source-and-fixture.md
           cp crates/doremi-youtube/LICENSE-TUBEFAST target/native-binary/licenses/Tubefast-MIT.txt
+          cp crates/doremi-auth/licenses/* target/native-binary/licenses/
           cp crates/doremi-player/licenses/* target/native-binary/licenses/
           python3 scripts/native-manifest.py target/native-binary/doremi target/native-binary/manifest.json
       - uses: actions/upload-artifact@v6
@@ -198,7 +199,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libasound2-dev libpipewire-0.3-dev \
-            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev cmake ninja-build libclang-dev dbus
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libx11-dev libwebkit2gtk-4.1-dev cmake ninja-build libclang-dev dbus
       - uses: Swatinem/rust-cache@v2
         id: cache
         with:
@@ -300,8 +301,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p doremi-app --bin doremi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p doremi-auth
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force target/native-dist/licenses | Out-Null
-          Copy-Item target/ci/debug/doremi.exe, LICENSE, Cargo.lock target/native-dist/
+          Copy-Item target/ci/debug/doremi.exe, target/ci/debug/doremi-auth.exe, LICENSE, Cargo.lock target/native-dist/
           Copy-Item assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           Copy-Item assets/doremi/PROVENANCE.md, assets/fonts/Inter-LICENSE.txt, assets/icons/LICENSE.txt target/native-dist/licenses/
           Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
@@ -310,6 +313,7 @@ jobs:
           Copy-Item crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-youtube/LICENSE-TUBEFAST target/native-dist/licenses/Tubefast-MIT.txt
+          Copy-Item crates/doremi-auth/licenses/* target/native-dist/licenses/
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & ./scripts/windows-native-smoke.ps1 -Binary target/native-dist/doremi.exe -Output target/native-dist/smoke
           if (!$?) { exit 1 }

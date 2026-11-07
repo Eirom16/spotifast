@@ -1,0 +1,13 @@
+[package]
+name = "doremi-auth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+publish = false
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+doremi-youtube = { path = "../doremi-youtube" }
+doremi-core = { path = "../doremi-core" }
+tao = "0.37"
+wry = "0.57"

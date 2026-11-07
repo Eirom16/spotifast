@@ -518,7 +518,7 @@ impl DoremiApp {
         } else {
             ui.label("Busca y explora sin cuenta. Conecta una cuenta para consultar los datos musicales que YouTube Music permita.");
             #[cfg(any(target_os="linux",target_os="windows"))]
-            ui.small("Autoriza en una ventana externa de Chrome/Edge/Chromium o tu navegador por defecto. Doremi intenta leer la sesión automáticamente (Chrome/Edge/Chromium) o te pedirá pegar la cookie manualmente. La sesión se guarda en el almacén protegido del sistema.");
+            ui.small("Autoriza en la ventana de Google. La ventana temporal se cierra al terminar; Doremi verificará tu cuenta musical y guardará la sesión en el almacén protegido del sistema.");
             #[cfg(target_os="android")]
             ui.small("La ventana de Google solo se abre durante la autorización y se destruye al terminar. Doremi verificará la cuenta musical y guardará la sesión cifrada en este dispositivo.");
             if self.button(ui, "youtube-signin", "Iniciar sesión", 260.0) {

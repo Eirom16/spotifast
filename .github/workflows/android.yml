@@ -3,7 +3,7 @@ name: Doremi Android development
 on:
   push:
     branches: ["feature/doremi-android-real", "feature/doremi-product-ui"]
-    paths: ["crates/doremi-youtube/**", "crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", "scripts/windows-native-smoke.ps1", ".github/workflows/android.yml"]
+    paths: ["crates/doremi-auth/**", "crates/doremi-youtube/**", "crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", "scripts/windows-native-smoke.ps1", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:
       native_run:
@@ -93,7 +93,7 @@ jobs:
       - name: Native UI libraries and isolated graphical QA
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev xvfb xauth xdotool imagemagick zenity
+          sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick zenity
       - name: Host tests and lint, without the Spotifast dependency tree
         run: |
           cargo fmt --all --check
@@ -107,15 +107,15 @@ jobs:
           cargo test --locked -p doremi-app --all-targets
           cargo test --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3,aac-mp4 --all-targets
           cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3,aac-mp4 --all-targets -- -D warnings
-          cargo clippy --locked -p doremi-app --all-targets -- -D warnings
-          cargo build --locked -p doremi-app --bins
+          cargo clippy --locked -p doremi-app -p doremi-auth --all-targets -- -D warnings
+          cargo build --locked -p doremi-app -p doremi-auth --bins
           RUSTDOCFLAGS="-D warnings" cargo doc --locked -p doremi-library -p doremi-commons -p doremi-player -p doremi-app --no-deps
       - name: Real X11 navigation, keyboard and queue sequence
         env:
           LIBGL_ALWAYS_SOFTWARE: '1'
         run: |
           mkdir -p target/native-dist
-          cp target/native-cargo/debug/doremi target/native-dist/
+          cp target/native-cargo/debug/doremi target/native-cargo/debug/doremi-auth target/native-dist/
           cp target/native-cargo/debug/doremi-app target/native-dist/
           cp LICENSE Cargo.lock target/native-dist/
           mkdir -p target/native-dist/licenses
@@ -127,6 +127,7 @@ jobs:
           cp tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
           cp crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           cp crates/doremi-youtube/LICENSE-TUBEFAST target/native-dist/licenses/Tubefast-MIT.txt
+          cp crates/doremi-auth/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           python3 scripts/native-manifest.py target/native-dist/doremi target/native-dist/manifest.json
@@ -176,12 +177,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3,aac-mp4 --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo clippy --locked -p doremi-app --all-targets -- -D warnings
+          cargo clippy --locked -p doremi-app -p doremi-auth --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p doremi-app --bin doremi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p doremi-auth
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force target/native-dist/licenses | Out-Null
-          Copy-Item target/native-cargo/debug/doremi.exe, LICENSE, Cargo.lock target/native-dist/
+          Copy-Item target/native-cargo/debug/doremi.exe, target/native-cargo/debug/doremi-auth.exe, LICENSE, Cargo.lock target/native-dist/
           Copy-Item assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           Copy-Item assets/doremi/PROVENANCE.md, assets/fonts/Inter-LICENSE.txt, assets/icons/LICENSE.txt target/native-dist/licenses/
           Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
@@ -190,6 +193,7 @@ jobs:
           Copy-Item crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-youtube/LICENSE-TUBEFAST target/native-dist/licenses/Tubefast-MIT.txt
+          Copy-Item crates/doremi-auth/licenses/* target/native-dist/licenses/
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & target/native-dist/doremi.exe --version
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

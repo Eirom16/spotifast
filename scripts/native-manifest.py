@@ -12,9 +12,14 @@ manifest=Path(sys.argv[2])
 package=tomllib.loads(Path('crates/doremi-app/Cargo.toml').read_text())['package']
 version=package['version']+'-dev'
 assert subprocess.check_output([str(binary.resolve()),'--version'],text=True).strip()==f'Doremi Native Dev {version}'
+auth_package=tomllib.loads(Path('crates/doremi-auth/Cargo.toml').read_text())['package']
+assert auth_package['version']==package['version']
+helper=binary.with_name('doremi-auth'+('.exe' if binary.suffix=='.exe' else ''))
+assert helper.is_file(), 'Native payload must include its disposable authentication helper'
+assert subprocess.check_output([str(helper.resolve()),'--version'],text=True).strip()==f'Doremi Auth {version}'
 assert not subprocess.check_output(['git','status','--porcelain'],text=True).strip()
 host=next(line.split(': ',1)[1] for line in subprocess.check_output(['rustc','-vV'],text=True).splitlines() if line.startswith('host: '))
-manifest.write_text(json.dumps({'schema':1,'product':'Doremi','kind':'native-development','release':False,'version':version,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'source_dirty':False,'target':host,'payload':{'file':binary.name,'sha256':hashlib.sha256(binary.read_bytes()).hexdigest()}},indent=2)+'\n')
+manifest.write_text(json.dumps({'schema':1,'product':'Doremi','kind':'native-development','release':False,'version':version,'source_commit':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'source_dirty':False,'target':host,'payload':{'file':binary.name,'sha256':hashlib.sha256(binary.read_bytes()).hexdigest()},'authentication_helper':{'file':helper.name,'version':version,'sha256':hashlib.sha256(helper.read_bytes()).hexdigest()}},indent=2)+'\n')
 # Bind the complete artifact (including licenses) to checksums at build time.
 root=manifest.parent
 assert binary.resolve().parent==root.resolve()

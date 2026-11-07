@@ -1,0 +1,7 @@
+Doremi authentication host uses Wry 0.57 (MIT option) and Tao 0.37 (Apache-2.0).
+Wry: Copyright (c) 2020-2023 Ngo Iok Ui & Tauri Programme within The Commons Conservancy.
+Tao: Copyright 2020-2023 Tauri Programme within The Commons Conservancy.
+https://github.com/tauri-apps/wry
+https://github.com/tauri-apps/tao
+Only license texts are included here; no dependency implementation is vendored.
+Linux uses the system WebKitGTK 4.1; Windows uses the system WebView2 Runtime.

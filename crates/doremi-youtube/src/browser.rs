@@ -8,9 +8,8 @@
 //! inicio de sesión y se destruye inmediatamente después de obtener las credenciales.
 //! NUNCA debe usarse para navegación, reproducción o visualización de contenido.
 //!
-//! Desktop currently uses a disposable Chromium window or the system browser.
-//! The loopback prototype in `embedded` is not a WebView and cannot receive
-//! youtube.com cookies at a localhost origin. Never use it as a login provider.
+//! Desktop opens the disposable native WebView helper for authentication.
+//! Chromium/system-browser fallbacks remain available if it is not installed.
 use crate::authorization;
 use doremi_core::catalog::ProviderError as Error;
 use serde_json::{Value, json};
@@ -116,10 +115,14 @@ fn launch_default_browser(url: &str) -> Option<Child> {
     }
 }
 /// Interactive authorization for YouTube Music.
-/// Dedicated Chromium supports capture from its own disposable profile.
-/// The system browser requires the explicit clipboard fallback; no existing
-/// browser profile is inspected.
+/// The native helper owns its WebView and disposable profile. If it has not
+/// been installed, preserve the previous external-browser integration without
+/// inspecting existing profiles. A provider refusal never launches a fallback.
 pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
+    match crate::embedded::consent_embedded(cancel, base) {
+        Err(Error::Unsupported) => {} // Older installations may lack the helper.
+        result => return result,
+    }
     let _ = std::fs::create_dir_all(base);
 
     if cancel.load(Ordering::Acquire) {
