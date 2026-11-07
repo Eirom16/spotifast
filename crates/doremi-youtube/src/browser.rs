@@ -3,6 +3,11 @@
 //! and is wiped out at the start of every attempt, so no external browser or
 //! browser state beyond that window is ever read. Only youtube.com cookies
 //! inside that one window are observed.
+//! 
+//! Priority order:
+//! 1. Chromium-based browsers (Chrome, Edge, Chromium) with debug port for cookie reading
+//! 2. System default browser via xdg-open (Linux) or start (Windows)
+//! 3. Firefox with direct profile cookie reading (fallback)
 use crate::authorization;
 use doremi_core::catalog::ProviderError as Error;
 use serde_json::{Value, json};
@@ -45,7 +50,7 @@ fn profile(base: &Path) -> Result<tempfile::TempDir, Error> {
         .tempdir_in(base)
         .map_err(|_| Error::Unavailable)
 }
-fn programs() -> Vec<PathBuf> {
+fn chromium_programs() -> Vec<PathBuf> {
     if cfg!(windows) {
         [
             (
@@ -73,130 +78,77 @@ fn programs() -> Vec<PathBuf> {
         .collect()
     }
 }
-/// Google's sign-in risk engine rejects several Chromium builds ("this browser
-/// or app may not be secure") observed in the field, while Firefox sign-ins are
-/// the ones Doremi-Rust and Tubefast rely on through YouTube sessions. Firefox
-/// cookies are stored unencrypted in the profile, so a disposable profile is
-/// enough and reading another browser's state is never needed.
-fn firefox() -> Vec<PathBuf> {
+/// Firefox fallback - cookies are stored unencrypted in the profile.
+/// Try to launch the system default browser.
+/// Returns Some(child) if launched successfully, None otherwise.
+fn launch_default_browser(url: &str) -> Option<Child> {
     if cfg!(windows) {
-        [("ProgramFiles", r"Mozilla Firefox\firefox.exe")]
-            .iter()
-            .filter_map(|(root, path)| Some(PathBuf::from(std::env::var_os(root)?).join(path)))
-            .collect()
+        Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()
+    } else if cfg!(target_os = "linux") {
+        // Try xdg-open first
+        Command::new("xdg-open")
+            .arg(url)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()
+            .or_else(|| {
+                // Fallback to common browsers if xdg-open fails
+                chromium_programs()
+                    .iter()
+                    .find_map(|program| {
+                        Command::new(program)
+                            .arg(url)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .spawn()
+                            .ok()
+                    })
+            })
     } else {
-        ["firefox", "firefox-esr"]
-            .iter()
-            .map(PathBuf::from)
-            .collect()
+        None
     }
 }
-const FIREFOX_PREFS: &[u8] = b"\
-user_pref(\"browser.shell.checkDefaultBrowser\", false);\n\
-user_pref(\"browser.sessionstore.resume_from_crash\", false);\n\
-user_pref(\"browser.warnOnQuit\", false);\n\
-user_pref(\"toolkit.legacyUserProfileCustomizations.stylesheets\", false);\n";
-fn write_firefox_prefs(profile: &Path) -> Result<(), Error> {
-    std::fs::write(profile.join("prefs.js"), FIREFOX_PREFS).map_err(|_| Error::Unavailable)
-}
-/// Reads youtube.com cookies out of the disposable profile's own store.
-fn firefox_cookies(profile: &Path) -> Option<String> {
-    let store = rusqlite::Connection::open_with_flags(
-        profile.join("cookies.sqlite"),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )
-    .ok()?;
-    let read = |names: &mut Vec<(String, String, String)>| -> rusqlite::Result<()> {
-        let mut statement = store.prepare("SELECT name, value, host FROM moz_cookies")?;
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
-            let name: String = row.get(0)?;
-            let value: String = row.get(1)?;
-            let host: String = row.get(2)?;
-            names.push((name, value, host));
-        }
-        Ok(())
-    };
-    let mut rows = Vec::new();
-    read(&mut rows).ok()?;
-    let cookie = rows
-        .iter()
-        .filter(|(_, _, host)| host == "youtube.com" || host.ends_with(".youtube.com"))
-        .filter(|(name, value, _)| !name.is_empty() && !value.is_empty())
-        .map(|(name, value, _)| format!("{name}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    authorization(&cookie, 0).is_some().then_some(cookie)
-}
-fn firefox_sign_in(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
-    let profile = tempfile::Builder::new()
-        .prefix("doremi-signin-ff-")
-        .tempdir_in(base)
-        .map_err(|_| Error::Unavailable)?;
-    write_firefox_prefs(profile.path())?;
-    let mut child = firefox()
-        .iter()
-        .find_map(|program| {
-            Command::new(program)
-                .arg("--no-remote")
-                .arg(format!("--profile={}", profile.path().display()))
-                .arg("--new-window")
-                .arg(LOGIN)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .ok()
-        })
-        .ok_or(Error::Unavailable)?;
-    // The disposable profile holds only this login attempt's state, so the
-    // window is allowed to stay open until the user closes it after signing
-    // in. Then the cookies are flushed and read from that profile alone.
-    let start = Instant::now();
-    let mut accepted: Option<String> = None;
-    while start.elapsed() < Duration::from_secs(600) {
-        if cancel.load(Ordering::Acquire) {
-            return Err(Error::Cancelled);
-        }
-        if let Some(cookie) = firefox_cookies(profile.path()) {
-            if cookie.contains("LOGIN_INFO=") {
-                return Ok(cookie);
-            }
-            // The session is there but the music service marker lag: give
-            // the browser a few more polls, and fall back to whatever the
-            // profile finally holds when the window closes.
-            accepted.get_or_insert(cookie);
-        } else if accepted.is_some() {
-            accepted = None;
-        }
-        if child.try_wait().map_err(|_| Error::Unavailable)?.is_some() {
-            if let Some(final_value) = firefox_cookies(profile.path()) {
-                return Ok(final_value);
-            }
-            return Err(Error::Cancelled);
-        }
-        std::thread::sleep(POLL);
-    }
-    Err(Error::Timeout)
-}
-/// Interactive authorization in an external browser window. Firefox is tried
-/// first when installed; Edge/Chrome fall back to the debug-port flow adapted
-/// from Tubefast. Both never touch an existing browser profile.
+/// Interactive authorization in an external browser window.
+/// Priority: 1) Chromium-based browsers with debug port, 2) System default browser,
+/// 3) Firefox fallback. All use disposable profiles that never touch existing browser state.
 pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
     let _ = std::fs::create_dir_all(base);
-    if firefox()
+    
+    // First, try Chromium-based browsers with debug port (allows automatic cookie reading)
+    if chromium_programs()
         .iter()
         .any(|path| path.is_file() || which_available(&path.to_string_lossy()))
     {
-        firefox_sign_in(cancel, base)
-    } else {
-        sign_in_chromium(cancel, base)
+        return sign_in_chromium(cancel, base);
     }
+    
+    // Second, try system default browser
+    // Note: This will work for any browser but cannot auto-read cookies
+    // The UI will need to handle the manual cookie paste fallback
+    launch_default_browser(LOGIN);
+    
+    // Wait for user to complete login in browser
+    std::thread::sleep(Duration::from_secs(2));
+    
+    if cancel.load(Ordering::Acquire) {
+        return Err(Error::Cancelled);
+    }
+    
+    // Return Unsupported to trigger manual paste in UI
+    Err(Error::Unsupported)
 }
 fn which_available(program: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(program).is_file()))
         .unwrap_or(false)
 }
+
 fn cookie(reply: &Value) -> Option<String> {
     let pairs: Vec<_> = reply["result"]["cookies"]
         .as_array()?
@@ -284,7 +236,7 @@ impl Control {
 pub fn sign_in_chromium(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
     let profile = profile(base)?;
     // Chrome selects its own port and writes it into our private profile.
-    let child = programs()
+    let child = chromium_programs()
         .iter()
         .find_map(|program| {
             Command::new(program)

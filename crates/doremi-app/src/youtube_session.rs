@@ -441,7 +441,7 @@ impl DoremiApp {
         } else {
             ui.label("Busca y explora sin cuenta. Conecta una cuenta para consultar los datos musicales que YouTube Music permita.");
             #[cfg(any(target_os="linux",target_os="windows"))]
-            ui.small("Autoriza en una ventana externa de Firefox (o Chrome/Chromium/Edge). Doremi solo lee la sesión de esa ventana y la guarda en el almacén protegido del sistema.");
+            ui.small("Autoriza en una ventana externa de Chrome/Edge/Chromium o tu navegador por defecto. Doremi intenta leer la sesión automáticamente (Chrome/Edge/Chromium) o te pedirá pegar la cookie manualmente. La sesión se guarda en el almacén protegido del sistema.");
             #[cfg(target_os="android")]
             ui.small("Conecta una sesión ya autorizada seleccionando su archivo de Doremi-Rust. Doremi verificará la cuenta y la guardará cifrada en este dispositivo. La autorización directa con Google todavía no está disponible.");
             if self.button(
@@ -513,7 +513,7 @@ impl DoremiApp {
             ui.colored_label(ui.visuals().error_fg_color,match error {
                 ProviderError::AccessDenied=>"YouTube Music rechazó la sesión. Vuelve a conectar la cuenta.",
                 ProviderError::Cancelled=>"Conexión cancelada.",
-                ProviderError::Unsupported=>"La sesión utiliza una cuenta o un formato que todavía no se admite.",
+                ProviderError::Unsupported=>"Navegador no compatible para lectura automática de cookies. Usa Chrome/Edge/Chromium o pega la cookie manualmente.",
                 ProviderError::InvalidRequest|ProviderError::InvalidResponse=>"No se pudo validar el archivo o la sesión de YouTube Music.",
                 ProviderError::TooLarge=>"El archivo de sesión supera el tamaño admitido.",
                 ProviderError::Timeout=>"La conexión agotó el tiempo de espera.",
