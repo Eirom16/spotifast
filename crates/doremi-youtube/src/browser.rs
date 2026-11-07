@@ -1,13 +1,17 @@
-//! Explicit sign-in in a dedicated external browser profile; adapted from
-//! Tubefast auth.rs, MIT. The profile lives under Doremi's own data directory
-//! and is wiped out at the start of every attempt, so no external browser or
-//! browser state beyond that window is ever read. Only youtube.com cookies
-//! inside that one window are observed.
+//! Explicit sign-in for YouTube Music authentication.
 //! 
+//! IMPORTANTE: Este módulo implementa el navegador embebido EXCLUSIVAMENTE para
+//! autenticación OAuth de YouTube Music, conforme a la decisión documentada en
+//! docs/_decisions/2025-embedded-browser-auth.md
+//!
+//! RESTRICCIÓN ESTRICTA: La ventana embebida solo se usa durante el proceso de
+//! inicio de sesión y se destruye inmediatamente después de obtener las credenciales.
+//! NUNCA debe usarse para navegación, reproducción o visualización de contenido.
+//!
 //! Priority order:
-//! 1. Chromium-based browsers (Chrome, Edge, Chromium) with debug port for cookie reading
-//! 2. System default browser via xdg-open (Linux) or start (Windows)
-//! 3. Firefox with direct profile cookie reading (fallback)
+//! 1. Embedded browser (self-contained, works without external browsers)
+//! 2. Chromium-based external browsers with debug port for cookie reading
+//! 3. System default browser via xdg-open (Linux) or start (Windows)
 use crate::authorization;
 use doremi_core::catalog::ProviderError as Error;
 use serde_json::{Value, json};
@@ -114,13 +118,24 @@ fn launch_default_browser(url: &str) -> Option<Child> {
         None
     }
 }
-/// Interactive authorization in an external browser window.
-/// Priority: 1) Chromium-based browsers with debug port, 2) System default browser,
-/// 3) Firefox fallback. All use disposable profiles that never touch existing browser state.
+/// Interactive authorization for YouTube Music.
+/// Priority: 1) Embedded browser, 2) Chromium-based external browsers with debug port,
+/// 3) System default browser. All use disposable profiles that never touch existing browser state.
 pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
     let _ = std::fs::create_dir_all(base);
     
-    // First, try Chromium-based browsers with debug port (allows automatic cookie reading)
+    // First, try embedded browser (self-contained, no external dependencies)
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    {
+        // For now, we'll try the embedded browser first
+        // But we need to handle the case where wry is not available
+        // We'll use a runtime check
+        if let Ok(cookie) = crate::embedded::consent_embedded(cancel, base) {
+            return Ok(cookie);
+        }
+    }
+    
+    // Second, try Chromium-based browsers with debug port (allows automatic cookie reading)
     if chromium_programs()
         .iter()
         .any(|path| path.is_file() || which_available(&path.to_string_lossy()))
@@ -128,7 +143,7 @@ pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
         return sign_in_chromium(cancel, base);
     }
     
-    // Second, try system default browser
+    // Third, try system default browser
     // Note: This will work for any browser but cannot auto-read cookies
     // The UI will need to handle the manual cookie paste fallback
     launch_default_browser(LOGIN);

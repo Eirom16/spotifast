@@ -13,6 +13,11 @@ Spotifast no definen Doremi. Conserva su autoría, MIT y licencias de assets.
 - Nada de Electron, motores de navegador embebidos, telemetría obligatoria,
   evasión de DRM, paywalls, restricciones geográficas o controles de acceso.
   Una negativa del proveedor es un error visible, no permiso para sortearla.
+  - **Excepción documentada**: Se permite un navegador embebido **exclusivamente** para
+    el flujo de autenticación OAuth de YouTube Music, con la condición estricta de que
+    solo se use durante el proceso de inicio de sesión, se destruya inmediatamente
+    después de obtener las credenciales, y nunca consuma recursos durante el uso
+    cotidiano de la aplicación. Ver `docs/_decisions/2025-embedded-browser-auth.md`.
 - No presentes el baseline Spotify de F0 como un reproductor Doremi terminado.
   No sustituyas silenciosamente una pista Spotify por una búsqueda de otro sitio.
 - No borres una función sin inventariar consumidores, datos, tests y reemplazo

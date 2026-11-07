@@ -8,6 +8,8 @@ pub mod browser;
 pub mod credentials;
 pub mod parser;
 pub mod stream;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub mod embedded;
 use doremi_core::{
     catalog::ProviderError as Error,
     media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId},
