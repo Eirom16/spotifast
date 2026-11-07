@@ -14,6 +14,7 @@
         </intent>
     </queries>
     <application android:label="Doremi" android:icon="@drawable/doremi" android:theme="@style/DoremiTheme" android:allowBackup="false" android:hasCode="true" android:extractNativeLibs="false">
+        <activity android:name="dev.eirom.doremi.YoutubeAuthActivity" android:exported="false" android:process=":youtube_auth" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode" android:windowSoftInputMode="adjustResize" />
         <activity android:name="dev.eirom.doremi.MainActivity" android:exported="true" android:launchMode="singleTask" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
         </activity>

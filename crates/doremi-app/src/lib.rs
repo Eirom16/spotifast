@@ -852,7 +852,7 @@ impl DoremiApp {
         let mut state = serde_json::json!({
             "input":ctx.input(|input|serde_json::json!({"focused":input.raw.focused,"primary_down":input.pointer.primary_down(),"position":input.pointer.hover_pos().map(|point|[point.x,point.y])})),
             "local_import":model.local_files.snapshot(),"notice":model.notice,
-            "editor_target":self.editor.key(),"editor_text":self.editor_text(),
+            "editor_target":self.editor.key(),"editor_text":if self.editor == TextField::SessionCookie {""} else {self.editor_text()},
             "playlists":model.playlists.lists().iter().map(|list| serde_json::json!({"id":list.id,"name":list.name,"entries":list.entries.iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "selected_playlist":model.selected_playlist,
             "schema": 1, "pid": std::process::id(), "instance": self.instance, "page": model.page, "player_return":model.player_return, "query": model.query,
@@ -1481,6 +1481,44 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 mod tests {
     use super::*;
     static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn session_cookie_editor_never_enters_durable_diagnostics() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/session-cookie-diagnostics-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.navigate(Page::Settings);
+        app.editor = TextField::SessionCookie;
+        const FIXTURE: &str = "SAPISID=synthetic-diagnostics-fixture-only";
+        app.receive_editor_text("session-cookie", FIXTURE);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.draw(ui));
+        output.textures_delta.clear();
+        assert!(!app.saved_state.is_empty());
+        assert!(!String::from_utf8_lossy(&app.saved_state).contains(FIXTURE));
+        let diagnostic: serde_json::Value = serde_json::from_slice(&app.saved_state).unwrap();
+        assert_eq!(diagnostic["editor_text"], "");
+        let state = &mut app.model.as_mut().unwrap().music.session;
+        state.paste();
+        assert!(
+            state.pasted.is_empty(),
+            "Submitting removes the editor copy"
+        );
+        state.cancel(); // Retire before polling: no real account or network.
+        drop(app);
+        DoremiApp::shutdown();
+        for file in std::fs::read_dir(&directory).unwrap().flatten() {
+            if file.file_type().unwrap().is_file() {
+                assert!(
+                    !String::from_utf8_lossy(&std::fs::read(file.path()).unwrap())
+                        .contains(FIXTURE)
+                );
+            }
+        }
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn editor_targets_fence_late_text_and_duplicate_playlist_selection_keeps_its_offset() {
         let _guard = UI_TEST_LOCK.lock().unwrap();

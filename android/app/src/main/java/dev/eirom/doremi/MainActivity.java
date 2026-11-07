@@ -41,6 +41,15 @@ public final class MainActivity extends Activity {
     private static native void nativeDocument(long generation,String uri);
     private static final int OPEN_WAV=403;
     private static final int OPEN_YOUTUBE_SESSION=404;
+    private static final int AUTHORIZE_YOUTUBE=405;
+    private static native void nativeYoutubeAuth(long generation,String cookie,int status);
+    private static long authRequest=0,lastAuthRequest=0;
+    private static final class AuthResult {
+        final long generation;final String cookie;final int status;
+        AuthResult(long generation,String cookie,int status) {this.generation=generation;this.cookie=cookie;this.status=status;}
+    }
+    // Memory-only handoff survives Activity recreation; no credentials in Bundle.
+    private static final java.util.concurrent.atomic.AtomicReference<AuthResult> authResult=new java.util.concurrent.atomic.AtomicReference<>();
     private static native void nativeSessionDocument(long generation,String uri);
     private long sessionRequest=0;
     private long lastSessionRequest=0;
@@ -73,7 +82,7 @@ public final class MainActivity extends Activity {
         return "Archivo WAV";
     }
     private void requestDocument(long generation) {
-        if(generation==0 || fileRequest!=0 || sessionRequest!=0) return;
+        if(generation==0 || fileRequest!=0 || sessionRequest!=0 || authRequest!=0) return;
         fileRequest=generation;
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -82,7 +91,7 @@ public final class MainActivity extends Activity {
         if(!startSystemDocument(intent,OPEN_WAV)) deliverDocument("");
     }
     private void requestSessionDocument(long generation) {
-        if(generation==0 || generation<=lastSessionRequest || sessionRequest!=0 || fileRequest!=0 || sessionResultReady) return;
+        if(generation==0 || generation<=lastSessionRequest || sessionRequest!=0 || fileRequest!=0 || authRequest!=0 || sessionResultReady) return;
         lastSessionRequest=generation;
         sessionRequest=generation;
         Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("application/json");
@@ -129,10 +138,29 @@ public final class MainActivity extends Activity {
         sessionResultGeneration=sessionRequest;sessionResultUri=uri;sessionRequest=0;sessionResultReady=true;
         if(surface!=null) surface.requestRender();
     }
+    private void requestYoutubeAuth(long generation) {
+        if(generation==0) {if(authRequest!=0) finishActivity(AUTHORIZE_YOUTUBE);return;}
+        if(generation<=lastAuthRequest || authRequest!=0 || fileRequest!=0 || sessionRequest!=0 || authResult.get()!=null) return;
+        lastAuthRequest=generation;authRequest=generation;
+        try {startActivityForResult(new Intent(this,YoutubeAuthActivity.class).putExtra(YoutubeAuthActivity.GENERATION,generation),AUTHORIZE_YOUTUBE);}
+        catch(RuntimeException unavailable) {deliverYoutubeAuth(generation,"",4);}
+    }
+    private void deliverYoutubeAuth(long generation,String cookie,int status) {
+        if(generation!=authRequest || generation==0) return;
+        authRequest=0;
+        if(cookie==null) cookie="";
+        if(cookie.length()>65536) {cookie="";status=5;}
+        authResult.set(new AuthResult(generation,status==0?cookie:"",status));
+        if(surface!=null) surface.requestRender();
+    }
     @Override protected void onActivityResult(int request,int result,Intent data) {
         super.onActivityResult(request,result,data);
         if(request==OPEN_WAV) deliverDocument(result==RESULT_OK && data!=null && data.getData()!=null?data.getData().toString():"");
         if(request==OPEN_YOUTUBE_SESSION) deliverSessionDocument(result==RESULT_OK && data!=null && data.getData()!=null?data.getData().toString():"");
+        if(request==AUTHORIZE_YOUTUBE) deliverYoutubeAuth(
+            data==null?authRequest:data.getLongExtra(YoutubeAuthActivity.GENERATION,0),
+            result==RESULT_OK && data!=null?data.getStringExtra(YoutubeAuthActivity.COOKIE):"",
+            data==null?1:data.getIntExtra(YoutubeAuthActivity.STATUS,4));
     }
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putInt("doremiSessionPid",android.os.Process.myPid());
@@ -239,6 +267,9 @@ public final class MainActivity extends Activity {
         // Android owns composing text, cursor/selection and Unicode input.
         // egui draws the visible field. This private 1px editor is only its IME bridge.
         input=new EditText(this);
+        input.setSaveEnabled(false);
+        input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
         input.setSingleLine(true);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(128)});
@@ -306,11 +337,14 @@ public final class MainActivity extends Activity {
                 sessionResultReady=false;sessionResultUri="";
                 nativeSessionDocument(generation,uri);
             }
+            AuthResult authorized=authResult.getAndSet(null);
+            if(authorized!=null) nativeYoutubeAuth(authorized.generation,authorized.cookie,authorized.status);
             String output=nativeDraw(width,height,scale);
             try {
                 JSONObject data=new JSONObject(output);
                 long requestedDocument=data.optLong("file_request",0);
                 long requestedSession=data.optLong("session_request",0);
+                long requestedAuth=data.optLong("auth_request",0);
                 boolean ime=data.optBoolean("ime");
                 boolean back=data.optBoolean("can_go_back");
                 boolean needsFocus=data.optBoolean("needs_focus");
@@ -324,9 +358,15 @@ public final class MainActivity extends Activity {
                     canGoBack=back;
                     requestDocument(requestedDocument);
                     requestSessionDocument(requestedSession);
+                    requestYoutubeAuth(requestedAuth);
                     updateFocus(needsFocus,loadingAudio);
-                    inputTarget=target;
                     updatingInput=true;
+                    if(!inputTarget.equals(target)) {
+                        input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|("session-cookie".equals(target)?android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD:android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));
+                        input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter("session-cookie".equals(target)?16384:128)});
+                        input.setContentDescription("session-cookie".equals(target)?"Sesión de YouTube Music":"Buscar en Doremi");
+                    }
+                    inputTarget=target;
                     if(acknowledgedGeneration==inputGeneration && !input.getText().toString().equals(query)) { input.setText(query); input.setSelection(input.length()); }
                     updatingInput=false;
                     InputMethodManager manager=(InputMethodManager)getSystemService(INPUT_METHOD_SERVICE);
@@ -335,7 +375,7 @@ public final class MainActivity extends Activity {
                     surface.removeCallbacks(repaint);
                     if(delay<10000) surface.postDelayed(repaint,Math.max(16,delay));
                 });
-            } catch(Exception error) { android.util.Log.e("Doremi","Invalid renderer response",error); }
+            } catch(Exception error) { android.util.Log.e("Doremi","Invalid renderer response"); }
         }
     }
 }

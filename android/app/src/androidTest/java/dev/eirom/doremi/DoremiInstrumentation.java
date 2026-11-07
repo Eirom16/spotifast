@@ -938,6 +938,17 @@ public final class DoremiInstrumentation extends Instrumentation {
         Files.write(new File(profileDirectory(),restore?"qa-session-store-restored.json":"qa-session-store-written.json").toPath(),
             new JSONObject().put("result","pass").put("pid",android.os.Process.myPid()).put("synthetic",true).put("encrypted",true).put("restored",restore).put("tamper_rejected",restore).put("forgotten",restore).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    private void youtubeAuthPolicy() throws Exception {
+        for(String url:new String[]{"https://accounts.google.com/ServiceLogin","https://music.youtube.com/","https://consent.youtube.com/"})
+            if(!YoutubeAuthActivity.allowed(url)) throw new AssertionError("Expected authentication origin rejected");
+        for(String url:new String[]{"http://accounts.google.com/","https://accounts.google.com.attacker.invalid/","https://accounts.google.com:443/","https://user@accounts.google.com/","file:///data/","intent://login/","https://www.google.com/search"})
+            if(YoutubeAuthActivity.allowed(url)) throw new AssertionError("Unexpected authentication navigation allowed");
+        if(!YoutubeAuthActivity.denied("https://accounts.google.com/v3/signin/rejected?error=disallowed_useragent") || YoutubeAuthActivity.denied("https://music.youtube.com/"))
+            throw new AssertionError("Provider refusal was not distinguished");
+        android.content.pm.ActivityInfo info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),YoutubeAuthActivity.class),0);
+        if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
+        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
@@ -948,6 +959,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("youtube-auth-policy".equals(mode)) {
+                youtubeAuthPolicy();finish(0,result);return;
+            }
             if("session-store-write".equals(mode) || "session-store-restore".equals(mode)) {
                 youtubeSessionStore("session-store-restore".equals(mode));
                 result.putString("stream","PASS: synthetic Android Keystore session storage; no real account or network authorization\n");finish(Activity.RESULT_OK,result);return;

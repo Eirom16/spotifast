@@ -8,7 +8,7 @@ use std::sync::{
 };
 pub type SharedClient = Arc<tokio::sync::Mutex<Option<Result<Client, ProviderError>>>>;
 // Renderer recreation must not reuse a retired Android document request.
-#[cfg(target_os = "android")]
+#[cfg(any(test, target_os = "android"))]
 static PICKER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 #[derive(Clone)]
 enum Intent {
@@ -58,6 +58,8 @@ pub(super) struct State {
     restored: bool,
     #[cfg(target_os = "android")]
     picker: Option<(u64, Instant)>,
+    #[cfg(any(test, target_os = "android"))]
+    authorization: Option<(u64, Instant)>,
     commands: Option<SyncSender<Job>>,
     events: Option<Receiver<Completion>>,
     thread: Option<std::thread::JoinHandle<()>>,
@@ -77,6 +79,8 @@ impl State {
             restored: false,
             #[cfg(target_os = "android")]
             picker: None,
+            #[cfg(any(test, target_os = "android"))]
+            authorization: None,
             commands: None,
             events: None,
             thread: None,
@@ -99,15 +103,65 @@ impl State {
         #[cfg(target_os = "android")]
         {
             let _ = profile;
-            let Ok(previous) =
-                PICKER_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
-                    value.checked_add(1)
-                })
-            else {
+            self.pending = None;
+            self.picker = None;
+            self.begin_authorization();
+        }
+    }
+    #[cfg(any(test, target_os = "android"))]
+    fn interaction_generation(&mut self) -> Option<u64> {
+        match PICKER_GENERATION.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            value.checked_add(1).filter(|next| *next <= i64::MAX as u64)
+        }) {
+            Ok(previous) => Some(previous + 1),
+            Err(_) => {
                 self.error = Some(ProviderError::Exhausted);
-                return;
-            };
-            let generation = previous + 1;
+                None
+            }
+        }
+    }
+    #[cfg(any(test, target_os = "android"))]
+    fn begin_authorization(&mut self) {
+        if let Some(generation) = self.interaction_generation() {
+            self.authorization = Some((generation, Instant::now() + Duration::from_secs(600)));
+        }
+    }
+    #[cfg(target_os = "android")]
+    pub fn authorization_request(&self) -> u64 {
+        self.authorization.map_or(0, |(generation, _)| generation)
+    }
+    #[cfg(any(test, target_os = "android"))]
+    pub fn authorized(&mut self, generation: u64, cookie: String, status: i32) {
+        let Some((active, deadline)) = self.authorization else {
+            return;
+        };
+        if active != generation {
+            return;
+        }
+        self.authorization = None;
+        self.error = if Instant::now() >= deadline {
+            Some(ProviderError::Timeout)
+        } else {
+            match status {
+                0 if cookie.len() > 64 * 1024 => Some(ProviderError::TooLarge),
+                0 if cookie.is_empty() => Some(ProviderError::InvalidResponse),
+                0 => {
+                    self.pending = Some(Intent::Paste(cookie));
+                    None
+                }
+                1 => Some(ProviderError::Cancelled),
+                2 => Some(ProviderError::Timeout),
+                3 => Some(ProviderError::AccessDenied),
+                5 => Some(ProviderError::TooLarge),
+                _ => Some(ProviderError::Unavailable),
+            }
+        };
+    }
+    #[cfg(target_os = "android")]
+    pub fn import_document(&mut self) {
+        self.restored = true;
+        self.error = None;
+        if let Some(generation) = self.interaction_generation() {
             self.picker = Some((generation, Instant::now() + Duration::from_secs(120)));
         }
     }
@@ -148,7 +202,7 @@ impl State {
     /// browser window cannot hand over the session itself.
     pub fn paste(&mut self) {
         self.restored = true;
-        self.pending = Some(Intent::Paste(self.pasted.clone()));
+        self.pending = Some(Intent::Paste(std::mem::take(&mut self.pasted)));
         self.error = None;
     }
     pub fn disconnect(&mut self) {
@@ -167,13 +221,27 @@ impl State {
     }
     pub fn cancel(&mut self) {
         self.cancel.store(true, Ordering::Release);
+        self.pasted.clear();
         self.pending = None;
+        #[cfg(any(test, target_os = "android"))]
+        {
+            self.authorization = None;
+        }
         #[cfg(target_os = "android")]
         {
             self.picker = None;
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context) {
+        #[cfg(any(test, target_os = "android"))]
+        if let Some((_, deadline)) = self.authorization {
+            if Instant::now() >= deadline {
+                self.authorization = None;
+                self.error = Some(ProviderError::Timeout);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+        }
         #[cfg(target_os = "android")]
         if let Some((_, deadline)) = self.picker {
             if Instant::now() >= deadline {
@@ -380,6 +448,15 @@ impl DoremiApp {
         ui.heading("Cuenta de YouTube Music");
         let state = &self.model.as_ref().unwrap().music.session;
         #[cfg(target_os = "android")]
+        if state.authorization.is_some() {
+            ui.spinner();
+            ui.label("Autoriza tu cuenta en la ventana de Google. Se cerrará al terminar.");
+            if self.button(ui, "youtube-cancel-signin", "Cancelar conexión", 220.0) {
+                self.model.as_mut().unwrap().music.session.cancel();
+            }
+            return;
+        }
+        #[cfg(target_os = "android")]
         if state.picker.is_some() {
             ui.label("Selecciona el archivo de la sesión autorizada en el selector del sistema.");
             if self.button(ui, "youtube-cancel-signin", "Cancelar conexión", 220.0) {
@@ -443,17 +520,8 @@ impl DoremiApp {
             #[cfg(any(target_os="linux",target_os="windows"))]
             ui.small("Autoriza en una ventana externa de Chrome/Edge/Chromium o tu navegador por defecto. Doremi intenta leer la sesión automáticamente (Chrome/Edge/Chromium) o te pedirá pegar la cookie manualmente. La sesión se guarda en el almacén protegido del sistema.");
             #[cfg(target_os="android")]
-            ui.small("Conecta una sesión ya autorizada seleccionando su archivo de Doremi-Rust. Doremi verificará la cuenta y la guardará cifrada en este dispositivo. La autorización directa con Google todavía no está disponible.");
-            if self.button(
-                ui,
-                "youtube-signin",
-                if cfg!(target_os = "android") {
-                    "Importar sesión autorizada"
-                } else {
-                    "Iniciar sesión"
-                },
-                260.0,
-            ) {
+            ui.small("La ventana de Google solo se abre durante la autorización y se destruye al terminar. Doremi verificará la cuenta musical y guardará la sesión cifrada en este dispositivo.");
+            if self.button(ui, "youtube-signin", "Iniciar sesión", 260.0) {
                 let model = self.model.as_mut().unwrap();
                 #[cfg(any(target_os = "linux", target_os = "windows"))]
                 {
@@ -466,10 +534,17 @@ impl DoremiApp {
                 }
                 #[cfg(target_os = "android")]
                 {
-                    // There is no desktop browser window on Android; connect
-                    // switches to the system document picker instead.
                     model.music.session.connect(PathBuf::new());
                 }
+            }
+            #[cfg(target_os = "android")]
+            if self.button(
+                ui,
+                "youtube-import-session",
+                "Importar sesión de Doremi-Rust",
+                280.0,
+            ) {
+                self.model.as_mut().unwrap().music.session.import_document();
             }
             #[cfg(any(target_os = "linux", target_os = "windows"))]
             {
@@ -487,10 +562,11 @@ impl DoremiApp {
             ui.small("Alternativa: copia la cabecera Cookie de music.youtube.com con la sesión ya iniciada (F12, Red, copiar Cabeceras de solicitud) y pégala aquí.");
             let pasted = ui.add_sized(
                 [ui.available_width(), 56.0],
-                egui::TextEdit::multiline(&mut self.model.as_mut().unwrap().music.session.pasted)
+                egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().music.session.pasted)
                     .id(egui::Id::new(TextField::SessionCookie.key()))
                     .hint_text("SID=…; SAPISID=…; LOGIN_INFO=…")
                     .font(egui::TextStyle::Monospace)
+                    .password(true)
                     .char_limit(16384),
             );
             if pasted.has_focus() {
@@ -536,5 +612,65 @@ impl DoremiApp {
                 self.model.as_mut().unwrap().music.session.disconnect();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod android_handoff_tests {
+    use super::*;
+    const FIXTURE: &str = "SAPISID=synthetic-handoff-only";
+    #[test]
+    fn only_the_live_authorization_can_submit_a_session_for_musical_validation() {
+        let mut state = State::new();
+        state.begin_authorization();
+        let (generation, _) = state.authorization.unwrap();
+        state.authorized(generation + 1, FIXTURE.into(), 0);
+        assert!(state.authorization.is_some() && state.pending.is_none());
+        state.authorized(generation, FIXTURE.into(), 0);
+        assert!(state.authorization.is_none());
+        assert!(matches!(&state.pending,Some(Intent::Paste(cookie)) if cookie==FIXTURE));
+        assert!(
+            state.account.is_none() && !state.durable,
+            "A cookie handoff is not a verified music account"
+        );
+        state.disconnect();
+        state.authorized(generation, FIXTURE.into(), 0);
+        assert!(
+            matches!(state.pending, Some(Intent::Disconnect)),
+            "Late credentials cannot reconnect after logout"
+        );
+        let mut recreated = State::new();
+        recreated.begin_authorization();
+        assert!(
+            recreated.authorization.unwrap().0 > generation,
+            "Renderer recreation must not reuse a request"
+        );
+        recreated.cancel();
+        assert!(recreated.authorization.is_none() && recreated.pending.is_none());
+    }
+    #[test]
+    fn refused_expired_and_oversized_results_never_start_account_or_storage_work() {
+        for (status, expected) in [
+            (1, ProviderError::Cancelled),
+            (2, ProviderError::Timeout),
+            (3, ProviderError::AccessDenied),
+            (4, ProviderError::Unavailable),
+        ] {
+            let mut state = State::new();
+            state.begin_authorization();
+            state.authorized(state.authorization.unwrap().0, FIXTURE.into(), status);
+            assert_eq!(state.error, Some(expected));
+            assert!(state.pending.is_none() && state.commands.is_none() && state.account.is_none());
+        }
+        let mut state = State::new();
+        state.begin_authorization();
+        state.authorization.as_mut().unwrap().1 = Instant::now() - Duration::from_secs(1);
+        state.authorized(state.authorization.unwrap().0, FIXTURE.into(), 0);
+        assert_eq!(state.error, Some(ProviderError::Timeout));
+        assert!(state.pending.is_none());
+        state.begin_authorization();
+        state.authorized(state.authorization.unwrap().0, "x".repeat(65537), 0);
+        assert_eq!(state.error, Some(ProviderError::TooLarge));
+        assert!(state.pending.is_none() && state.commands.is_none());
     }
 }
