@@ -1,5 +1,5 @@
 //! Explicit sign-in for YouTube Music authentication.
-//! 
+//!
 //! IMPORTANTE: Este módulo implementa el navegador embebido EXCLUSIVAMENTE para
 //! autenticación OAuth de YouTube Music, conforme a la decisión documentada en
 //! docs/_decisions/2025-embedded-browser-auth.md
@@ -8,10 +8,9 @@
 //! inicio de sesión y se destruye inmediatamente después de obtener las credenciales.
 //! NUNCA debe usarse para navegación, reproducción o visualización de contenido.
 //!
-//! Priority order:
-//! 1. Embedded browser (self-contained, works without external browsers)
-//! 2. Chromium-based external browsers with debug port for cookie reading
-//! 3. System default browser via xdg-open (Linux) or start (Windows)
+//! Desktop currently uses a disposable Chromium window or the system browser.
+//! The loopback prototype in `embedded` is not a WebView and cannot receive
+//! youtube.com cookies at a localhost origin. Never use it as a login provider.
 use crate::authorization;
 use doremi_core::catalog::ProviderError as Error;
 use serde_json::{Value, json};
@@ -103,38 +102,29 @@ fn launch_default_browser(url: &str) -> Option<Child> {
             .ok()
             .or_else(|| {
                 // Fallback to common browsers if xdg-open fails
-                chromium_programs()
-                    .iter()
-                    .find_map(|program| {
-                        Command::new(program)
-                            .arg(url)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .spawn()
-                            .ok()
-                    })
+                chromium_programs().iter().find_map(|program| {
+                    Command::new(program)
+                        .arg(url)
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .spawn()
+                        .ok()
+                })
             })
     } else {
         None
     }
 }
 /// Interactive authorization for YouTube Music.
-/// Priority: 1) Embedded browser, 2) Chromium-based external browsers with debug port,
-/// 3) System default browser. All use disposable profiles that never touch existing browser state.
+/// Dedicated Chromium supports capture from its own disposable profile.
+/// The system browser requires the explicit clipboard fallback; no existing
+/// browser profile is inspected.
 pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
     let _ = std::fs::create_dir_all(base);
-    
-    // First, try embedded browser (self-contained, no external dependencies)
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
-    {
-        // For now, we'll try the embedded browser first
-        // But we need to handle the case where wry is not available
-        // We'll use a runtime check
-        if let Ok(cookie) = crate::embedded::consent_embedded(cancel, base) {
-            return Ok(cookie);
-        }
+
+    if cancel.load(Ordering::Acquire) {
+        return Err(Error::Cancelled);
     }
-    
     // Second, try Chromium-based browsers with debug port (allows automatic cookie reading)
     if chromium_programs()
         .iter()
@@ -142,19 +132,19 @@ pub fn consent(cancel: &AtomicBool, base: &Path) -> Result<String, Error> {
     {
         return sign_in_chromium(cancel, base);
     }
-    
+
     // Third, try system default browser
     // Note: This will work for any browser but cannot auto-read cookies
     // The UI will need to handle the manual cookie paste fallback
     launch_default_browser(LOGIN);
-    
+
     // Wait for user to complete login in browser
     std::thread::sleep(Duration::from_secs(2));
-    
+
     if cancel.load(Ordering::Acquire) {
         return Err(Error::Cancelled);
     }
-    
+
     // Return Unsupported to trigger manual paste in UI
     Err(Error::Unsupported)
 }
