@@ -419,7 +419,9 @@ impl Textures {
 impl DoremiApp {
     pub(super) fn poll_artwork(&mut self, ctx: &egui::Context) {
         let model = self.model.as_mut().unwrap();
-        let detail = (model.page == Page::Search && model.music.selected)
+        let catalog_visible =
+            model.page == Page::Search || model.page == Page::Home && model.music.home_root();
+        let detail = (catalog_visible && model.music.selected)
             .then_some(model.music.detail.as_ref())
             .flatten()
             .filter(|entry| {
@@ -446,7 +448,7 @@ impl DoremiApp {
             id.provider.as_str() != doremi_youtube::PROVIDER || model.artwork.needs_thumbnail(id)
         }) {
             (detail, url)
-        } else if model.page == Page::Search && model.music.selected && model.music.youtube {
+        } else if catalog_visible && model.music.selected && model.music.youtube {
             thumbnail.map_or((None, None), |(id, url)| (Some(id), Some(url)))
         } else {
             (None, None)

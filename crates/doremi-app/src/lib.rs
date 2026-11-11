@@ -761,6 +761,10 @@ impl DoremiApp {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         if std::env::var_os("DOREMI_DATA_DIR").is_none() {
             app.model.as_mut().unwrap().music.session.restore();
+            app.model
+                .as_mut()
+                .unwrap()
+                .youtube_page(doremi_youtube::Request::Home);
         }
         app
     }
@@ -1032,11 +1036,30 @@ impl DoremiApp {
                     self.navigate(Page::Search);
                 }
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-                if self.button(ui, "youtube-home", "Explorar YouTube Music", 250.0) {
-                    self.model.as_mut().unwrap().music.home();
-                    self.navigate(Page::Search);
-                }
+                ui.add_enabled_ui(
+                    self.model.as_ref().unwrap().music.can_refresh_home(),
+                    |ui| {
+                        if self.button(
+                            ui,
+                            "youtube-home",
+                            if self.model.as_ref().unwrap().music.home_root() {
+                                "Actualizar inicio"
+                            } else {
+                                "Explorar YouTube Music"
+                            },
+                            250.0,
+                        ) {
+                            self.model.as_mut().unwrap().refresh_music_home();
+                        }
+                    },
+                );
                 self.recent_shelf(ui);
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                if self.model.as_ref().unwrap().music.home_root() {
+                    ui.add_space(16.0);
+                    ui.heading("YouTube Music");
+                    self.music_results(ui);
+                }
                 ui.add_space(16.0);
                 ui.heading("Tu biblioteca");
                 let library = self.model.as_ref().unwrap().library.clone();
@@ -1480,7 +1503,7 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
-    static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
+    pub(super) static UI_TEST_LOCK: Mutex<()> = Mutex::new(());
     #[test]
     fn session_cookie_editor_never_enters_durable_diagnostics() {
         let _guard = UI_TEST_LOCK.lock().unwrap();

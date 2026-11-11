@@ -3,6 +3,11 @@
 - Rama: `feature/doremi-product-ui`; núcleo y UI compartidos Linux/Windows/Android.
 - Catálogo principal: YouTube Music nativo, adaptado de Tubefast MIT. MusicBrainz
   queda disponible como fuente opcional de metadatos; sin equivalencias ocultas.
+- Inicio musical conectado al arranque normal, con secciones del proveedor,
+  carátulas y regreso desde álbumes/artistas. Caché acotada a la sesión, borrada
+  al cambiar de cuenta; las búsquedas activas sobreviven a recrear la Activity.
+  Consulta pública real: dos secciones y 30 elementos sin cuenta. Geometría y
+  navegación probadas; pantalla nueva en binarios Linux/Windows/APK pendiente de CI.
 - APK `13c83e3` instalada sin borrar datos en Samsung ARMv7: búsqueda de 20 canciones,
   miniaturas reales y buscador superior con teclado, comprobados en ambos temas.
   Artista, álbum y playlist ya comprobados en `ffb1fe9`. Biblioteca conserva su hash.
@@ -25,8 +30,9 @@
   pendiente: la prueba pública recibió una petición de autorización del proveedor.
 - Biblioteca, playlists propias, cola e historial previos se conservan.
 - CI `42378699254`: APK aprobada; hosts detenidos por formato, corregido localmente.
-  Local: host 46 tests, YouTube 14 (uno nativo ignorado), Clippy estricto incluido
-  auxiliar, check-local y 27 checks de política aprobados. Nuevos builds pendientes.
+  Local: host 49 tests, YouTube 15 (uno nativo ignorado), Clippy estricto y
+  check-local aprobados. Auxiliar y 27 checks de política aprobados en el hito previo.
+  Nuevos builds pendientes.
 - Push bloqueado: política de ejecución exige aprobación, deshabilitada en el entorno.
-- Evidencia: `~/.local/share/doremi/product-qa/2026-11-06/` y `2026-11-07/`.
+- Evidencia: `~/.local/share/doremi/product-qa/2026-11-06/`, `2026-11-07/` y `2026-11-11/`.
 - Sin releases. Los informes históricos se conservan como referencia.

@@ -18,6 +18,15 @@ impl DoremiApp {
 
     pub(super) fn navigate(&mut self, page: Page) {
         let model = self.model.as_mut().unwrap();
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        {
+            if page == Page::Search && model.page != Page::Search && model.music.home_root() {
+                model.music.search(&model.query);
+            }
+            if page == Page::Home && model.music.home_started() && !model.music.home_root() {
+                model.youtube_page(doremi_youtube::Request::Home);
+            }
+        }
         if page == Page::Player && model.page != Page::Player {
             model.player_return = model.page;
         }
@@ -25,9 +34,26 @@ impl DoremiApp {
         model.revision += 1;
     }
     pub(super) fn can_go_back(&self) -> bool {
-        self.model
-            .as_ref()
-            .is_some_and(|model| model.page != Page::Home)
+        self.model.as_ref().is_some_and(|model| {
+            if model.page != Page::Home {
+                return true;
+            }
+            #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+            {
+                model.music.home_root() && model.music.has_back()
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "android")))]
+            {
+                false
+            }
+        })
+    }
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+    pub(super) fn catalog_back(&mut self) {
+        self.model.as_mut().unwrap().music.back();
+        if self.model.as_ref().unwrap().music.home_root() {
+            self.navigate(Page::Home);
+        }
     }
     pub(super) fn go_back(&mut self) {
         let model = self.model.as_mut().unwrap();
@@ -37,9 +63,11 @@ impl DoremiApp {
             return;
         }
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        if model.page == Page::Search && model.music.selected && model.music.has_back() {
-            model.music.back();
-            model.revision += 1;
+        if (model.page == Page::Search || model.page == Page::Home && model.music.home_root())
+            && model.music.selected
+            && model.music.has_back()
+        {
+            self.catalog_back();
             return;
         }
         if model.page == Page::Playlist {

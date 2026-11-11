@@ -480,6 +480,7 @@ impl DoremiApp {
             if self.button(ui, "youtube-signout", "Cerrar sesión", 220.0) {
                 let model = self.model.as_mut().unwrap();
                 model.command(Command::Cancel);
+                model.music.forget_home();
                 model.music.cancel();
                 model.music.session.disconnect();
             }
@@ -511,8 +512,13 @@ impl DoremiApp {
                 ),
             ] {
                 if self.button(ui, name, label, 280.0) {
-                    self.model.as_mut().unwrap().music.youtube_page(request);
-                    self.navigate(Page::Search);
+                    let destination = if request == doremi_youtube::Request::Home {
+                        Page::Home
+                    } else {
+                        Page::Search
+                    };
+                    self.model.as_mut().unwrap().youtube_page(request);
+                    self.navigate(destination);
                 }
             }
         } else {
@@ -609,7 +615,9 @@ impl DoremiApp {
                     260.0,
                 )
             {
-                self.model.as_mut().unwrap().music.session.disconnect();
+                let model = self.model.as_mut().unwrap();
+                model.music.forget_home();
+                model.music.session.disconnect();
             }
         }
     }

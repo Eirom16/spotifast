@@ -71,7 +71,9 @@ pub fn parse_page(response: &Value) -> Page {
     let mut page = Page::default();
     collect(response, &mut page);
     page.sections.retain(|s| !s.items.is_empty());
-    page.continuation = playlist_continuation(response).or_else(|| continuation(response));
+    page.continuation = page_continuation(response)
+        .or_else(|| playlist_continuation(response))
+        .or_else(|| continuation(response));
     page
 }
 
@@ -486,5 +488,43 @@ fn playlist_continuation(node: &Value) -> Option<String> {
             .or_else(|| map.values().find_map(playlist_continuation)),
         Value::Array(list) => list.iter().find_map(playlist_continuation),
         _ => None,
+    }
+}
+
+// A home feed can contain a paged shelf of its own. Its token must not replace
+// the token belonging to the complete section list displayed by the host.
+fn page_continuation(node: &Value) -> Option<String> {
+    match node {
+        Value::Object(map) => {
+            for key in ["sectionListRenderer", "sectionListContinuation"] {
+                if let Some(list) = map.get(key)
+                    && let Some(token) = continuation(&list["continuations"])
+                {
+                    return Some(token);
+                }
+            }
+            map.values().find_map(page_continuation)
+        }
+        Value::Array(list) => list.iter().find_map(page_continuation),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn a_whole_home_page_continuation_takes_priority_over_a_nested_playlist_shelf() {
+        let shelf = json!({"musicPlaylistShelfRenderer":{"contents":[],"continuations":[{"nextContinuationData":{"continuation":"shelf-token"}}]}});
+        let response = json!({"contents":{"sectionListRenderer":{"contents":[shelf.clone()],"continuations":[{"nextContinuationData":{"continuation":"home-token"}}]}}});
+        assert_eq!(
+            parse_page(&response).continuation.as_deref(),
+            Some("home-token")
+        );
+        assert_eq!(
+            parse_page(&shelf).continuation.as_deref(),
+            Some("shelf-token")
+        );
     }
 }

@@ -88,6 +88,28 @@ pub extern "system" fn native_init(
     if let Ok(class) = env.new_global_ref(class) {
         ACTIVITY_CLASS.get_or_init(|| class);
     }
+    // The normal private profile starts the musical home. QA profiles remain
+    // offline until a test explicitly selects a remote catalog.
+    let normal_profile = (|| -> jni::errors::Result<PathBuf> {
+        let files = env
+            .call_method(
+                APPLICATION.get().unwrap().as_obj(),
+                "getFilesDir",
+                "()Ljava/io/File;",
+                &[],
+            )?
+            .l()?;
+        let path = env
+            .call_method(&files, "getAbsolutePath", "()Ljava/lang/String;", &[])?
+            .l()?;
+        let path = JString::from(path);
+        Ok(PathBuf::from(String::from(env.get_string(&path)?)))
+    })()
+    .ok()
+    .is_some_and(|normal| normal == directory);
+    if env.exception_check().unwrap_or(false) {
+        let _ = env.exception_clear();
+    }
     RENDERER.with(|cell| {
         if cell.borrow().is_some() {
             return 1;
@@ -110,6 +132,12 @@ pub extern "system" fn native_init(
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory);
         app.model.as_mut().unwrap().music.session.restore();
+        if normal_profile && !app.model.as_ref().unwrap().music.home_started() {
+            app.model
+                .as_mut()
+                .unwrap()
+                .youtube_page(doremi_youtube::Request::Home);
+        }
         *cell.borrow_mut() = Some(Renderer {
             ctx,
             app,
