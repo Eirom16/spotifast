@@ -167,6 +167,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-youtube --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # Exercise the native store with synthetic entries only. The normal
+          # suite intentionally leaves these environment-dependent tests ignored.
+          cargo test --locked -p doremi-youtube --lib credentials::tests:: -- --ignored --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo clippy --locked -p doremi-youtube --all-targets -- -D warnings
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked -p doremi-musicbrainz --all-targets
