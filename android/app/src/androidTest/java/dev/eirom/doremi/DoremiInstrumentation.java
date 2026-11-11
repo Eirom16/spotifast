@@ -960,7 +960,8 @@ public final class DoremiInstrumentation extends Instrumentation {
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
             if("youtube-auth-policy".equals(mode)) {
-                youtubeAuthPolicy();finish(0,result);return;
+                youtubeAuthPolicy();
+                result.putString("stream","PASS: isolated YouTube authentication host and allowed navigation; no real account authorization\n");finish(Activity.RESULT_OK,result);return;
             }
             if("session-store-write".equals(mode) || "session-store-restore".equals(mode)) {
                 youtubeSessionStore("session-store-restore".equals(mode));
