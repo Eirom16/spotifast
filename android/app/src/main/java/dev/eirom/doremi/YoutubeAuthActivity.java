@@ -20,7 +20,6 @@ public final class YoutubeAuthActivity extends Activity {
     static final String COOKIE="dev.eirom.doremi.auth.cookie";
     static final String STATUS="dev.eirom.doremi.auth.status";
     private static final String MUSIC="https://music.youtube.com/";
-    private static final String LOGIN="https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
     private final Handler handler=new Handler(Looper.getMainLooper());
     private WebView browser;
     private boolean completed=false;
@@ -93,9 +92,14 @@ public final class YoutubeAuthActivity extends Activity {
             setContentView(browser);
             CookieManager cookies=CookieManager.getInstance();
             cookies.setAcceptCookie(true);
-            cookies.setAcceptThirdPartyCookies(browser,false);
+            // The temporary sign-in crosses Google and YouTube origins. Use
+            // WebView's normal per-view cookie policy; destroy and wipe this
+            // isolated browser after the result. Never override storage APIs.
+            cookies.setAcceptThirdPartyCookies(browser,true);
             cookies.removeAllCookies(removed -> {
-                if(!completed && browser!=null) {browser.loadUrl(LOGIN);handler.post(poll);}
+                // Let YouTube Music initiate its own account/return flow, as
+                // Doremi-Rust does, instead of constructing a Google login URL.
+                if(!completed && browser!=null) {browser.loadUrl(MUSIC);handler.post(poll);}
             });
         } catch(RuntimeException unavailable) {complete("",4);}
     }

@@ -20,7 +20,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
-const LOGIN: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
+const LOGIN: &str = crate::embedded::LOGIN_URL;
 const POLL: Duration = Duration::from_secs(1);
 /// Tubefast accepts a session that stays visible across several polls even
 /// when Google's LOGIN_INFO marker is not exposed through this extension API.

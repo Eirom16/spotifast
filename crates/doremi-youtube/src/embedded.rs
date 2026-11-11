@@ -14,7 +14,9 @@ use std::{
     time::{Duration, Instant},
 };
 const MAX_FRAME: usize = 128 * 1024;
-pub const LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fmusic.youtube.com%2F";
+// Start with the service so it owns Google's sign-in and return parameters.
+// This is the entry point used by Doremi-Rust's working cookie-capture flow.
+pub const LOGIN_URL: &str = "https://music.youtube.com/";
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
