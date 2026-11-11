@@ -117,11 +117,9 @@ fn consent(
                 *control = ControlFlow::Exit;
                 return;
             }
-            if webview
-                .url()
-                .ok()
-                .is_some_and(|url| url.starts_with("https://music.youtube.com/"))
-                && let Ok(cookies) = webview.cookies_for_url(doremi_youtube::ORIGIN)
+            // Read only the service's cookies even if Google's confirmation
+            // page has not navigated away. Account verification stays in Rust.
+            if let Ok(cookies) = webview.cookies_for_url(doremi_youtube::ORIGIN)
                 && let Some(cookie) = session_cookie(
                     cookies
                         .into_iter()

@@ -945,9 +945,13 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(YoutubeAuthActivity.allowed(url)) throw new AssertionError("Unexpected authentication navigation allowed");
         if(!YoutubeAuthActivity.denied("https://accounts.google.com/v3/signin/rejected?error=disallowed_useragent") || YoutubeAuthActivity.denied("https://music.youtube.com/"))
             throw new AssertionError("Provider refusal was not distinguished");
+        if(YoutubeAuthActivity.sessionReady(null) || YoutubeAuthActivity.sessionReady("SAPISID=anonymous") || YoutubeAuthActivity.sessionReady("LOGIN_INFO=marker-only") || YoutubeAuthActivity.sessionReady("LOGIN_INFO=; SAPISID=fixture"))
+            throw new AssertionError("Incomplete service cookies ended authentication");
+        if(!YoutubeAuthActivity.sessionReady("LOGIN_INFO=fixture; SAPISID=synthetic") || !YoutubeAuthActivity.sessionReady("LOGIN_INFO=fixture; __Secure-3PAPISID=synthetic"))
+            throw new AssertionError("Complete service cookies require an unrelated page navigation");
         android.content.pm.ActivityInfo info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),YoutubeAuthActivity.class),0);
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
-        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).put("cookie_capture_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     @Override public void onStart() {
         Bundle result=new Bundle();

@@ -28,17 +28,21 @@ public final class YoutubeAuthActivity extends Activity {
     private final Runnable poll=new Runnable() {
         @Override public void run() {
             if(completed || browser==null) return;
-            String current=browser.getUrl();
-            if(current!=null && "https".equals(Uri.parse(current).getScheme()) && "music.youtube.com".equals(Uri.parse(current).getHost())) {
-                String cookie=CookieManager.getInstance().getCookie(MUSIC);
-                if(cookie!=null && cookie.length()>65536) {complete("",5);return;}
-                if(cookie!=null && has(cookie,"LOGIN_INFO") && (has(cookie,"SAPISID") || has(cookie,"__Secure-3PAPISID"))) {
-                    complete(cookie,0);return;
-                }
+            // Google may leave its confirmation page visible after setting
+            // the service cookies. Query only Music's origin, independently
+            // of the visible page; Rust still verifies the musical account.
+            String cookie=CookieManager.getInstance().getCookie(MUSIC);
+            if(cookie!=null && cookie.length()>65536) {complete("",5);return;}
+            if(sessionReady(cookie)) {
+                complete(cookie,0);return;
             }
             handler.postDelayed(this,500);
         }
     };
+    static boolean sessionReady(String cookie) {
+        return cookie!=null && cookie.length()<=65536 && has(cookie,"LOGIN_INFO") &&
+            (has(cookie,"SAPISID") || has(cookie,"__Secure-3PAPISID"));
+    }
     private static boolean has(String cookie,String name) {
         for(String pair:cookie.split(";")) if(pair.trim().startsWith(name+"=") && pair.trim().length()>name.length()+1) return true;
         return false;
