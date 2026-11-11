@@ -429,20 +429,24 @@ impl DoremiApp {
                     || entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
             })
             .map(|entry| entry.media.id.clone());
-        let url = detail.as_ref().and_then(|id| {
-            model
-                .music
-                .session
-                .client
-                .try_lock()
-                .ok()
-                .and_then(|client| {
-                    client
-                        .as_ref()
-                        .and_then(|client| client.as_ref().ok())
-                        .and_then(|client| client.thumbnail(id))
-                })
-        });
+        let url = if let Some(id) = detail
+            .as_ref()
+            .filter(|id| id.provider.as_str() == doremi_youtube::PROVIDER)
+        {
+            match youtube_detail_url(&model.music.session.client, id, model.music.waiting) {
+                std::task::Poll::Ready(url) => url,
+                std::task::Poll::Pending => {
+                    // A catalog request owns the shared client until its
+                    // metadata arrives. That is not a missing/refused image:
+                    // do not send a URL-less YouTube ID to Cover Art Archive
+                    // and poison the image cooldown before the browse ends.
+                    ctx.request_repaint_after(Duration::from_millis(50));
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let thumbnail = model.artwork.next_thumbnail();
         let (id, url) = if detail.as_ref().is_some_and(|id| {
             id.provider.as_str() != doremi_youtube::PROVIDER || model.artwork.needs_thumbnail(id)
@@ -463,9 +467,42 @@ impl DoremiApp {
     }
 }
 
+fn youtube_detail_url(
+    client: &super::youtube_session::SharedClient,
+    id: &MediaId,
+    metadata_waiting: bool,
+) -> std::task::Poll<Option<String>> {
+    let Ok(client) = client.try_lock() else {
+        return std::task::Poll::Pending;
+    };
+    let url = client
+        .as_ref()
+        .and_then(|client| client.as_ref().ok())
+        .and_then(|client| client.thumbnail(id));
+    if url.is_none() && metadata_waiting {
+        std::task::Poll::Pending
+    } else {
+        std::task::Poll::Ready(url)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browsing_keeps_an_unknown_hero_source_pending_without_blocking_the_ui() {
+        let client = Arc::new(tokio::sync::Mutex::new(None));
+        let id = doremi_youtube::id("MPREfixture").unwrap();
+        let catalog_guard = client.try_lock().unwrap();
+        assert!(youtube_detail_url(&client, &id, false).is_pending());
+        drop(catalog_guard);
+        assert!(youtube_detail_url(&client, &id, true).is_pending());
+        assert_eq!(
+            youtube_detail_url(&client, &id, false),
+            std::task::Poll::Ready(None),
+            "Only completed metadata can establish that no thumbnail is known"
+        );
+    }
     fn id(value: &str) -> MediaId {
         MediaId::new(ProviderId::new("musicbrainz").unwrap(), value).unwrap()
     }
