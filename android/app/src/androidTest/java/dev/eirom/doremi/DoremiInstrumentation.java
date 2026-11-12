@@ -953,6 +953,13 @@ public final class DoremiInstrumentation extends Instrumentation {
                 throw new AssertionError("Official regional cookie bridge rejected");
             if(YoutubeAuthActivity.allowed(origin+"/search") || YoutubeAuthActivity.allowed(origin+".attacker.invalid/accounts/SetSID"))
                 throw new AssertionError("Regional navigation escaped authentication scope");
+            if(!YoutubeAuthActivity.allowed("https://accounts"+domain+"/accounts/SetSID") ||
+                YoutubeAuthActivity.allowed("https://accounts"+domain+".attacker.invalid/accounts/SetSID") ||
+                YoutubeAuthActivity.allowed("http://accounts"+domain+"/accounts/SetSID") ||
+                YoutubeAuthActivity.allowed("https://user@accounts"+domain+"/accounts/SetSID"))
+                throw new AssertionError("Regional Google account origin was not validated");
+            if(!YoutubeAuthActivity.denied("https://accounts"+domain+"/v3/signin/rejected?error=disallowed_useragent"))
+                throw new AssertionError("Regional provider refusal was ignored");
         }
         String context="{\"visitor_data\":\"synthetic-visitor\",\"data_sync_id\":\"synthetic-channel||synthetic-account\",\"auth_user\":\"1\"}";
         for(String cookie:new String[]{null,"SID=anonymous","LOGIN_INFO=marker-only","SAPISID="})

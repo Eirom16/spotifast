@@ -26,6 +26,8 @@
   host y Clippy estricto aprobados. Samsung: 12 guardas de captura, 6 de intents y
   Keystore con contexto tras reinicio aprobados. En `2b0b628` se confirmó que el
   regreso fue por una redirección rechazada antes de Music, sin sesión capturada.
+  En `f7a2c67` el dominio rechazado fue `accounts.google.com.do`: el ajuste cubría
+  `www` regional pero omitía `accounts`. Se corrige para los dominios oficiales.
   Ajuste Android: puentes de cookies en dominios regionales oficiales de Google y
   diagnóstico del dominio rechazado, sin rutas, parámetros ni credenciales.
   Pendiente prueba real; sin datos personales validados.

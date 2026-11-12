@@ -58,11 +58,14 @@ public final class YoutubeAuthActivity extends Activity {
     }
     private static String site(String value) {
         String host=value==null?null:Uri.parse(value).getHost();
-        if("accounts.google.com".equals(host)) return "google_account";
+        if(googleAccountHost(host)) return "google_account";
         if(host!=null && host.startsWith("www.") && GOOGLE_DOMAINS.contains("."+host.substring(4))) return "google_cookie_bridge";
         if("music.youtube.com".equals(host)) return "music";
         if("accounts.youtube.com".equals(host)) return "youtube_account";
         return "other";
+    }
+    private static boolean googleAccountHost(String host) {
+        return host!=null && host.startsWith("accounts.") && GOOGLE_DOMAINS.contains("."+host.substring(9));
     }
     private final Runnable timeout=() -> complete("",2);
     private final Runnable poll=new Runnable() {
@@ -157,6 +160,7 @@ public final class YoutubeAuthActivity extends Activity {
     static boolean allowed(String value) {
         Uri uri=Uri.parse(value);String host=uri.getHost();
         if(!"https".equals(uri.getScheme()) || uri.getPort()!=-1 || uri.getUserInfo()!=null || host==null) return false;
+        if(googleAccountHost(host)) return true;
         if(host.startsWith("www.") && GOOGLE_DOMAINS.contains("."+host.substring(4))) {
             String path=uri.getPath();
             return path!=null && (path.startsWith("/accounts/") || path.equals("/CheckCookie"));
@@ -166,7 +170,7 @@ public final class YoutubeAuthActivity extends Activity {
     }
     static boolean denied(String value) {
         Uri uri=Uri.parse(value);
-        return "accounts.google.com".equals(uri.getHost()) &&
+        return googleAccountHost(uri.getHost()) &&
             ((uri.getPath()!=null && uri.getPath().contains("/signin/rejected")) ||
              "disallowed_useragent".equals(uri.getQueryParameter("error")) || "access_denied".equals(uri.getQueryParameter("error")));
     }
