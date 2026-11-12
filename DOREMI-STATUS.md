@@ -4,10 +4,10 @@
 - Catálogo principal YouTube Music nativo, adaptado de Tubefast MIT: búsqueda,
   artistas, álbumes, playlists e inicio con secciones reales. MusicBrainz opcional.
   Sin equivalencias ocultas de títulos o IDs entre proveedores.
-- CI `43153015512`, commit `224aab7`: APK y hosts Doremi Linux/Windows aprobados,
+- CI `43155656686`, commit `2b0b628`: APK y hosts Doremi Linux/Windows aprobados,
   incluido auxiliar de autenticación, licencias, versión y checksums verificados.
   CI general de ese commit aún en curso; anterior `43123455939` completa en verde.
-- APK `224aab7` instalada sin borrar datos en Samsung ARMv7: aislamiento y cancelación
+- APK `2b0b628` instalada sin borrar datos en Samsung ARMv7: aislamiento y cancelación
   del login comprobados. Inicio con 30 elementos, carátulas y buscador superior con
   teclado comprobados en `4f4e49e`, en ambos temas. Biblioteca conserva su hash.
   Navegación Linux real: 20 canciones, artista con 59 elementos, álbum con 18 pistas
@@ -24,9 +24,11 @@
   El mismo cliente Rust valida cuenta, catálogo y biblioteca y conserva el contexto
   en el almacén protegido. Local: 21 tests YouTube, incluido llavero nativo, 50 del
   host y Clippy estricto aprobados. Samsung: 12 guardas de captura, 6 de intents y
-  Keystore con contexto tras reinicio aprobados. Próximo ajuste: rutas Google de
-  enlace de cookies, errores de navegación visibles y diagnóstico acotado sin URLs
-  ni credenciales; causa del atasco aún no confirmada. Sin datos personales validados.
+  Keystore con contexto tras reinicio aprobados. En `2b0b628` se confirmó que el
+  regreso fue por una redirección rechazada antes de Music, sin sesión capturada.
+  Ajuste Android: puentes de cookies en dominios regionales oficiales de Google y
+  diagnóstico del dominio rechazado, sin rutas, parámetros ni credenciales.
+  Pendiente prueba real; sin datos personales validados.
 - CachyOS: bundle `224aab7` instalado con acceso directo y auxiliar verificados;
   versiones anteriores y perfiles conservados. Cancelación y retiro de los
   procesos del navegador comprobados desde la instalación.

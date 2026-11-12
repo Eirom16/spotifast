@@ -947,6 +947,13 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(YoutubeAuthActivity.allowed(url)) throw new AssertionError("Unexpected authentication navigation allowed");
         if(!YoutubeAuthActivity.denied("https://accounts.google.com/v3/signin/rejected?error=disallowed_useragent") || YoutubeAuthActivity.denied("https://music.youtube.com/"))
             throw new AssertionError("Provider refusal was not distinguished");
+        for(String domain:YoutubeAuthActivity.GOOGLE_DOMAINS) {
+            String origin="https://www"+domain;
+            if(!YoutubeAuthActivity.allowed(origin+"/accounts/SetSID") || !YoutubeAuthActivity.allowed(origin+"/accounts/CheckCookie"))
+                throw new AssertionError("Official regional cookie bridge rejected");
+            if(YoutubeAuthActivity.allowed(origin+"/search") || YoutubeAuthActivity.allowed(origin+".attacker.invalid/accounts/SetSID"))
+                throw new AssertionError("Regional navigation escaped authentication scope");
+        }
         String context="{\"visitor_data\":\"synthetic-visitor\",\"data_sync_id\":\"synthetic-channel||synthetic-account\",\"auth_user\":\"1\"}";
         for(String cookie:new String[]{null,"SID=anonymous","LOGIN_INFO=marker-only","SAPISID="})
             if(YoutubeAuthActivity.sessionDocument(cookie,context)!=null) throw new AssertionError("Incomplete service cookies ended authentication");
@@ -970,7 +977,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(YoutubeAuthActivity.authIntent("https://attacker.invalid/",handoff)!=null) throw new AssertionError("Untrusted page initiated Google handoff");
         android.content.pm.ActivityInfo info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),YoutubeAuthActivity.class),0);
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
-        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",15).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",15).put("google_regions_checked",YoutubeAuthActivity.GOOGLE_DOMAINS.size()).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     @Override public void onStart() {
         Bundle result=new Bundle();

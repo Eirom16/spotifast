@@ -22,6 +22,26 @@ public final class YoutubeAuthActivity extends Activity {
     static final String STATUS="dev.eirom.doremi.auth.status";
     private static final String MUSIC="https://music.youtube.com/";
     private static final String LOGIN="https://accounts.google.com/ServiceLogin?continue=https%3A%2F%2Fmusic.youtube.com";
+    // Google-owned cookie-bridge domains: https://www.google.com/supported_domains
+    // Snapshot 2026-11-12; never infer ownership from a google.* prefix.
+    static final java.util.Set<String> GOOGLE_DOMAINS=java.util.Collections.unmodifiableSet(new java.util.HashSet<>(java.util.Arrays.asList((
+        ".google.com .google.ad .google.ae .google.com.af .google.com.ag .google.al .google.am .google.co.ao .google.com.ar .google.as .google.at .google.com.au "
+        + ".google.az .google.ba .google.com.bd .google.be .google.bf .google.bg .google.com.bh .google.bi .google.bj .google.com.bn .google.com.bo .google.com.br "
+        + ".google.bs .google.bt .google.co.bw .google.by .google.com.bz .google.ca .google.cd .google.cf .google.cg .google.ch .google.ci .google.co.ck "
+        + ".google.cl .google.cm .google.cn .google.com.co .google.co.cr .google.com.cu .google.cv .google.com.cy .google.cz .google.de .google.dj .google.dk "
+        + ".google.dm .google.com.do .google.dz .google.com.ec .google.ee .google.com.eg .google.es .google.com.et .google.fi .google.com.fj .google.fm .google.fr "
+        + ".google.ga .google.ge .google.gg .google.com.gh .google.com.gi .google.gl .google.gm .google.gr .google.com.gt .google.gy .google.com.hk .google.hn "
+        + ".google.hr .google.ht .google.hu .google.co.id .google.ie .google.co.il .google.im .google.co.in .google.iq .google.is .google.it .google.je "
+        + ".google.com.jm .google.jo .google.co.jp .google.co.ke .google.com.kh .google.ki .google.kg .google.co.kr .google.com.kw .google.kz .google.la .google.com.lb "
+        + ".google.li .google.lk .google.co.ls .google.lt .google.lu .google.lv .google.com.ly .google.co.ma .google.md .google.me .google.mg .google.mk "
+        + ".google.ml .google.com.mm .google.mn .google.com.mt .google.mu .google.mv .google.mw .google.com.mx .google.com.my .google.co.mz .google.com.na .google.com.ng "
+        + ".google.com.ni .google.ne .google.nl .google.no .google.com.np .google.nr .google.nu .google.co.nz .google.com.om .google.com.pa .google.com.pe .google.com.pg "
+        + ".google.com.ph .google.com.pk .google.pl .google.pn .google.com.pr .google.ps .google.pt .google.com.py .google.com.qa .google.ro .google.ru .google.rw "
+        + ".google.com.sa .google.com.sb .google.sc .google.se .google.com.sg .google.sh .google.si .google.sk .google.com.sl .google.sn .google.so .google.sm "
+        + ".google.sr .google.st .google.com.sv .google.td .google.tg .google.co.th .google.com.tj .google.tl .google.tm .google.tn .google.to .google.com.tr "
+        + ".google.tt .google.com.tw .google.co.tz .google.com.ua .google.co.ug .google.co.uk .google.com.uy .google.co.uz .google.com.vc .google.co.ve .google.co.vi .google.com.vn "
+        + ".google.vu .google.ws .google.rs .google.co.za .google.co.zm .google.co.zw .google.cat"
+    ).split(" "))));
     private final Handler handler=new Handler(Looper.getMainLooper());
     private WebView browser;
     private boolean completed=false;
@@ -32,13 +52,14 @@ public final class YoutubeAuthActivity extends Activity {
     private int traceCount=0;
     private Boolean observedSession;
     private void trace(String event) {
-        // Fixed categories/codes only: never page text, URLs or credentials.
+        // Categories/codes and a rejected hostname only. No page text, full
+        // URLs, signed parameters or credentials.
         if(traceCount++<64) android.util.Log.i("DoremiAuth",event);
     }
     private static String site(String value) {
         String host=value==null?null:Uri.parse(value).getHost();
         if("accounts.google.com".equals(host)) return "google_account";
-        if("www.google.com".equals(host)) return "google_cookie_bridge";
+        if(host!=null && host.startsWith("www.") && GOOGLE_DOMAINS.contains("."+host.substring(4))) return "google_cookie_bridge";
         if("music.youtube.com".equals(host)) return "music";
         if("accounts.youtube.com".equals(host)) return "youtube_account";
         return "other";
@@ -136,7 +157,7 @@ public final class YoutubeAuthActivity extends Activity {
     static boolean allowed(String value) {
         Uri uri=Uri.parse(value);String host=uri.getHost();
         if(!"https".equals(uri.getScheme()) || uri.getPort()!=-1 || uri.getUserInfo()!=null || host==null) return false;
-        if("www.google.com".equals(host)) {
+        if(host.startsWith("www.") && GOOGLE_DOMAINS.contains("."+host.substring(4))) {
             String path=uri.getPath();
             return path!=null && (path.startsWith("/accounts/") || path.equals("/CheckCookie"));
         }
@@ -182,7 +203,16 @@ public final class YoutubeAuthActivity extends Activity {
                     if(!request.isForMainFrame()) return false;
                     String url=request.getUrl().toString();
                     if(denied(url)) {complete("",3);return true;}
-                    if(!allowed(url)) {trace("navigation_rejected:"+site(url));complete("",4);return true;}
+                    if(!allowed(url)) {
+                        trace("navigation_rejected:"+site(url));
+                        Uri target=request.getUrl();String host=target.getHost(),scheme=target.getScheme();
+                        // Origin metadata only. Never include path, query, userinfo,
+                        // fragments, error descriptions or the complete URL.
+                        if(host==null || !host.matches("[A-Za-z0-9.-]{1,253}")) host="none";
+                        if(!java.util.Arrays.asList("https","http","about","data").contains(scheme)) scheme="custom";
+                        trace("rejected_authority:"+scheme+":"+host+":"+target.getPort());
+                        complete("",4);return true;
+                    }
                     return false;
                 }
                 @Override public void onPageFinished(WebView view,String url) {
