@@ -1,6 +1,7 @@
 //! Single-attempt native media resolution and bounded HTTP range input.
-//! Uses Tubefast's pinned primary player client, without its client rotation,
-//! visitor retries, signature deciphering or content-check overrides.
+//! Signed-in playback uses the same WEB_REMIX client as the musical account
+//! and library; guest playback retains Tubefast's primary player client.
+//! A refusal never causes client rotation, guest retries or content overrides.
 use crate::{Client, Error, PROVIDER, id};
 use doremi_core::media::MediaId;
 use reqwest::{Url, redirect::Policy};
@@ -15,6 +16,7 @@ const CHUNK: usize = 64 * 1024;
 /// Ephemeral, non-serializable grant. Its transport URL is never a media ID.
 pub struct Stream {
     url: String,
+    user_agent: &'static str,
     length: u64,
     expires: Instant,
     pub duration_ms: u64,
@@ -31,7 +33,7 @@ impl Stream {
             .redirect(Policy::none())
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(6))
-            .user_agent(UA)
+            .user_agent(self.user_agent)
             .build()
             .map_err(|_| Error::Transport)?;
         Ok(Reader {
@@ -52,10 +54,18 @@ impl Client {
         {
             return Err(Error::InvalidRequest);
         }
-        let mut body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local()});
-        if let Some(session) = &self.session {
-            session.context(&mut body["context"]);
+        if self.signed_in() {
+            // VISIONOS is a guest client in the reference implementation.
+            // Verify expiry, then use the account's Music client and identity.
+            self.account().await?;
+            let value = self
+                .post("player", json!({"videoId":media.local()}))
+                .await?;
+            let mut stream = parse(media, &value)?;
+            stream.user_agent = crate::USER_AGENT;
+            return Ok(stream);
         }
+        let body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local()});
         let request = self
             .http
             .post(PLAYER)
@@ -155,6 +165,7 @@ fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
         .clamp(1, 6 * 3600);
     Ok(Stream {
         url: uri.into(),
+        user_agent: UA,
         length,
         expires: Instant::now() + Duration::from_secs(seconds),
         duration_ms,
@@ -260,6 +271,73 @@ mod tests {
     fn response() -> Value {
         json!({"playabilityStatus":{"status":"OK"},"videoDetails":{"videoId":"abcdefghijk","lengthSeconds":"180"},"streamingData":{"expiresInSeconds":"600","adaptiveFormats":[{"mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","contentLength":"100000","url":"https://r1.googlevideo.com/videoplayback?expire=123&token=fixture"}]}})
     }
+    #[tokio::test]
+    async fn authenticated_playback_uses_music_identity_and_never_falls_back_after_refusal() {
+        use crate::protocol_tests::{account, server};
+        for denied in [false, true] {
+            let mut player = response();
+            player["responseContext"] = json!({});
+            let (base, server) = server(vec![
+                (200, account()),
+                (200, account()),
+                (if denied { 403 } else { 200 }, player),
+            ])
+            .await;
+            let mut client = Client::new().unwrap();
+            client.base = base;
+            let session = json!({"schema":1,"cookie":"SAPISID=fixture-only","visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"});
+            client.sign_in(session.to_string()).await.unwrap();
+            let result = client.resolve(&id("abcdefghijk").unwrap()).await;
+            if denied {
+                assert!(matches!(result, Err(Error::AccessDenied)));
+            } else {
+                let grant = result.unwrap();
+                assert_eq!(grant.length(), 100000);
+                assert_eq!(grant.user_agent, crate::USER_AGENT);
+            }
+            assert!(
+                client.signed_in(),
+                "A content refusal is not session expiry"
+            );
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[2].starts_with("POST /player?"));
+            let headers = requests[2]
+                .split("\r\n\r\n")
+                .next()
+                .unwrap()
+                .to_ascii_lowercase();
+            assert!(headers.contains("x-youtube-client-name: 67"));
+            assert!(headers.contains("cookie: sapisid=fixture-only"));
+            assert!(headers.contains("x-goog-authuser: 1"));
+            assert!(headers.contains("x-goog-visitor-id: fixture-visitor"));
+            let body: Value =
+                serde_json::from_str(requests[2].split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(body["context"]["client"]["clientName"], "WEB_REMIX");
+            assert_eq!(body["context"]["user"]["onBehalfOfUser"], "fixture-channel");
+            assert_eq!(body["videoId"], "abcdefghijk");
+        }
+    }
+    #[tokio::test]
+    async fn expired_music_sessions_stop_before_any_player_request() {
+        use crate::protocol_tests::{account, server};
+        let (base, server) = server(vec![(200, account()), (403, json!({}))]).await;
+        let mut client = Client::new().unwrap();
+        client.base = base;
+        client.sign_in("SAPISID=fixture-only".into()).await.unwrap();
+        assert!(matches!(
+            client.resolve(&id("abcdefghijk").unwrap()).await,
+            Err(Error::AccessDenied)
+        ));
+        assert!(!client.signed_in());
+        let requests = server.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.starts_with("POST /account/account_menu?"))
+        );
+    }
     #[test]
     fn rejects_denials_drm_ciphers_and_wrong_media_identity() {
         let media = id("abcdefghijk").unwrap();
@@ -310,12 +388,13 @@ mod range_tests {
                     request.push(byte[0]);
                     assert!(request.len() < 8192);
                 }
-                assert!(
-                    String::from_utf8(request)
-                        .unwrap()
-                        .to_ascii_lowercase()
-                        .contains(&format!("range: bytes={start}-{end}"))
-                );
+                let headers = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(headers.contains(&format!("range: bytes={start}-{end}")));
+                assert!(headers.contains(&format!(
+                    "user-agent: {}",
+                    crate::USER_AGENT.to_ascii_lowercase()
+                )));
+                assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
                 use std::io::Write;
                 write!(socket,"HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{length}\r\nConnection: close\r\n\r\n",end-start+1).unwrap();
                 let data: Vec<_> = (start..=end).map(|i| (i % 251) as u8).collect();
@@ -328,6 +407,7 @@ mod range_tests {
         let signal = cancel.clone();
         let grant = Stream {
             url: format!("http://{address}/fixture"),
+            user_agent: crate::USER_AGENT,
             length: length as u64,
             expires: Instant::now() + Duration::from_secs(10),
             duration_ms: 60_000,

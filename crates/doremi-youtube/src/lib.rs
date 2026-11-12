@@ -22,6 +22,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 pub const ORIGIN: &str = "https://music.youtube.com";
 const VERSION: &str = "1.20260707.12.00";
+const USER_AGENT: &str = "Mozilla/5.0 Doremi/0.1.0";
 const MAX_BYTES: usize = 4 * 1024 * 1024;
 pub const PROVIDER: &str = "youtube-music";
 
@@ -107,7 +108,7 @@ pub struct Client {
 impl Client {
     pub fn new() -> Result<Self, Error> {
         let http = Http::builder()
-            .user_agent("Mozilla/5.0 Doremi/0.1.0")
+            .user_agent(USER_AGENT)
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(15))
             .redirect(Policy::none())
@@ -471,7 +472,7 @@ pub async fn artwork(url: &str) -> Result<Vec<u8>, Error> {
 mod protocol_tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    async fn server(
+    pub(super) async fn server(
         responses: Vec<(u16, Value)>,
     ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -510,7 +511,7 @@ mod protocol_tests {
         });
         (base, task)
     }
-    fn account() -> Value {
+    pub(super) fn account() -> Value {
         json!({"responseContext":{},"actions":[{"activeAccountHeaderRenderer":{"accountName":{"runs":[{"text":"Fixture account"}]}}}]})
     }
     #[tokio::test]
