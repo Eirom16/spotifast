@@ -174,7 +174,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `libc` | `0.2` |
 | `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `zbus-secret-service-keyring-store` | `features=['rt-tokio-crypto-rust']; version=1.0.1` |
 | `crates/doremi-youtube/cfg(target_os = "windows"): dependencies` | `windows-native-keyring-store` | `default-features=False; version=1.1` |
-| `crates/doremi-youtube/cfg(target_os = "windows"): dependencies` | `windows-sys` | `features=['Win32_Foundation', 'Win32_System_JobObjects', 'Win32_System_Threading', 'Win32_Security']; version=0.61` |
+| `crates/doremi-youtube/cfg(target_os = "windows"): dependencies` | `windows-sys` | `features=['Win32_Foundation', 'Win32_System_JobObjects', 'Win32_System_Threading', 'Win32_Security', 'Win32_Security_Credentials']; version=0.61` |
 
 ## Fuentes transitivas bloqueadas
 

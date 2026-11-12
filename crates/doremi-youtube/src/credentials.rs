@@ -3,6 +3,9 @@ use doremi_core::catalog::ProviderError as Error;
 use keyring_core::api::CredentialStoreApi;
 const SERVICE: &str = "dev.eirom.doremi.youtube-music";
 const USER: &str = "session-v1";
+#[cfg(target_os = "windows")]
+mod windows_chunks;
+#[cfg(target_os = "linux")]
 fn entry() -> Result<keyring_core::Entry, Error> {
     entry_for(USER)
 }
@@ -20,6 +23,11 @@ fn entry_at(service: &str, user: &str) -> Result<keyring_core::Entry, Error> {
         .map_err(|_| Error::Unavailable)
 }
 pub fn load() -> Result<Option<String>, Error> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_chunks::load_for(USER)
+    }
+    #[cfg(target_os = "linux")]
     match entry()?.get_secret() {
         Ok(bytes) => String::from_utf8(bytes)
             .map(Some)
@@ -29,11 +37,21 @@ pub fn load() -> Result<Option<String>, Error> {
     }
 }
 pub fn store(cookie: &str) -> Result<(), Error> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_chunks::store_for(USER, cookie)
+    }
+    #[cfg(target_os = "linux")]
     entry()?
         .set_secret(cookie.as_bytes())
         .map_err(|_| Error::Unavailable)
 }
 pub fn forget() -> Result<(), Error> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_chunks::forget_for(USER)
+    }
+    #[cfg(target_os = "linux")]
     match entry()?.delete_credential() {
         Ok(()) | Err(keyring_core::Error::NoEntry) => Ok(()),
         Err(_) => Err(Error::Unavailable),
@@ -77,6 +95,79 @@ fn windows_legacy_headers(service: &str, user: &str) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "requires a native Windows vault; synthetic namespace only"]
+    fn large_windows_sessions_round_trip_and_cleanup_without_overwriting_future_indexes() {
+        use windows_chunks::{MAGIC, chunk_target, forget_for, load_for, owned_targets, store_for};
+        let user = format!("fixture-large-session-{}", std::process::id());
+        let fixture = format!("SAPISID=synthetic-only; EXTRA={}", "x".repeat(12000));
+        let result = (|| {
+            assert!(load_for(&user)?.is_none());
+            store_for(&user, &fixture)?;
+            assert_eq!(load_for(&user)?.as_deref(), Some(fixture.as_str()));
+            let entry = entry_for(&user)?;
+            let index = entry.get_secret().map_err(|_| Error::Unavailable)?;
+            assert!(index.len() < 2560 && index.starts_with(MAGIC));
+            let value: serde_json::Value = serde_json::from_slice(&index[MAGIC.len()..]).unwrap();
+            let first = chunk_target(&user, value["generation"].as_str().unwrap(), 0);
+            let store = windows_native_keyring_store::Store::new().unwrap();
+            let first_entry = store
+                .build(
+                    SERVICE,
+                    &user,
+                    Some(&std::collections::HashMap::from([(
+                        "target",
+                        first.as_str(),
+                    )])),
+                )
+                .unwrap();
+            store_for(&user, "SAPISID=small-synthetic-only")?;
+            assert!(matches!(
+                first_entry.get_secret(),
+                Err(keyring_core::Error::NoEntry)
+            ));
+            assert_eq!(
+                load_for(&user)?.as_deref(),
+                Some("SAPISID=small-synthetic-only")
+            );
+            store_for(&user, &fixture)?;
+            assert_eq!(
+                store_for(&user, &"x".repeat(65537)).err(),
+                Some(Error::TooLarge)
+            );
+            let missing = owned_targets(&user)?.into_iter().next().unwrap();
+            let missing_entry = store
+                .build(
+                    SERVICE,
+                    &user,
+                    Some(&std::collections::HashMap::from([(
+                        "target",
+                        missing.as_str(),
+                    )])),
+                )
+                .unwrap();
+            missing_entry.delete_credential().unwrap();
+            assert_eq!(load_for(&user).err(), Some(Error::InvalidResponse));
+            store_for(&user, &fixture)?;
+            let index = entry.get_secret().unwrap();
+            let mut future: serde_json::Value =
+                serde_json::from_slice(&index[MAGIC.len()..]).unwrap();
+            future["version"] = 2.into();
+            let mut sealed = MAGIC.to_vec();
+            sealed.extend(serde_json::to_vec(&future).unwrap());
+            entry.set_secret(&sealed).unwrap();
+            assert_eq!(load_for(&user).err(), Some(Error::Unsupported));
+            assert_eq!(store_for(&user, &fixture).err(), Some(Error::Unsupported));
+            assert_eq!(entry.get_secret().unwrap(), sealed);
+            Ok::<_, Error>(())
+        })();
+        let removed = forget_for(&user);
+        assert!(removed.is_ok(), "Synthetic vault cleanup failed");
+        assert!(result.is_ok(), "Synthetic vault round trip failed");
+        assert!(load_for(&user).unwrap().is_none());
+        assert!(owned_targets(&user).unwrap().is_empty());
+    }
     #[test]
     #[ignore = "requires a real unlocked system credential store; synthetic key only"]
     fn native_store_round_trip() {
