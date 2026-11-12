@@ -164,7 +164,9 @@ impl Client {
             let value = self
                 .post("player", json!({"videoId":media.local(),"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS","signatureTimestamp":timestamp}}}))
                 .await?;
-            let mut stream = parse(media, &value)?;
+            validate(media, &value)?;
+            let url = self.resolve_format_url(candidate(&value)?).await?;
+            let mut stream = parse_with_url(media, &value, Some(url))?;
             stream.user_agent = crate::USER_AGENT;
             return Ok(stream);
         }
@@ -207,6 +209,9 @@ impl Client {
     }
 }
 fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
+    parse_with_url(media, value, None)
+}
+fn validate(media: &MediaId, value: &Value) -> Result<(), Error> {
     match value["playabilityStatus"]["status"].as_str() {
         Some("OK") => {}
         Some("LOGIN_REQUIRED" | "AGE_CHECK_REQUIRED" | "CONTENT_CHECK_REQUIRED") => {
@@ -223,33 +228,55 @@ fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
     {
         return Err(Error::AccessDenied);
     }
+    Ok(())
+}
+fn candidate(value: &Value) -> Result<&Value, Error> {
     let formats = value["streamingData"]["adaptiveFormats"]
         .as_array()
         .ok_or(Error::UnsupportedFormat)?;
-    let format = formats
+    formats
         .iter()
         .filter(|f| {
             f["mimeType"]
                 .as_str()
                 .is_some_and(|mime| mime.starts_with("audio/mp4;") && mime.contains("mp4a.40.2"))
         })
-        .find(|f| {
-            f["url"].is_string()
-                && f["signatureCipher"].is_null()
+        .filter(|f| {
+            (f["url"].is_string() || f["signatureCipher"].is_string() || f["cipher"].is_string())
                 && f["drmFamilies"].as_array().is_none_or(|v| v.is_empty())
         })
-        .ok_or(Error::UnsupportedFormat)?;
-    let uri = Url::parse(format["url"].as_str().ok_or(Error::InvalidResponse)?)
-        .map_err(|_| Error::InvalidResponse)?;
+        .min_by_key(|f| !f["url"].is_string())
+        .ok_or(Error::UnsupportedFormat)
+}
+pub(crate) fn media_url(value: &str) -> Result<Url, Error> {
+    if value.len() > 32 * 1024 {
+        return Err(Error::TooLarge);
+    }
+    let uri = Url::parse(value).map_err(|_| Error::InvalidResponse)?;
     let host = uri.host_str().ok_or(Error::InvalidResponse)?;
     if uri.scheme() != "https"
         || uri.port().is_some()
         || !uri.username().is_empty()
         || uri.password().is_some()
+        || uri.fragment().is_some()
         || !(host == "googlevideo.com" || host.ends_with(".googlevideo.com"))
     {
         return Err(Error::AccessDenied);
     }
+    Ok(uri)
+}
+fn parse_with_url(media: &MediaId, value: &Value, resolved: Option<Url>) -> Result<Stream, Error> {
+    validate(media, value)?;
+    let format = candidate(value)?;
+    let uri = match resolved {
+        Some(uri) => media_url(uri.as_str())?,
+        None => {
+            if !format["signatureCipher"].is_null() || !format["cipher"].is_null() {
+                return Err(Error::UnsupportedFormat);
+            }
+            media_url(format["url"].as_str().ok_or(Error::UnsupportedFormat)?)?
+        }
+    };
     let length = format["contentLength"]
         .as_str()
         .and_then(|v| v.parse::<u64>().ok())
@@ -394,9 +421,13 @@ mod tests {
     #[tokio::test]
     async fn authenticated_playback_uses_music_identity_and_never_falls_back_after_refusal() {
         use crate::protocol_tests::{account, server};
-        for denied in [false, true] {
+        for (denied, ciphered) in [(false, false), (true, false), (false, true)] {
             let mut player = response();
             player["responseContext"] = json!({});
+            if ciphered {
+                player["streamingData"]["adaptiveFormats"][0]["url"] = Value::Null;
+                player["streamingData"]["adaptiveFormats"][0]["signatureCipher"] = "s=fixture&sp=sig&url=https%3A%2F%2Frr.googlevideo.com%2Fvideoplayback%3Fn%3Dabc".into();
+            }
             let (base, server) = server(vec![
                 (200, account()),
                 (200, account()),
@@ -408,6 +439,8 @@ mod tests {
             client.player_config = Some(crate::player_config::PlayerConfig {
                 timestamp: 20760,
                 loaded: Instant::now(),
+                code: "_result.sig=s=>s.split('').reverse().join('');_result.n=s=>s+'X';".into(),
+                prepared: true,
             });
             let session = json!({"schema":1,"cookie":"SAPISID=fixture-only","visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"});
             client.sign_in(session.to_string()).await.unwrap();
@@ -418,6 +451,12 @@ mod tests {
                 let grant = result.unwrap();
                 assert_eq!(grant.length(), 100000);
                 assert_eq!(grant.user_agent, crate::USER_AGENT);
+                if ciphered {
+                    let url = Url::parse(&grant.url).unwrap();
+                    let pairs: std::collections::HashMap<_, _> = url.query_pairs().collect();
+                    assert_eq!(pairs.get("sig").map(|s| s.as_ref()), Some("erutxif"));
+                    assert_eq!(pairs.get("n").map(|s| s.as_ref()), Some("abcX"));
+                }
             }
             assert!(
                 client.signed_in(),

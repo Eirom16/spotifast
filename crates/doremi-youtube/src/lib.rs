@@ -10,7 +10,9 @@ pub mod credentials;
 pub mod embedded;
 pub mod parser;
 mod player_config;
+mod player_program;
 pub mod session;
+mod signatures;
 pub mod stream;
 use doremi_core::{
     catalog::ProviderError as Error,

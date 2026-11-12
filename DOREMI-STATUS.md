@@ -4,10 +4,10 @@
 - Catálogo principal YouTube Music nativo, adaptado de Tubefast MIT: búsqueda,
   artistas, álbumes, playlists e inicio con secciones reales. MusicBrainz opcional.
   Sin equivalencias ocultas de títulos o IDs entre proveedores.
-- CI `43267092113`, commit `9ff601c`: APK y hosts Doremi Linux/Windows aprobados,
-  incluidos auxiliares, licencias, versión y checksums. CI general de ese commit
-  en curso; última general completa en verde: `43160105281` (`de7c234`).
-- APK `9ff601c` instalada sin borrar datos ni sesión en Samsung ARMv7: aislamiento y cancelación
+- CI `43271026951`, commit `d605179`: APK y hosts Doremi Linux/Windows aprobados,
+  incluidos auxiliares, licencias, versión y checksums. CI general `43271026631`
+  completa en verde para el mismo commit: tests, Clippy y artifacts verificados.
+- APK `d605179` instalada sin borrar datos ni sesión en Samsung ARMv7: aislamiento y cancelación
   del login comprobados. Inicio con 30 elementos, carátulas y buscador superior con
   teclado comprobados en `4f4e49e`, en ambos temas. Biblioteca conserva su hash.
   Navegación Linux real: 20 canciones, artista con 59 elementos, álbum con 18 pistas
@@ -23,10 +23,12 @@
   9 artistas. Biblioteca local conserva su hash; sesión cifrada con Keystore.
   La causa era el bloqueo de `accounts.google.com.do` después de la verificación.
   Dominios regionales oficiales corregidos también en escritorio: cinco pruebas
-  del auxiliar y paridad Android/escritorio aprobadas. Login de escritorio aún
-  pendiente de prueba real. Comparación con Meld/Metrolist GPL-3.0 adaptada con
+  del auxiliar y paridad Android/escritorio aprobadas. Login real en CachyOS
+  validado en `02aefab`: sesión restaurada al reiniciar y las mismas cinco páginas
+  personales cargadas; auxiliar retirado y biblioteca local conservada. Login
+  Windows pendiente de prueba real. Comparación con Meld/Metrolist GPL-3.0 adaptada con
   código propio, conservando licencias y sin registrar credenciales.
-- CachyOS: bundle `02aefab` instalado con acceso directo y auxiliar verificados;
+- CachyOS: bundle `d605179` instalado con acceso directo y auxiliar verificados;
   versiones anteriores y perfiles conservados. Cancelación y retiro de los
   procesos del navegador comprobados desde la instalación.
   Carátula real del álbum de 18 pistas comprobada en claro y oscuro en `f67b410`.
@@ -37,10 +39,13 @@
   de Android excedía el límite de una entrada Windows; corregido en `02aefab`.
 - Audio YouTube: rangos AAC/MP4, cancelación y seek conectados al motor existente.
   Misma sesión WEB_REMIX de catálogo, comprobación de caducidad y sin fallback
-  tras una negativa. Prueba real `9ff601c`: HTTP 200, UNPLAYABLE, ningún formato
-  ni PCM; cuenta y biblioteca conservadas. Inicialización pública del reproductor
-  y signatureTimestamp integrados en Rust; validación real del ajuste pendiente.
-  28 pruebas del cliente aprobadas; una de almacén nativo omitida en local.
+  tras una negativa. `d605179` corrigió UNPLAYABLE: prueba real Android devuelve
+  OK y un AAC sin DRM que requiere firma de URL. Aún sin PCM: UnsupportedFormat.
+  Firma y parámetro n integrados con preprocesado MIT y QuickJS acotado en el
+  cliente compartido: 33 pruebas offline y Clippy aprobados; firma y n comprobados
+  con dos versiones públicas del reproductor. Nueva APK y audición pendientes.
+  Sesión y biblioteca conservadas. Invitado carga inicio; reproducción exige login por verificación
+  antibot del proveedor desde la conexión del Samsung. No se reintenta otro cliente.
 - Biblioteca, playlists propias, cola e historial conservados. CI gráfica Linux
   verifica navegación, teclado, duplicados, playlists y restauración.
 - Evidencia: `~/.local/share/doremi/product-qa/2026-11-12/` y jornadas anteriores.

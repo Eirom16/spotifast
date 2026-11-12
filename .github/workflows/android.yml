@@ -127,6 +127,7 @@ jobs:
           cp tools/provider-live-probe/corpus.json target/native-dist/licenses/Commons-CC0-corpus.json
           cp crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           cp crates/doremi-youtube/LICENSE-TUBEFAST target/native-dist/licenses/Tubefast-MIT.txt
+          cp crates/doremi-youtube/licenses/* target/native-dist/licenses/
           cp crates/doremi-auth/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/licenses/* target/native-dist/licenses/
           cp crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
@@ -197,6 +198,7 @@ jobs:
           Copy-Item crates/doremi-commons/music-corpus.json target/native-dist/licenses/Commons-CC0-music-corpus.json
           Copy-Item crates/doremi-player/tests/fixtures/SOURCE.md target/native-dist/licenses/Symphonia-source-and-fixture.md
           Copy-Item crates/doremi-youtube/LICENSE-TUBEFAST target/native-dist/licenses/Tubefast-MIT.txt
+          Copy-Item crates/doremi-youtube/licenses/* target/native-dist/licenses/
           Copy-Item crates/doremi-auth/licenses/* target/native-dist/licenses/
           Copy-Item crates/doremi-player/licenses/* target/native-dist/licenses/
           & target/native-dist/doremi.exe --version

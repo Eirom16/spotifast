@@ -2,6 +2,7 @@
 //! published player, without executing JavaScript or sending the user's session.
 use crate::{Client, Error};
 use reqwest::Client as Http;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const ORIGIN: &str = "https://www.youtube.com";
@@ -11,6 +12,8 @@ const CACHE_TTL: Duration = Duration::from_secs(6 * 3600);
 pub(crate) struct PlayerConfig {
     pub(crate) timestamp: u32,
     pub(crate) loaded: Instant,
+    pub(crate) code: Arc<str>,
+    pub(crate) prepared: bool,
 }
 
 impl Client {
@@ -20,16 +23,18 @@ impl Client {
         {
             return Ok(config.timestamp);
         }
-        let timestamp = load(&self.http, ORIGIN).await?;
+        let (timestamp, code) = load(&self.http, ORIGIN).await?;
         self.player_config = Some(PlayerConfig {
             timestamp,
             loaded: Instant::now(),
+            code,
+            prepared: false,
         });
         Ok(timestamp)
     }
 }
 
-async fn load(http: &Http, origin: &str) -> Result<u32, Error> {
+async fn load(http: &Http, origin: &str) -> Result<(u32, Arc<str>), Error> {
     // Only the eight hex digits are taken from the public response. Neither a
     // returned URL nor a redirect can select a host, path or query for this GET.
     let iframe = resource(http, &format!("{origin}/iframe_api"), IFRAME_LIMIT).await?;
@@ -40,7 +45,10 @@ async fn load(http: &Http, origin: &str) -> Result<u32, Error> {
         crate::MAX_BYTES,
     )
     .await?;
-    timestamp(&script).ok_or(Error::InvalidResponse)
+    Ok((
+        timestamp(&script).ok_or(Error::InvalidResponse)?,
+        script.into(),
+    ))
 }
 
 async fn resource(http: &Http, url: &str, limit: usize) -> Result<String, Error> {
@@ -170,7 +178,8 @@ mod tests {
         assert_eq!(
             load(&client.http, base.trim_end_matches('/'))
                 .await
-                .unwrap(),
+                .unwrap()
+                .0,
             20760
         );
         let requests = server.await.unwrap();
@@ -194,7 +203,9 @@ mod tests {
             let (base, server) = raw_server(vec![(status, body)]).await;
             let client = Client::new().unwrap();
             assert_eq!(
-                load(&client.http, base.trim_end_matches('/')).await,
+                load(&client.http, base.trim_end_matches('/'))
+                    .await
+                    .map(|v| v.0),
                 Err(expected)
             );
             assert_eq!(server.await.unwrap().len(), 1);
@@ -205,7 +216,9 @@ mod tests {
         ])
         .await;
         assert_eq!(
-            load(&Client::new().unwrap().http, base.trim_end_matches('/')).await,
+            load(&Client::new().unwrap().http, base.trim_end_matches('/'))
+                .await
+                .map(|v| v.0),
             Err(Error::TooLarge)
         );
         assert_eq!(server.await.unwrap().len(), 2);
@@ -217,6 +230,8 @@ mod tests {
         client.player_config = Some(PlayerConfig {
             timestamp: 20760,
             loaded: Instant::now(),
+            code: "".into(),
+            prepared: false,
         });
         assert_eq!(client.signature_timestamp().await.unwrap(), 20760);
         client.clear_session();

@@ -157,7 +157,7 @@ fn shelf(kind: &str, node: &Value) -> Section {
             let basic = &node["header"]["musicCarouselShelfBasicHeaderRenderer"]["title"];
             let grid = &node["header"]["gridHeaderRenderer"]["title"];
             (
-                text(basic) + &text(grid),
+                text(basic) + text(grid).as_str(),
                 if cards {
                     Layout::Cards
                 } else {
@@ -352,7 +352,7 @@ fn item(node: &Value) -> Option<Item> {
             .filter(|s| !s.is_empty())
             .collect::<Vec<_>>()
             .join(" • "),
-        duration: fixed + &text(&node["lengthText"]),
+        duration: fixed + text(&node["lengthText"]).as_str(),
         thumb: thumb(node),
         video_id: first_str(
             node,

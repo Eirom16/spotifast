@@ -160,10 +160,17 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json', 'blocking']; version=0.12` |
+| `crates/doremi-youtube: dependencies` | `rquickjs` | `default-features=False; features=['std']; version==0.14.0` |
 | `crates/doremi-youtube: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-youtube: dependencies` | `serde_json` | `1` |
 | `crates/doremi-youtube: dependencies` | `sha1` | `0.10` |
-| `crates/doremi-youtube: dev-dependencies` | `tokio` | `features=['rt', 'macros', 'net', 'io-util']; version=1` |
+| `crates/doremi-youtube: dependencies` | `swc_common` | `=18.0.1` |
+| `crates/doremi-youtube: dependencies` | `swc_ecma_ast` | `=19.0.0` |
+| `crates/doremi-youtube: dependencies` | `swc_ecma_codegen` | `=21.0.0` |
+| `crates/doremi-youtube: dependencies` | `swc_ecma_parser` | `=32.0.0` |
+| `crates/doremi-youtube: dependencies` | `tokio` | `features=['rt', 'sync']; version=1` |
+| `crates/doremi-youtube: dependencies` | `ytdlp-ejs` | `default-features=False; features=['external']; version==0.1.1` |
+| `crates/doremi-youtube: dev-dependencies` | `tokio` | `features=['rt', 'macros', 'net', 'io-util', 'time']; version=1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `getrandom` | `0.3` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `keyring-core` | `1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `rusqlite` | `default-features=False; features=['bundled']; version=0.41.1` |
@@ -178,7 +185,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 902 entradas (incluye miembros locales).
+`Cargo.lock`: 949 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -189,7 +196,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 7 | `git+https://github.com/crmne/librespot?rev=3ba977f1f918582edce566cfc16617f8eccdfb1e#3ba977f1f918582edce566cfc16617f8eccdfb1e` |
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
-| 846 | `registry+https://github.com/rust-lang/crates.io-index` |
+| 893 | `registry+https://github.com/rust-lang/crates.io-index` |
 | 12 | `workspace` |
 
 ## Patches

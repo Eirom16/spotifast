@@ -12,6 +12,15 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "blo
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha1 = "0.10"
+tokio = { version = "1", features = ["rt", "sync"] }
+# Only preprocess_player is called. Upstream needs one provider feature to
+# avoid an empty-enum compiler error; no external provider is instantiated.
+ytdlp-ejs = { version = "=0.1.1", default-features = false, features = ["external"] }
+rquickjs = { version = "=0.14.0", default-features = false, features = ["std"] }
+swc_common = "=18.0.1"
+swc_ecma_ast = "=19.0.0"
+swc_ecma_parser = "=32.0.0"
+swc_ecma_codegen = "=21.0.0"
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots"] }
@@ -35,4 +44,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_
 windows-native-keyring-store = { version = "1.1", default-features = false }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt", "macros", "net", "io-util"] }
+tokio = { version = "1", features = ["rt", "macros", "net", "io-util", "time"] }
