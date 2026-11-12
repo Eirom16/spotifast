@@ -4,6 +4,7 @@
 from pathlib import Path
 import json
 import os
+import re
 import runpy
 import sys
 import tempfile
@@ -18,6 +19,16 @@ VERIFY = runpy.run_path(str(ROOT / "scripts/verify-artifacts.py"))
 
 
 class CITests(unittest.TestCase):
+    def test_google_account_regions_match_between_native_authentication_adapters(self):
+        native = (ROOT / 'crates/doremi-youtube/src/embedded.rs').read_text()
+        android = (ROOT / 'android/app/src/main/java/dev/eirom/doremi/YoutubeAuthActivity.java').read_text()
+        native = native.split('const GOOGLE_DOMAINS:', 1)[1].split(';', 1)[0]
+        android = android.split('static final java.util.Set<String> GOOGLE_DOMAINS=', 1)[1].split(';', 1)[0]
+        roots = lambda text: set(re.findall(r'\.google\.[a-z.]+', text))
+        self.assertEqual(roots(native), roots(android))
+        self.assertGreater(len(roots(native)), 150)
+        self.assertIn('.google.com.do', roots(native))
+
     @unittest.skipUnless(sys.platform == 'linux', 'Linux desktop installer')
     def test_installer_restores_helper_permission_and_rejects_an_altered_install(self):
         import hashlib
