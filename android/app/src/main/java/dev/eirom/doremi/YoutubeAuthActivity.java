@@ -29,14 +29,32 @@ public final class YoutubeAuthActivity extends Activity {
     private boolean readingContext=false;
     private int contextAttempts=0;
     private long readGeneration=0,readDeadline=0;
+    private int traceCount=0;
+    private Boolean observedSession;
+    private void trace(String event) {
+        // Fixed categories/codes only: never page text, URLs or credentials.
+        if(traceCount++<64) android.util.Log.i("DoremiAuth",event);
+    }
+    private static String site(String value) {
+        String host=value==null?null:Uri.parse(value).getHost();
+        if("accounts.google.com".equals(host)) return "google_account";
+        if("www.google.com".equals(host)) return "google_cookie_bridge";
+        if("music.youtube.com".equals(host)) return "music";
+        if("accounts.youtube.com".equals(host)) return "youtube_account";
+        return "other";
+    }
     private final Runnable timeout=() -> complete("",2);
     private final Runnable poll=new Runnable() {
         @Override public void run() {
             if(completed || browser==null) return;
             String cookie=CookieManager.getInstance().getCookie(MUSIC);
             if(cookie!=null && cookie.length()>65536) {complete("",5);return;}
+            boolean ready=sessionReady(cookie);
+            if(observedSession==null || observedSession!=ready) {
+                observedSession=ready;trace(ready?"music_session_present":"music_session_absent");
+            }
             if(readingContext && android.os.SystemClock.uptimeMillis()>=readDeadline) readingContext=false;
-            if(sessionReady(cookie) && musicPage(browser.getUrl()) && !readingContext) {
+            if(ready && musicPage(browser.getUrl()) && !readingContext) {
                 if(++contextAttempts>20) {complete("",4);return;}
                 if(readGeneration==Long.MAX_VALUE) {complete("",4);return;}
                 long expected=++readGeneration;
@@ -102,9 +120,9 @@ public final class YoutubeAuthActivity extends Activity {
     }
     private boolean handoff(WebView view,String target) {
         Intent intent=authIntent(view.getUrl(),target);
-        if(intent==null) {complete("",4);return true;}
+        if(intent==null) {trace("platform_handoff_rejected");complete("",4);return true;}
         String fallback=intent.getStringExtra("browser_fallback_url");intent.removeExtra("browser_fallback_url");
-        try {startActivity(intent);}
+        try {startActivity(intent);trace("platform_handoff_started");}
         catch(ActivityNotFoundException | SecurityException unavailable) {
             if(fallback!=null && allowed(fallback) && !denied(fallback)) view.loadUrl(fallback);
             else complete("",4);
@@ -118,6 +136,10 @@ public final class YoutubeAuthActivity extends Activity {
     static boolean allowed(String value) {
         Uri uri=Uri.parse(value);String host=uri.getHost();
         if(!"https".equals(uri.getScheme()) || uri.getPort()!=-1 || uri.getUserInfo()!=null || host==null) return false;
+        if("www.google.com".equals(host)) {
+            String path=uri.getPath();
+            return path!=null && (path.startsWith("/accounts/") || path.equals("/CheckCookie"));
+        }
         return java.util.Arrays.asList("accounts.google.com","consent.google.com","myaccount.google.com",
             "music.youtube.com","www.youtube.com","youtube.com","accounts.youtube.com","consent.youtube.com").contains(host);
     }
@@ -151,6 +173,7 @@ public final class YoutubeAuthActivity extends Activity {
             browser.setDownloadListener((url,agent,disposition,type,length) -> complete("",3));
             browser.setWebViewClient(new WebViewClient() {
                 @Override public void onPageStarted(WebView view,String url,android.graphics.Bitmap icon) {
+                    trace("page_started:"+site(url));
                     if(readGeneration==Long.MAX_VALUE) {complete("",4);return;}
                     readGeneration++;readingContext=false;contextAttempts=0;
                 }
@@ -159,12 +182,30 @@ public final class YoutubeAuthActivity extends Activity {
                     if(!request.isForMainFrame()) return false;
                     String url=request.getUrl().toString();
                     if(denied(url)) {complete("",3);return true;}
-                    return !allowed(url);
+                    if(!allowed(url)) {trace("navigation_rejected:"+site(url));complete("",4);return true;}
+                    return false;
                 }
                 @Override public void onPageFinished(WebView view,String url) {
+                    trace("page_finished:"+site(url));
                     if(denied(url)) complete("",3);
                 }
-                // Default TLS failure handling cancels; never override trust.
+                @Override public void onReceivedError(WebView view,WebResourceRequest request,android.webkit.WebResourceError error) {
+                    if(completed) return;
+                    trace("network_error:"+error.getErrorCode()+":"+site(request.getUrl().toString()));
+                    if(request.isForMainFrame()) complete("",error.getErrorCode()==WebViewClient.ERROR_TIMEOUT?2:4);
+                }
+                @Override public void onReceivedHttpError(WebView view,WebResourceRequest request,android.webkit.WebResourceResponse response) {
+                    if(completed) return;
+                    int code=response.getStatusCode();
+                    trace("http_error:"+code+":"+site(request.getUrl().toString()));
+                    if(request.isForMainFrame()) complete("",code==401 || code==403?3:4);
+                }
+                @Override public void onReceivedSslError(WebView view,android.webkit.SslErrorHandler decision,android.net.http.SslError error) {
+                    trace("tls_error:"+error.getPrimaryError());decision.cancel();complete("",4);
+                }
+                @Override public boolean onRenderProcessGone(WebView view,android.webkit.RenderProcessGoneDetail detail) {
+                    trace("renderer_gone");complete("",4);return true;
+                }
             });
             setContentView(browser);
             CookieManager cookies=CookieManager.getInstance();
@@ -183,6 +224,7 @@ public final class YoutubeAuthActivity extends Activity {
     private void complete(String cookie,int status) {
         if(completed) return;
         completed=true;handler.removeCallbacksAndMessages(null);
+        trace("completed:"+status);
         // Only an explicit, non-exported Activity result carries the secret.
         // It is never saved in state, logged, placed on the clipboard or URL.
         Intent result=new Intent().putExtra(GENERATION,generation).putExtra(STATUS,status);

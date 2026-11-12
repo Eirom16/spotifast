@@ -941,9 +941,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             new JSONObject().put("result","pass").put("pid",android.os.Process.myPid()).put("synthetic",true).put("encrypted",true).put("restored",restore).put("tamper_rejected",restore).put("forgotten",restore).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void youtubeAuthPolicy() throws Exception {
-        for(String url:new String[]{"https://accounts.google.com/ServiceLogin","https://music.youtube.com/","https://consent.youtube.com/"})
+        for(String url:new String[]{"https://accounts.google.com/ServiceLogin","https://music.youtube.com/","https://consent.youtube.com/","https://www.google.com/accounts/CheckCookie?continue=fixture","https://www.google.com/accounts/SetSID?continue=fixture","https://www.google.com/CheckCookie"})
             if(!YoutubeAuthActivity.allowed(url)) throw new AssertionError("Expected authentication origin rejected");
-        for(String url:new String[]{"http://accounts.google.com/","https://accounts.google.com.attacker.invalid/","https://accounts.google.com:443/","https://user@accounts.google.com/","file:///data/","intent://login/","https://www.google.com/search"})
+        for(String url:new String[]{"http://accounts.google.com/","https://accounts.google.com.attacker.invalid/","https://accounts.google.com:443/","https://user@accounts.google.com/","file:///data/","intent://login/","https://www.google.com/search","https://www.google.com/accounts.attacker/SetSID","https://www.google.com.attacker.invalid/accounts/SetSID"})
             if(YoutubeAuthActivity.allowed(url)) throw new AssertionError("Unexpected authentication navigation allowed");
         if(!YoutubeAuthActivity.denied("https://accounts.google.com/v3/signin/rejected?error=disallowed_useragent") || YoutubeAuthActivity.denied("https://music.youtube.com/"))
             throw new AssertionError("Provider refusal was not distinguished");
@@ -970,7 +970,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(YoutubeAuthActivity.authIntent("https://attacker.invalid/",handoff)!=null) throw new AssertionError("Untrusted page initiated Google handoff");
         android.content.pm.ActivityInfo info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),YoutubeAuthActivity.class),0);
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
-        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",15).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     @Override public void onStart() {
         Bundle result=new Bundle();

@@ -367,7 +367,7 @@ pub fn allowed_auth_url(value: &str) -> bool {
         && uri.port().is_none()
         && uri.username().is_empty()
         && uri.password().is_none()
-        && matches!(
+        && (matches!(
             uri.host_str(),
             Some(
                 "accounts.google.com"
@@ -379,7 +379,8 @@ pub fn allowed_auth_url(value: &str) -> bool {
                     | "accounts.youtube.com"
                     | "consent.youtube.com"
             )
-        )
+        ) || (uri.host_str() == Some("www.google.com")
+            && (uri.path().starts_with("/accounts/") || uri.path() == "/CheckCookie")))
 }
 pub fn provider_denied(value: &str) -> bool {
     let Ok(uri) = reqwest::Url::parse(value) else {
@@ -546,7 +547,14 @@ mod tests {
             ])
             .is_some()
         );
-        for url in [LOGIN_URL, ORIGIN, "https://consent.youtube.com/"] {
+        for url in [
+            LOGIN_URL,
+            ORIGIN,
+            "https://consent.youtube.com/",
+            "https://www.google.com/accounts/CheckCookie?continue=fixture",
+            "https://www.google.com/accounts/SetSID?continue=fixture",
+            "https://www.google.com/CheckCookie",
+        ] {
             assert!(allowed_auth_url(url));
         }
         for url in [
@@ -556,6 +564,9 @@ mod tests {
             "https://user@accounts.google.com/",
             "file:///tmp/",
             "javascript:alert(1)",
+            "https://www.google.com/search",
+            "https://www.google.com/accounts.attacker/SetSID",
+            "https://www.google.com.attacker.invalid/accounts/SetSID",
         ] {
             assert!(!allowed_auth_url(url));
         }
