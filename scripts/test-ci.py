@@ -18,6 +18,50 @@ VERIFY = runpy.run_path(str(ROOT / "scripts/verify-artifacts.py"))
 
 
 class CITests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux desktop installer')
+    def test_installer_restores_helper_permission_and_rejects_an_altered_install(self):
+        import hashlib
+        import subprocess
+        install = runpy.run_path(str(ROOT / 'scripts/install-native-dev.py'))['main']
+        execute = subprocess.check_output
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            home = root / 'user'
+            workspace = root / 'workspace'
+            (workspace / 'target').mkdir(parents=True)
+            artifact = root / 'artifact'
+            artifact.mkdir()
+            commit = 'b' * 40
+            for filename, label in [('doremi', 'Doremi Native Dev'), ('doremi-auth', 'Doremi Auth')]:
+                path = artifact / filename
+                path.write_text(f"#!/bin/sh\necho '{label} 0.1.0-dev'\n")
+                path.chmod(0o644)
+            identity = lambda filename: dict(file=filename, sha256=hashlib.sha256((artifact / filename).read_bytes()).hexdigest())
+            manifest = dict(source_commit=commit, product='Doremi', release=False, source_dirty=False,
+                            target='x86_64-unknown-linux-gnu', version='0.1.0-dev', payload=identity('doremi'),
+                            authentication_helper=dict(**identity('doremi-auth'), version='0.1.0-dev'))
+            (artifact / 'manifest.json').write_text(json.dumps(manifest))
+            (artifact / 'SHA256SUMS').write_text(''.join(f'{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n' for path in sorted(artifact.iterdir())))
+            library = home / '.local/share/doremi/native-dev/library-v1.json'
+            library.parent.mkdir(parents=True)
+            library.write_text('synthetic existing user data; preserve')
+            def output(command, **kwargs):
+                if command[0] == 'git':
+                    self.assertEqual(command, ['git', 'show', commit + ':assets/doremi/Doremi.png'])
+                    return b'synthetic icon'
+                return execute(command, **kwargs)
+            with patch.object(Path, 'home', return_value=home), patch.dict(install.__globals__, ROOT=workspace), \
+                 patch.object(sys, 'argv', ['install-native-dev.py', str(artifact), '--commit', commit]), \
+                 patch('subprocess.check_output', side_effect=output):
+                install()
+                helper = home / '.local/share/doremi/native-dev-builds' / commit / 'doremi-auth'
+                self.assertTrue(os.access(helper, os.X_OK))
+                self.assertFalse(os.access(artifact / 'doremi-auth', os.X_OK))
+                helper.write_text('altered installed helper')
+                with self.assertRaises(AssertionError):
+                    install()
+            self.assertEqual(library.read_text(), 'synthetic existing user data; preserve')
+
     def test_native_manifest_binds_the_new_executable_and_every_license(self):
         previous=Path.cwd()
         with tempfile.TemporaryDirectory() as name:

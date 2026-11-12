@@ -54,6 +54,16 @@ def main():
     binary.chmod(binary.stat().st_mode | 0o100)
     version = subprocess.check_output([str(binary), "--version"], text=True).strip()
     assert version == "Doremi Native Dev " + manifest["version"]
+    helper = None
+    if identity := manifest.get("authentication_helper"):
+        assert identity["file"] == "doremi-auth" and identity["version"] == manifest["version"]
+        helper = destination / identity["file"]
+        assert helper.is_file() and not helper.is_symlink()
+        assert hashlib.sha256(helper.read_bytes()).hexdigest() == identity["sha256"]
+        # ZIP artifact downloads may not retain executable permission. The
+        # music host launches this verified sibling only during explicit login.
+        helper.chmod(helper.stat().st_mode | 0o100)
+        assert subprocess.check_output([str(helper), "--version"], text=True).strip() == "Doremi Auth " + manifest["version"]
     icon = destination / "Doremi.png"
     expected = subprocess.check_output(["git", "show", args.commit + ":assets/doremi/Doremi.png"], cwd=ROOT)
     if icon.exists():
@@ -86,6 +96,7 @@ X-Doremi-SourceCommit={args.commit}
     os.replace(temporary, entry)
     result = dict(source_commit=args.commit, binary=str(binary),
                   sha256=manifest["payload"]["sha256"], desktop_entry=str(entry),
+                  authentication_helper=str(helper) if helper else None,
                   data_preserved=True, version=version)
     output = ROOT / "target" / ("native-installed-" + args.commit[:7] + ".json")
     output.write_text(json.dumps(result, indent=2) + "\n")
