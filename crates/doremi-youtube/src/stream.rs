@@ -160,8 +160,9 @@ impl Client {
             // VISIONOS is a guest client in the reference implementation.
             // Verify expiry, then use the account's Music client and identity.
             self.account().await?;
+            let timestamp = self.signature_timestamp().await?;
             let value = self
-                .post("player", json!({"videoId":media.local(),"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS"}}}))
+                .post("player", json!({"videoId":media.local(),"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS","signatureTimestamp":timestamp}}}))
                 .await?;
             let mut stream = parse(media, &value)?;
             stream.user_agent = crate::USER_AGENT;
@@ -404,6 +405,10 @@ mod tests {
             .await;
             let mut client = Client::new().unwrap();
             client.base = base;
+            client.player_config = Some(crate::player_config::PlayerConfig {
+                timestamp: 20760,
+                loaded: Instant::now(),
+            });
             let session = json!({"schema":1,"cookie":"SAPISID=fixture-only","visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"});
             client.sign_in(session.to_string()).await.unwrap();
             let result = client.resolve(&id("abcdefghijk").unwrap()).await;
@@ -439,6 +444,10 @@ mod tests {
             assert_eq!(
                 body["playbackContext"]["contentPlaybackContext"]["html5Preference"],
                 "HTML5_PREF_WANTS"
+            );
+            assert_eq!(
+                body["playbackContext"]["contentPlaybackContext"]["signatureTimestamp"],
+                20760
             );
             assert!(body.get("racyCheckOk").is_none() && body.get("contentCheckOk").is_none());
         }

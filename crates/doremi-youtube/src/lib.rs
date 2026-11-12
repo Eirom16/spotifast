@@ -9,6 +9,7 @@ pub mod credentials;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod embedded;
 pub mod parser;
+mod player_config;
 pub mod session;
 pub mod stream;
 use doremi_core::{
@@ -104,6 +105,7 @@ pub struct Client {
     session: Option<session::Session>,
     base: String,
     player_diagnostic: Option<stream::PlayerDiagnostic>,
+    player_config: Option<player_config::PlayerConfig>,
     thumbnails: std::collections::VecDeque<(MediaId, String)>,
 }
 impl Client {
@@ -120,6 +122,7 @@ impl Client {
             session: None,
             base: format!("{ORIGIN}/youtubei/v1/"),
             player_diagnostic: None,
+            player_config: None,
             thumbnails: std::collections::VecDeque::new(),
         })
     }
@@ -488,6 +491,17 @@ mod protocol_tests {
     pub(super) async fn server(
         responses: Vec<(u16, Value)>,
     ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
+        raw_server(
+            responses
+                .into_iter()
+                .map(|(code, body)| (code, body.to_string()))
+                .collect(),
+        )
+        .await
+    }
+    pub(super) async fn raw_server(
+        responses: Vec<(u16, String)>,
+    ) -> (String, tokio::task::JoinHandle<Vec<String>>) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let base = format!("http://{}/", listener.local_addr().unwrap());
         let task = tokio::spawn(async move {
@@ -517,8 +531,18 @@ mod protocol_tests {
                     assert!(bytes.len() < 65536);
                 }
                 requests.push(String::from_utf8(bytes).unwrap());
-                let body = body.to_string();
-                stream.write_all(format!("HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",body.len()).as_bytes()).await.unwrap();
+                let response = format!(
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                if let Err(error) = stream.write_all(response.as_bytes()).await {
+                    // Size-limit fixtures intentionally retire the connection
+                    // before the oversized body has finished being written.
+                    assert!(matches!(
+                        error.kind(),
+                        std::io::ErrorKind::BrokenPipe | std::io::ErrorKind::ConnectionReset
+                    ));
+                }
             }
             requests
         });
