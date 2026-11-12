@@ -13,6 +13,107 @@ use std::{
 const PLAYER: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 const CHUNK: usize = 64 * 1024;
+/// Redacted protocol outcome, never a response body, URL or session value.
+#[derive(Clone, Copy, Debug)]
+pub struct PlayerDiagnostic {
+    pub http_status: u16,
+    pub api_code: Option<u16>,
+    pub status: &'static str,
+    pub reason: &'static str,
+    pub aac_formats: usize,
+    pub direct_aac: usize,
+    pub ciphered_aac: usize,
+    pub drm: bool,
+}
+impl PlayerDiagnostic {
+    pub(crate) fn http(http_status: u16) -> Self {
+        Self {
+            http_status,
+            api_code: None,
+            status: "unread",
+            reason: "none",
+            aac_formats: 0,
+            direct_aac: 0,
+            ciphered_aac: 0,
+            drm: false,
+        }
+    }
+    pub(crate) fn response(http_status: u16, value: &Value) -> Self {
+        let status = match value["playabilityStatus"]["status"].as_str() {
+            Some("OK") => "ok",
+            Some("UNPLAYABLE") => "unplayable",
+            Some("ERROR") => "error",
+            Some("LOGIN_REQUIRED") => "login_required",
+            Some("AGE_CHECK_REQUIRED") => "age_check",
+            Some("CONTENT_CHECK_REQUIRED") => "content_check",
+            Some(_) => "other",
+            None => "missing",
+        };
+        let text = value["playabilityStatus"]["reason"]
+            .as_str()
+            .unwrap_or_default();
+        let text = text
+            .get(..text.len().min(512))
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let reason = if text.contains("bot") {
+            "bot_verification"
+        } else if text.contains("sign in") || text.contains("sign-in") {
+            "sign_in"
+        } else if text.contains("age-restrict")
+            || text.contains("verify your age")
+            || text.contains("confirm your age")
+        {
+            "age"
+        } else if text.contains("country") || text.contains("region") {
+            "region"
+        } else if text.contains("premium") || text.contains("member") {
+            "membership"
+        } else if text.contains("private") {
+            "private"
+        } else if text.contains("copyright") || text.contains("rights") {
+            "rights"
+        } else if text.contains("removed") || text.contains("deleted") {
+            "removed"
+        } else if text.contains("client") || text.contains("this app") || text.contains("browser") {
+            "client"
+        } else if text.contains("unavailable") || text.contains("not available") {
+            "unavailable"
+        } else if text.is_empty() {
+            "none"
+        } else {
+            "other"
+        };
+        let mut result = Self {
+            status,
+            reason,
+            ..Self::http(http_status)
+        };
+        result.api_code = value["error"]["code"]
+            .as_u64()
+            .filter(|code| (100..=599).contains(code))
+            .map(|code| code as u16);
+        result.drm = value["streamingData"]["licenseInfos"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty());
+        if let Some(formats) = value["streamingData"]["adaptiveFormats"].as_array() {
+            for format in formats {
+                if format["mimeType"].as_str().is_some_and(|mime| {
+                    mime.starts_with("audio/mp4;") && mime.contains("mp4a.40.2")
+                }) {
+                    result.aac_formats += 1;
+                    if format["url"].is_string() && format["signatureCipher"].is_null() {
+                        result.direct_aac += 1;
+                    }
+                    if format["signatureCipher"].is_string() || format["cipher"].is_string() {
+                        result.ciphered_aac += 1;
+                    }
+                }
+            }
+        }
+        result
+    }
+}
 /// Ephemeral, non-serializable grant. Its transport URL is never a media ID.
 pub struct Stream {
     url: String,
@@ -48,6 +149,7 @@ impl Stream {
 }
 impl Client {
     pub async fn resolve(&mut self, media: &MediaId) -> Result<Stream, Error> {
+        self.player_diagnostic = None;
         if media.provider.as_str() != PROVIDER
             || media.local().len() != 11
             || id(media.local()).is_err()
@@ -59,7 +161,7 @@ impl Client {
             // Verify expiry, then use the account's Music client and identity.
             self.account().await?;
             let value = self
-                .post("player", json!({"videoId":media.local()}))
+                .post("player", json!({"videoId":media.local(),"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS"}}}))
                 .await?;
             let mut stream = parse(media, &value)?;
             stream.user_agent = crate::USER_AGENT;
@@ -76,6 +178,7 @@ impl Client {
             .json(&body);
         let request = self.authenticate(request)?;
         let mut response = request.send().await.map_err(crate::network_error)?;
+        self.player_diagnostic = Some(PlayerDiagnostic::http(response.status().as_u16()));
         match response.status().as_u16() {
             200 => {}
             401 | 403 => {
@@ -97,10 +200,9 @@ impl Client {
             }
             bytes.extend_from_slice(&chunk);
         }
-        parse(
-            media,
-            &serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?,
-        )
+        let value = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?;
+        self.player_diagnostic = Some(PlayerDiagnostic::response(200, &value));
+        parse(media, &value)
     }
 }
 fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
@@ -271,6 +373,23 @@ mod tests {
     fn response() -> Value {
         json!({"playabilityStatus":{"status":"OK"},"videoDetails":{"videoId":"abcdefghijk","lengthSeconds":"180"},"streamingData":{"expiresInSeconds":"600","adaptiveFormats":[{"mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","contentLength":"100000","url":"https://r1.googlevideo.com/videoplayback?expire=123&token=fixture"}]}})
     }
+    #[test]
+    fn player_diagnostics_cannot_capture_urls_tokens_or_unrecognized_provider_text() {
+        let mut value = response();
+        value["playabilityStatus"]["reason"] =
+            "NEVER_PRINT_THIS_SECRET https://signed.invalid/?token=NEVER_PRINT_THIS_SECRET".into();
+        let report = PlayerDiagnostic::response(200, &value);
+        assert_eq!(report.status, "ok");
+        assert_eq!(report.direct_aac, 1);
+        let rendered = format!("{report:?}");
+        assert!(!rendered.contains("NEVER_PRINT_THIS_SECRET"));
+        assert!(!rendered.contains("signed.invalid") && !rendered.contains("googlevideo.com"));
+        value["playabilityStatus"]["status"] = "UNPLAYABLE".into();
+        value["playabilityStatus"]["reason"] = "Sign in to confirm you are not a bot".into();
+        let report = PlayerDiagnostic::response(200, &value);
+        assert_eq!(report.status, "unplayable");
+        assert_eq!(report.reason, "bot_verification");
+    }
     #[tokio::test]
     async fn authenticated_playback_uses_music_identity_and_never_falls_back_after_refusal() {
         use crate::protocol_tests::{account, server};
@@ -308,6 +427,7 @@ mod tests {
                 .unwrap()
                 .to_ascii_lowercase();
             assert!(headers.contains("x-youtube-client-name: 67"));
+            assert!(headers.contains("x-goog-api-format-version: 1"));
             assert!(headers.contains("cookie: sapisid=fixture-only"));
             assert!(headers.contains("x-goog-authuser: 1"));
             assert!(headers.contains("x-goog-visitor-id: fixture-visitor"));
@@ -316,6 +436,11 @@ mod tests {
             assert_eq!(body["context"]["client"]["clientName"], "WEB_REMIX");
             assert_eq!(body["context"]["user"]["onBehalfOfUser"], "fixture-channel");
             assert_eq!(body["videoId"], "abcdefghijk");
+            assert_eq!(
+                body["playbackContext"]["contentPlaybackContext"]["html5Preference"],
+                "HTML5_PREF_WANTS"
+            );
+            assert!(body.get("racyCheckOk").is_none() && body.get("contentCheckOk").is_none());
         }
     }
     #[tokio::test]

@@ -361,7 +361,29 @@ async fn source(
             .await
             .get_or_insert_with(doremi_youtube::Client::new)
         {
-            Ok(client) => client.resolve(media).await,
+            Ok(client) => {
+                let result = client.resolve(media).await;
+                if result.is_err()
+                    && let Some(d) = client.player_diagnostic()
+                {
+                    let message = format!(
+                        "YTM player failure http={} api={:?} status={} reason={} aac={} direct={} cipher={} drm={}",
+                        d.http_status,
+                        d.api_code,
+                        d.status,
+                        d.reason,
+                        d.aac_formats,
+                        d.direct_aac,
+                        d.ciphered_aac,
+                        d.drm
+                    );
+                    #[cfg(target_os = "android")]
+                    log::warn!("{message}");
+                    #[cfg(not(target_os = "android"))]
+                    eprintln!("{message}");
+                }
+                result
+            }
             Err(error) => Err(*error),
         };
         return result

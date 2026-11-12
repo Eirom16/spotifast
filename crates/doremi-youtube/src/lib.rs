@@ -103,6 +103,7 @@ pub struct Client {
     // Deliberately no Debug/Serialize: this never enters catalog snapshots/logs.
     session: Option<session::Session>,
     base: String,
+    player_diagnostic: Option<stream::PlayerDiagnostic>,
     thumbnails: std::collections::VecDeque<(MediaId, String)>,
 }
 impl Client {
@@ -118,6 +119,7 @@ impl Client {
             http,
             session: None,
             base: format!("{ORIGIN}/youtubei/v1/"),
+            player_diagnostic: None,
             thumbnails: std::collections::VecDeque::new(),
         })
     }
@@ -126,6 +128,9 @@ impl Client {
     }
     pub fn signed_in(&self) -> bool {
         self.session.is_some()
+    }
+    pub fn player_diagnostic(&self) -> Option<stream::PlayerDiagnostic> {
+        self.player_diagnostic
     }
     pub async fn sign_in(&mut self, cookie: String) -> Result<Account, Error> {
         self.session = Some(session::Session::parse(&cookie)?);
@@ -202,6 +207,7 @@ impl Client {
             .header("Origin", ORIGIN)
             .header("X-YouTube-Client-Name", "67")
             .header("X-YouTube-Client-Version", VERSION)
+            .header("X-Goog-Api-Format-Version", "1")
             .json(&body);
         if let Some(token) = continuation {
             request = request.query(&[
@@ -212,6 +218,10 @@ impl Client {
         }
         request = self.authenticate(request)?;
         let mut response = request.send().await.map_err(network_error)?;
+        if endpoint == "player" {
+            self.player_diagnostic =
+                Some(stream::PlayerDiagnostic::http(response.status().as_u16()));
+        }
         match response.status().as_u16() {
             200 => {}
             401 | 403 => {
@@ -241,6 +251,9 @@ impl Client {
             bytes.extend_from_slice(&chunk);
         }
         let value: Value = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?;
+        if endpoint == "player" {
+            self.player_diagnostic = Some(stream::PlayerDiagnostic::response(200, &value));
+        }
         if value.get("error").is_some() {
             return Err(Error::InvalidResponse);
         }
