@@ -82,13 +82,14 @@ mod tests {
     fn native_store_round_trip() {
         let name = format!("fixture-round-trip-{}", std::process::id());
         let entry = entry_for(&name).expect("native store unavailable");
+        let fixture=crate::session::credential_document(&serde_json::json!({"schema":1,"cookie":"SAPISID=synthetic-fixture-only","visitor_data":"synthetic-visitor","data_sync_id":"synthetic-channel","auth_user":"1"}).to_string()).unwrap();
         entry
-            .set_secret(b"SAPISID=synthetic-fixture-only")
+            .set_secret(fixture.as_bytes())
             .expect("native write failed");
         let value = entry.get_secret().expect("native read failed");
         let removed = entry.delete_credential();
         assert!(removed.is_ok());
-        assert_eq!(value, b"SAPISID=synthetic-fixture-only");
+        assert_eq!(value, fixture.as_bytes());
         assert!(matches!(
             entry.get_secret(),
             Err(keyring_core::Error::NoEntry)

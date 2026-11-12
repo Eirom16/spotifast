@@ -42,7 +42,9 @@ fn consent(
     cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<String, doremi_core::catalog::ProviderError> {
     use doremi_core::catalog::ProviderError as Error;
-    use doremi_youtube::embedded::{LOGIN_URL, allowed_auth_url, provider_denied, session_cookie};
+    use doremi_youtube::embedded::{
+        LOGIN_URL, allowed_auth_url, browser_session, is_music_page, provider_denied,
+    };
     use std::{
         cell::Cell,
         rc::Rc,
@@ -89,6 +91,11 @@ fn consent(
             .map_err(|_| Error::Unavailable)?
     };
     let deadline = Instant::now() + Duration::from_secs(600);
+    let (context_send, context_events) = std::sync::mpsc::sync_channel::<(u64, String)>(1);
+    let mut page = None;
+    let mut epoch = 0_u64;
+    let mut configuration = None;
+    let mut evaluation: Option<(u64, Instant)> = None;
     let mut result = Err(Error::Cancelled);
     event_loop.run_return(|event, _, control| {
         *control = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250));
@@ -117,16 +124,39 @@ fn consent(
                 *control = ControlFlow::Exit;
                 return;
             }
-            // Read only the service's cookies even if Google's confirmation
-            // page has not navigated away. Account verification stays in Rust.
-            if let Ok(cookies) = webview.cookies_for_url(doremi_youtube::ORIGIN)
-                && let Some(cookie) = session_cookie(
+            let music_page=webview.url().ok().filter(|url|is_music_page(url));
+            if music_page!=page {
+                page=music_page;
+                configuration=None;
+                let Some(next)=epoch.checked_add(1) else {result=Err(Error::Exhausted);*control=ControlFlow::Exit;return;};
+                epoch=next;
+            }
+            if let Ok((generation,value))=context_events.try_recv() {
+                if evaluation.is_some_and(|(expected,_)|expected==generation){evaluation=None;}
+                if generation==epoch {configuration=Some(value);}
+            }
+            if evaluation.is_some_and(|(_,until)|Instant::now()>=until){evaluation=None;}
+            if page.is_some() && evaluation.is_none() {
+                let send=context_send.clone();
+                let generation=epoch;
+                let script="(function(){if(location.origin!=='https://music.youtube.com')return null;var c=(window.yt&&window.yt.config_)||(window.ytcfg&&window.ytcfg.data_)||{};return JSON.stringify({visitor_data:c.VISITOR_DATA||'',data_sync_id:c.DATASYNC_ID||'',auth_user:String(c.SESSION_INDEX||0)});})()";
+                if webview.evaluate_script_with_callback(script,move |value|{
+                    let bounded=if value.len()<=20000 {value}else{String::new()};
+                    let _=send.try_send((generation,bounded));
+                }).is_ok(){evaluation=Some((generation,Instant::now()+Duration::from_secs(2)));}
+            }
+            // Like the Music web client, bind the cookie to its visitor,
+            // account index and selected channel before native verification.
+            if let Some(configuration)=configuration.as_deref()
+                && let Ok(cookies) = webview.cookies_for_url(doremi_youtube::ORIGIN)
+                && let Some(document) = browser_session(
                     cookies
                         .into_iter()
                         .map(|cookie| (cookie.name().to_owned(), cookie.value().to_owned())),
+                    configuration,
                 )
             {
-                result = Ok(cookie);
+                result = Ok(document);
                 *control = ControlFlow::Exit;
             }
         }

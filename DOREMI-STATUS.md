@@ -4,10 +4,10 @@
 - Catálogo principal YouTube Music nativo, adaptado de Tubefast MIT: búsqueda,
   artistas, álbumes, playlists e inicio con secciones reales. MusicBrainz opcional.
   Sin equivalencias ocultas de títulos o IDs entre proveedores.
-- CI `43117255787`, commit `db4c9b0`: APK y hosts Doremi Linux/Windows aprobados,
+- CI `43123455951`, commit `f67b410`: APK y hosts Doremi Linux/Windows aprobados,
   incluido auxiliar de autenticación, licencias, versión y checksums verificados.
-  CI general `43117255808` completa en verde, incluidos tests, Clippy y artifacts.
-- APK `db4c9b0` instalada sin borrar datos en Samsung ARMv7: aislamiento y cancelación
+  CI general `43123455939` completa en verde, incluidos tests, Clippy y artifacts.
+- APK `f67b410` instalada sin borrar datos en Samsung ARMv7: aislamiento y cancelación
   del login comprobados. Inicio con 30 elementos, carátulas y buscador superior con
   teclado comprobados en `4f4e49e`, en ambos temas. Biblioteca conserva su hash.
   Navegación Linux real: 20 canciones, artista con 59 elementos, álbum con 18 pistas
@@ -17,14 +17,17 @@
   Cancelar destruye proceso y perfil: comprobado en CachyOS y Samsung. Keystore
   sintético comprobado tras reinicio, con integridad y borrado. Cookies redactadas.
   Importación explícita de sesión autorizada de Doremi-Rust disponible.
-- Autorización real pendiente: la primera prueba de navegador automatizado fue
-  rechazada por Google. El nuevo flujo Android llegó a verificación en dos pasos;
-  el usuario completó la verificación y Google mostró «Something went wrong» al
-  continuar. Entrada desde YouTube Music y cookies entre sitios del WebView ya
-  compiladas; autorización real de este ajuste aún no probada. Se corrige además
-  la espera innecesaria por una navegación: las cookies propias de Music se pueden
-  entregar aunque siga visible Google; validación musical obligatoria en Rust.
-  Esta última corrección está pendiente de CI y prueba real.
+- Autorización real pendiente: Google volvió a atascarse tras la verificación del
+  usuario en `f67b410`; el proceso musical permaneció vivo. Comparado Meld/Metrolist
+  `7ab3534` (GPL-3.0): nueva adaptación con código propio de los enlaces de Android
+  `intent://` y del contexto Music (visitor, cuenta y canal), sin exigir LOGIN_INFO.
+  El mismo cliente Rust valida cuenta, catálogo y biblioteca y conserva el contexto
+  en el almacén protegido. Local: 21 tests YouTube, incluido llavero nativo, 50 del
+  host y Clippy estricto aprobados. Android adaptado pendiente de CI y prueba real;
+  aún no hay cuenta musical ni datos personales validados.
+- CachyOS: bundle `db4c9b0` instalado con acceso directo y auxiliar verificados;
+  versiones anteriores y perfiles conservados. Cancelación y retiro de los
+  procesos del navegador comprobados desde la instalación.
 - Windows: ejecutables nativos compilados. Arranque gráfico/audio bloqueados en
   runner por falta de OpenGL 2.0 y dispositivo de audio; falta prueba física.
   Almacén nativo y compatibilidad UTF-16 de Python keyring comprobados con dos

@@ -1,13 +1,13 @@
 //! Single-attempt native media resolution and bounded HTTP range input.
 //! Uses Tubefast's pinned primary player client, without its client rotation,
 //! visitor retries, signature deciphering or content-check overrides.
-use crate::{Client, Error, PROVIDER, authorization, id};
+use crate::{Client, Error, PROVIDER, id};
 use doremi_core::media::MediaId;
 use reqwest::{Url, redirect::Policy};
 use serde_json::{Value, json};
 use std::{
     io::{self, Read, Seek, SeekFrom},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 const PLAYER: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
@@ -52,8 +52,11 @@ impl Client {
         {
             return Err(Error::InvalidRequest);
         }
-        let body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local()});
-        let mut request = self
+        let mut body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local()});
+        if let Some(session) = &self.session {
+            session.context(&mut body["context"]);
+        }
+        let request = self
             .http
             .post(PLAYER)
             .header("User-Agent", UA)
@@ -61,25 +64,13 @@ impl Client {
             .header("X-YouTube-Client-Version", "1.02")
             .header("Origin", crate::ORIGIN)
             .json(&body);
-        if let Some(cookie) = &self.session {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| Error::Unavailable)?
-                .as_secs();
-            request = request
-                .header("Cookie", cookie)
-                .header(
-                    "Authorization",
-                    authorization(cookie, now).ok_or(Error::InvalidRequest)?,
-                )
-                .header("X-Origin", crate::ORIGIN)
-                .header("X-Goog-AuthUser", "0");
-        }
+        let request = self.authenticate(request)?;
         let mut response = request.send().await.map_err(crate::network_error)?;
         match response.status().as_u16() {
             200 => {}
             401 | 403 => {
-                self.clear_session();
+                // A content/player refusal is not proof that the musical
+                // account expired. Account verification owns that decision.
                 return Err(Error::AccessDenied);
             }
             429 => {

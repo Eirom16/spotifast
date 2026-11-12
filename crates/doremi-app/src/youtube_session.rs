@@ -398,10 +398,11 @@ fn run(
         Intent::ImportDocument(uri) => {
             credentials::read_document(&uri).and_then(|bytes| doremi_youtube::legacy_cookie(&bytes))
         }
-        Intent::Paste(text) => doremi_youtube::paste_cookie(&text),
+        Intent::Paste(text) => Ok(text),
         Intent::Disconnect | Intent::Expire => unreachable!(),
     };
-    let cookie = match cookie {
+    let cookie = match cookie.and_then(|value| doremi_youtube::session::credential_document(&value))
+    {
         Ok(cookie) => cookie,
         Err(error) => return (Err(error), false),
     };

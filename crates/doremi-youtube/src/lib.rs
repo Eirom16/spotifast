@@ -9,6 +9,7 @@ pub mod credentials;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod embedded;
 pub mod parser;
+pub mod session;
 pub mod stream;
 use doremi_core::{
     catalog::ProviderError as Error,
@@ -99,7 +100,7 @@ pub struct Account {
 pub struct Client {
     http: Http,
     // Deliberately no Debug/Serialize: this never enters catalog snapshots/logs.
-    session: Option<String>,
+    session: Option<session::Session>,
     base: String,
     thumbnails: std::collections::VecDeque<(MediaId, String)>,
 }
@@ -126,10 +127,7 @@ impl Client {
         self.session.is_some()
     }
     pub async fn sign_in(&mut self, cookie: String) -> Result<Account, Error> {
-        if authorization(&cookie, 0).is_none() {
-            return Err(Error::InvalidRequest);
-        }
-        self.session = Some(cookie);
+        self.session = Some(session::Session::parse(&cookie)?);
         match self.account().await {
             Ok(account) => Ok(account),
             Err(error) => {
@@ -155,7 +153,7 @@ impl Client {
         }
     }
     pub async fn fetch(&mut self, request: &Request) -> Result<parser::Page, Error> {
-        if request.personal() {
+        if request.personal() || matches!(request, Request::Home) && self.signed_in() {
             // An empty public response must never masquerade as a private library.
             self.account().await?;
         }
@@ -193,6 +191,9 @@ impl Client {
     async fn post(&mut self, endpoint: &str, mut body: Value) -> Result<Value, Error> {
         body["context"] =
             json!({"client":{"clientName":"WEB_REMIX","clientVersion":VERSION,"hl":"en"}});
+        if let Some(session) = &self.session {
+            session.context(&mut body["context"]);
+        }
         let continuation = body["continuation"].as_str().map(str::to_owned);
         let mut request = self
             .http
@@ -208,25 +209,14 @@ impl Client {
                 ("type", "next"),
             ]);
         }
-        if let Some(cookie) = &self.session {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(|_| Error::Unavailable)?
-                .as_secs();
-            request = request
-                .header("Cookie", cookie)
-                .header(
-                    "Authorization",
-                    authorization(cookie, now).ok_or(Error::InvalidRequest)?,
-                )
-                .header("X-Origin", ORIGIN)
-                .header("X-Goog-AuthUser", "0");
-        }
+        request = self.authenticate(request)?;
         let mut response = request.send().await.map_err(network_error)?;
         match response.status().as_u16() {
             200 => {}
             401 | 403 => {
-                self.clear_session();
+                if endpoint == "account/account_menu" {
+                    self.clear_session();
+                }
                 return Err(Error::AccessDenied);
             }
             429 => {
@@ -259,6 +249,38 @@ impl Client {
         }
         Ok(value)
     }
+    fn authenticate(
+        &self,
+        mut request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, Error> {
+        if let Some(session) = &self.session {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| Error::Unavailable)?
+                .as_secs();
+            request = request
+                .header("Cookie", secret_header(&session.cookie)?)
+                .header(
+                    "Authorization",
+                    secret_header(
+                        &authorization(&session.cookie, now).ok_or(Error::InvalidRequest)?,
+                    )?,
+                )
+                .header("X-Origin", ORIGIN)
+                .header("Referer", "https://music.youtube.com/")
+                .header("X-Goog-AuthUser", &session.auth_user);
+            if let Some(visitor) = &session.visitor_data {
+                request = request.header("X-Goog-Visitor-Id", secret_header(visitor)?);
+            }
+        }
+        Ok(request)
+    }
+}
+fn secret_header(value: &str) -> Result<reqwest::header::HeaderValue, Error> {
+    let mut header = reqwest::header::HeaderValue::from_bytes(value.as_bytes())
+        .map_err(|_| Error::InvalidRequest)?;
+    header.set_sensitive(true);
+    Ok(header)
 }
 fn network_error(error: reqwest::Error) -> Error {
     if error.is_timeout() {
@@ -274,7 +296,9 @@ pub fn authorization(cookie: &str, seconds: u64) -> Option<String> {
             .map(str::trim)
             .find_map(|pair| pair.strip_prefix(name))
     };
-    let secret = value("__Secure-3PAPISID=").or_else(|| value("SAPISID="))?;
+    let secret = value("__Secure-3PAPISID=")
+        .filter(|value| !value.is_empty())
+        .or_else(|| value("SAPISID=").filter(|value| !value.is_empty()))?;
     if secret.is_empty() || cookie.contains(['\r', '\n']) {
         return None;
     }
@@ -370,6 +394,10 @@ mod tests {
         );
         assert!(authorization("SID=anon", 0).is_none());
         assert!(authorization("SAPISID=\r\nsecret", 0).is_none());
+        assert_eq!(
+            authorization("__Secure-3PAPISID=; SAPISID=fixture", 0),
+            authorization("SAPISID=fixture", 0)
+        );
     }
     #[test]
     fn stable_provider_identity_and_duration() {
@@ -517,6 +545,83 @@ mod protocol_tests {
         assert_eq!(
             client.fetch(&Request::Library).await.err(),
             Some(Error::AccessDenied)
+        );
+    }
+    #[tokio::test]
+    async fn captured_music_context_binds_account_and_library_to_the_selected_channel() {
+        let (base, task) = server(vec![
+            (200, account()),
+            (200, account()),
+            (200, json!({"responseContext":{},"contents":{}})),
+        ])
+        .await;
+        let mut client = Client::new().unwrap();
+        client.base = base;
+        let input=json!({"schema":1,"cookie":"SAPISID=synthetic-only","visitor_data":"synthetic-visitor","data_sync_id":"synthetic-channel||synthetic-account","auth_user":"1"}).to_string();
+        let stored = session::credential_document(&input).unwrap();
+        client.sign_in(stored).await.unwrap();
+        client.fetch(&Request::Library).await.unwrap();
+        let preview = client
+            .authenticate(client.http.get(ORIGIN))
+            .unwrap()
+            .build()
+            .unwrap();
+        for name in ["Cookie", "Authorization", "X-Goog-Visitor-Id"] {
+            assert!(preview.headers().get(name).unwrap().is_sensitive());
+        }
+        for request in task.await.unwrap() {
+            let lower = request.to_ascii_lowercase();
+            assert!(lower.contains("x-goog-authuser: 1\r\n"));
+            assert!(lower.contains("x-goog-visitor-id: synthetic-visitor\r\n"));
+            let body: Value =
+                serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+            assert_eq!(
+                body["context"]["client"]["visitorData"],
+                "synthetic-visitor"
+            );
+            assert_eq!(
+                body["context"]["user"]["onBehalfOfUser"],
+                "synthetic-channel"
+            );
+        }
+        client.clear_session();
+        let request = client
+            .authenticate(client.http.get("https://music.youtube.com"))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(!request.headers().contains_key("Cookie"));
+        assert!(!request.headers().contains_key("X-Goog-Visitor-Id"));
+    }
+    #[tokio::test]
+    async fn a_forbidden_capability_does_not_discard_a_verified_account() {
+        let (base, task) = server(vec![
+            (200, account()),
+            (200, account()),
+            (403, json!({})),
+            (403, json!({})),
+        ])
+        .await;
+        let mut client = Client::new().unwrap();
+        client.base = base;
+        client
+            .sign_in("SAPISID=synthetic-only".into())
+            .await
+            .unwrap();
+        assert_eq!(
+            client.fetch(&Request::Library).await.err(),
+            Some(Error::AccessDenied)
+        );
+        assert!(
+            client.signed_in(),
+            "A denied library is not proof that the account expired"
+        );
+        assert_eq!(client.account().await.err(), Some(Error::AccessDenied));
+        assert!(!client.signed_in());
+        assert_eq!(
+            task.await.unwrap().len(),
+            4,
+            "Never retry the denied library as a guest"
         );
     }
     #[tokio::test]

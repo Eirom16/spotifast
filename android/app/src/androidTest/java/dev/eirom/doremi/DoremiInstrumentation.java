@@ -912,7 +912,9 @@ public final class DoremiInstrumentation extends Instrumentation {
         // A nested synthetic profile cannot be restored by the running Rust UI.
         File directory=new File(profileDirectory(),"session-store-fixture");
         String path=directory.getAbsolutePath();
-        byte[] fixture="SAPISID=synthetic-android-store-fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        byte[] fixture=new JSONObject().put("schema",1).put("cookie","SAPISID=synthetic-android-store-fixture")
+            .put("visitor_data","synthetic-visitor").put("data_sync_id","synthetic-channel").put("auth_user","1")
+            .toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
         File file=new File(directory,"youtube-session-v1.bin");
         if(!restore) {
             if(YoutubeSessionStore.load(getTargetContext(),path)!=null) throw new AssertionError("Use a fresh session-store fixture");
@@ -945,13 +947,30 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(YoutubeAuthActivity.allowed(url)) throw new AssertionError("Unexpected authentication navigation allowed");
         if(!YoutubeAuthActivity.denied("https://accounts.google.com/v3/signin/rejected?error=disallowed_useragent") || YoutubeAuthActivity.denied("https://music.youtube.com/"))
             throw new AssertionError("Provider refusal was not distinguished");
-        if(YoutubeAuthActivity.sessionReady(null) || YoutubeAuthActivity.sessionReady("SAPISID=anonymous") || YoutubeAuthActivity.sessionReady("LOGIN_INFO=marker-only") || YoutubeAuthActivity.sessionReady("LOGIN_INFO=; SAPISID=fixture"))
-            throw new AssertionError("Incomplete service cookies ended authentication");
-        if(!YoutubeAuthActivity.sessionReady("LOGIN_INFO=fixture; SAPISID=synthetic") || !YoutubeAuthActivity.sessionReady("LOGIN_INFO=fixture; __Secure-3PAPISID=synthetic"))
-            throw new AssertionError("Complete service cookies require an unrelated page navigation");
+        String context="{\"visitor_data\":\"synthetic-visitor\",\"data_sync_id\":\"synthetic-channel||synthetic-account\",\"auth_user\":\"1\"}";
+        for(String cookie:new String[]{null,"SID=anonymous","LOGIN_INFO=marker-only","SAPISID="})
+            if(YoutubeAuthActivity.sessionDocument(cookie,context)!=null) throw new AssertionError("Incomplete service cookies ended authentication");
+        if(YoutubeAuthActivity.sessionDocument("SAPISID=synthetic","{}")!=null || YoutubeAuthActivity.sessionDocument("SAPISID=synthetic",null)!=null)
+            throw new AssertionError("Missing Music context ended authentication");
+        for(String invalid:new String[]{"{\"visitor_data\":null}","{\"visitor_data\":[]}","{\"visitor_data\":\"synthetic\",\"auth_user\":\"invalid\"}"})
+            if(YoutubeAuthActivity.sessionDocument("SAPISID=synthetic",invalid)!=null) throw new AssertionError("Invalid service context ended authentication");
+        if(YoutubeAuthActivity.sessionDocument("SAPISID=synthetic\r\ninvalid",context)!=null) throw new AssertionError("Invalid cookie header ended authentication");
+        for(String cookie:new String[]{"SAPISID=synthetic","__Secure-3PAPISID=synthetic"}) {
+            String captured=YoutubeAuthActivity.sessionDocument(cookie,context);
+            if(captured==null || !"1".equals(new JSONObject(captured).getString("auth_user"))) throw new AssertionError("Music session without LOGIN_INFO was not captured");
+        }
+        String handoff="intent://accounts.google.com/fixture#Intent;scheme=https;package=com.google.android.gms;component=com.google.android.gms/UnsafeExplicitComponent;launchFlags=0x3;end";
+        Intent prepared=YoutubeAuthActivity.authIntent("https://accounts.google.com/ServiceLogin",handoff);
+        if(prepared==null || prepared.getComponent()!=null || prepared.getSelector()!=null || prepared.getFlags()!=0 || !Intent.ACTION_VIEW.equals(prepared.getAction()) || !prepared.hasCategory(Intent.CATEGORY_BROWSABLE))
+            throw new AssertionError("Google platform handoff is not sanitized");
+        Intent task=YoutubeAuthActivity.authIntent("https://accounts.google.com/",handoff.replace("0x3","0x10000003"));
+        if(task==null || task.getFlags()!=Intent.FLAG_ACTIVITY_NEW_TASK) throw new AssertionError("Google task routing or URI permission isolation was lost");
+        for(String target:new String[]{"intent://data/private#Intent;scheme=file;package=com.google.android.gms;end","intent://accounts.google.com.attacker.invalid/#Intent;scheme=https;end","intent://accounts.google.com/#Intent;scheme=https;package=invalid.attacker;end"})
+            if(YoutubeAuthActivity.authIntent("https://accounts.google.com/",target)!=null) throw new AssertionError("Unexpected platform handoff allowed");
+        if(YoutubeAuthActivity.authIntent("https://attacker.invalid/",handoff)!=null) throw new AssertionError("Untrusted page initiated Google handoff");
         android.content.pm.ActivityInfo info=getTargetContext().getPackageManager().getActivityInfo(new android.content.ComponentName(getTargetContext(),YoutubeAuthActivity.class),0);
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
-        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).put("cookie_capture_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",10).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     @Override public void onStart() {
         Bundle result=new Bundle();

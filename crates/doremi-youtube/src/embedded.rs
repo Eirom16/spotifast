@@ -189,8 +189,13 @@ fn receive(mut stream: TcpStream, nonce: &[u8; 32], cancel: &AtomicBool) -> Resu
             if cookie.len() > 64 * 1024 {
                 return Err(Error::TooLarge);
             }
-            authorization(&cookie, 0).ok_or(Error::InvalidResponse)?;
-            Ok(cookie)
+            crate::session::credential_document(&cookie).map_err(|error| {
+                if error == Error::TooLarge {
+                    error
+                } else {
+                    Error::InvalidResponse
+                }
+            })
         }
         1 => Err(Error::Cancelled),
         2 => Err(Error::Timeout),
@@ -386,31 +391,91 @@ pub fn provider_denied(value: &str) -> bool {
                 key == "error" && matches!(value.as_ref(), "disallowed_useragent" | "access_denied")
             }))
 }
+pub fn is_music_page(value: &str) -> bool {
+    allowed_auth_url(value)
+        && reqwest::Url::parse(value)
+            .ok()
+            .is_some_and(|url| url.host_str() == Some("music.youtube.com"))
+}
 pub fn session_cookie(pairs: impl IntoIterator<Item = (String, String)>) -> Option<String> {
-    let pairs: Vec<_> = pairs
-        .into_iter()
-        .filter(|(key, value)| {
-            !key.contains([';', '\r', '\n', '=']) && !value.contains([';', '\r', '\n'])
+    cookie_header(pairs).filter(|cookie| {
+        cookie.split(';').map(str::trim).any(|pair| {
+            pair.strip_prefix("LOGIN_INFO=")
+                .is_some_and(|value| !value.is_empty())
         })
-        .collect();
-    if !pairs
-        .iter()
-        .any(|(key, value)| key == "LOGIN_INFO" && !value.is_empty())
-    {
+    })
+}
+fn cookie_header(pairs: impl IntoIterator<Item = (String, String)>) -> Option<String> {
+    let mut cookie = String::new();
+    for (key, value) in pairs {
+        if key.contains([';', '\r', '\n', '=']) || value.contains([';', '\r', '\n']) {
+            continue;
+        }
+        let extra = key
+            .len()
+            .checked_add(value.len())?
+            .checked_add(if cookie.is_empty() { 1 } else { 3 })?;
+        if extra > (64 * 1024usize).saturating_sub(cookie.len()) {
+            return None;
+        }
+        if !cookie.is_empty() {
+            cookie.push_str("; ");
+        }
+        cookie.push_str(&key);
+        cookie.push('=');
+        cookie.push_str(&value);
+    }
+    authorization(&cookie, 0).is_some().then_some(cookie)
+}
+/// Scoped Music cookies plus the service's read-only web configuration. This
+/// yields a candidate credential document, never an authenticated account.
+pub fn browser_session(
+    pairs: impl IntoIterator<Item = (String, String)>,
+    script_result: &str,
+) -> Option<String> {
+    if script_result.len() > 20000 {
         return None;
     }
-    let cookie = pairs
-        .into_iter()
-        .map(|(key, value)| format!("{key}={value}"))
-        .collect::<Vec<_>>()
-        .join("; ");
-    (cookie.len() <= 64 * 1024 && authorization(&cookie, 0).is_some()).then_some(cookie)
+    let parsed: serde_json::Value = serde_json::from_str(script_result).ok()?;
+    let context = if let Some(encoded) = parsed.as_str() {
+        serde_json::from_str(encoded).ok()?
+    } else {
+        parsed
+    };
+    let visitor = context["visitor_data"]
+        .as_str()
+        .filter(|value| !value.is_empty())?;
+    let document = serde_json::json!({
+        "schema":1,"cookie":cookie_header(pairs)?,"visitor_data":visitor,
+        "data_sync_id":context["data_sync_id"].as_str().unwrap_or(""),
+        "auth_user":context["auth_user"].as_str().unwrap_or("0"),
+    })
+    .to_string();
+    crate::session::credential_document(&document).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ORIGIN;
+    #[test]
+    fn music_configuration_allows_capture_without_the_optional_login_info_marker() {
+        assert!(is_music_page("https://music.youtube.com"));
+        assert!(is_music_page("https://music.youtube.com/"));
+        assert!(!is_music_page("https://accounts.google.com/"));
+        assert!(!is_music_page(
+            "https://music.youtube.com.attacker.invalid/"
+        ));
+        let context=serde_json::json!({"visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"}).to_string();
+        let pairs = || [("SAPISID".into(), "synthetic-only".into())];
+        let document = browser_session(pairs(), &context).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(value["auth_user"], "1");
+        assert_eq!(value["visitor_data"], "fixture-visitor");
+        assert!(browser_session(pairs(), "{}").is_none());
+        assert!(browser_session([("LOGIN_INFO".into(), "marker-only".into())], &context).is_none());
+        assert!(browser_session(pairs(), &serde_json::to_string(&context).unwrap()).is_some());
+    }
     fn connected(bytes: Vec<u8>) -> (TcpStream, std::thread::JoinHandle<()>) {
         let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let address = listener.local_addr().unwrap();
@@ -438,6 +503,13 @@ mod tests {
         let fixture = "SAPISID=synthetic-ipc-only; LOGIN_INFO=synthetic";
         let (stream, writer) = connected(frame(nonce, 0, Some(fixture)));
         assert_eq!(receive(stream, &nonce, &cancel).unwrap(), fixture);
+        writer.join().unwrap();
+        let document=serde_json::json!({"schema":1,"cookie":"SAPISID=synthetic-only","visitor_data":"fixture-visitor","auth_user":"1"}).to_string();
+        let (stream, writer) = connected(frame(nonce, 0, Some(&document)));
+        assert_eq!(
+            receive(stream, &nonce, &cancel).unwrap(),
+            crate::session::credential_document(&document).unwrap()
+        );
         writer.join().unwrap();
         let (stream, writer) = connected(frame([18; 32], 0, Some(fixture)));
         assert_eq!(receive(stream, &nonce, &cancel), Err(Error::InvalidRequest));
