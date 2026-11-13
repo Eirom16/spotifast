@@ -37,6 +37,7 @@ impl DoremiApp {
                     action_label: "Abrir reproductor",
                 },
             );
+            self.media_artwork(ui, &entry.media.id, row.cover_rect(), 4);
             self.record("queue-current", &row.body);
             if row.body.clicked() {
                 self.navigate(Page::Player);
@@ -80,6 +81,7 @@ impl DoremiApp {
                         action_label: "",
                     },
                 );
+                self.media_artwork(ui, &entry.media.id, row.cover_rect(), 4);
                 self.record(&format!("queue-entry:{}", entry.id.as_u64()), &row.body);
                 if let Some(index) = index {
                     let mut child = ui.new_child(

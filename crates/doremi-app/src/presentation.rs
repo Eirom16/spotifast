@@ -4,6 +4,42 @@ use doremi_ui::{self as theme, Icon, Palette};
 use egui::{Align, Frame, Layout, Margin, RichText, Vec2};
 
 impl DoremiApp {
+    /// Reuse the catalog's bounded image worker for every music surface.
+    /// The drawing thread only tries the client lock and queues visible work.
+    pub(super) fn media_artwork(
+        &mut self,
+        ui: &egui::Ui,
+        id: &MediaId,
+        rect: egui::Rect,
+        radius: u8,
+    ) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if id.provider.as_str() == doremi_youtube::PROVIDER && ui.is_rect_visible(rect) {
+            let model = self.model.as_mut().unwrap();
+            let url = model
+                .music
+                .session
+                .client
+                .try_lock()
+                .ok()
+                .and_then(|client| {
+                    client
+                        .as_ref()
+                        .and_then(|client| client.as_ref().ok())
+                        .and_then(|client| client.thumbnail(id))
+                });
+            model.artwork.request_thumbnail(id, url, ui.ctx());
+            if let Some(cover) = self.artwork_textures.current(&model.artwork, id, ui.ctx()) {
+                egui::Image::new((cover.id(), cover.size_vec2()))
+                    .fit_to_exact_size(rect.size())
+                    .corner_radius(radius)
+                    .paint_at(ui, rect);
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
+        let _ = (ui, id, rect, radius);
+    }
+
     pub(super) fn record(&mut self, name: &str, response: &egui::Response) {
         self.controls.push(Control {
             name: name.into(),
@@ -448,19 +484,25 @@ impl DoremiApp {
 
     fn now_playing(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let model = self.model.as_ref().unwrap();
+        let id = model.queue.current().map(|entry| entry.media.id.clone());
+        let caption = playback_caption(model);
         let title = model
             .queue
             .current()
             .map(|entry| entry.media.title.as_str())
-            .unwrap_or("Ninguna canción seleccionada");
+            .unwrap_or("Ninguna canción seleccionada")
+            .to_owned();
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
             theme::cover_placeholder(ui, palette, rect, 4.0, Icon::Music);
+            if let Some(id) = &id {
+                self.media_artwork(ui, id, rect, 4);
+            }
             ui.vertical(|ui| {
                 ui.add(
                     egui::Label::new(RichText::new(title).font(theme::semibold(14.0))).truncate(),
                 );
-                ui.weak(playback_caption(model));
+                ui.weak(caption);
             });
         });
     }
@@ -528,6 +570,7 @@ impl DoremiApp {
                     Vec2::splat(40.0),
                 );
                 theme::cover_placeholder(ui, palette, cover, 4.0, Icon::Music);
+                self.media_artwork(ui, &media.id, cover, 4);
                 let text = egui::Rect::from_min_max(
                     egui::pos2(cover.right() + 12.0, body.top() + 5.0),
                     egui::pos2(body.right() - 4.0, body.bottom()),
@@ -633,6 +676,7 @@ impl DoremiApp {
             return;
         };
         let title = current.media.title.clone();
+        let id = current.media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
         let notice = model.notice.clone();
@@ -642,6 +686,7 @@ impl DoremiApp {
         ui.vertical_centered(|ui| {
             let (rect, response) = ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
             theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
+            self.media_artwork(ui, &id, rect, 8);
             self.record("player-art", &response);
             let mut text = egui::text::LayoutJob::simple(
                 title,
@@ -673,6 +718,7 @@ impl DoremiApp {
     fn mobile_player_landscape(&mut self, ui: &mut egui::Ui, palette: &Palette, height: f32) {
         let model = self.model.as_ref().unwrap();
         let title = model.queue.current().unwrap().media.title.clone();
+        let id = model.queue.current().unwrap().media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
         let notice = model.notice.clone();
@@ -707,6 +753,7 @@ impl DoremiApp {
                 let (rect, response) =
                     ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
                 theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
+                self.media_artwork(ui, &id, rect, 8);
                 self.record("player-art", &response);
                 #[cfg(any(target_os = "android", test))]
                 {
@@ -868,9 +915,12 @@ impl DoremiApp {
                     || subtitle.to_owned(),
                     |prefix| format!("{prefix} · {subtitle}"),
                 );
-                let duration = media
-                    .duration_ms
-                    .filter(|_| media.id.provider.as_str() == "wikimedia-commons");
+                let duration = media.duration_ms.filter(|_| {
+                    matches!(
+                        media.id.provider.as_str(),
+                        "wikimedia-commons" | "youtube-music"
+                    )
+                });
                 let subtitle = duration.map_or_else(
                     || subtitle.to_owned(),
                     |ms| {
@@ -889,6 +939,16 @@ impl DoremiApp {
                             == Some(doremi_core::media::EntityKind::Artist),
                         actions: 2,
                         action_label: "Seleccionar",
+                    },
+                );
+                self.media_artwork(
+                    ui,
+                    &media.id,
+                    row.cover_rect(),
+                    if metadata_kind(&media.id) == Some(doremi_core::media::EntityKind::Artist) {
+                        20
+                    } else {
+                        4
                     },
                 );
                 self.record(&format!("select:{}", media.id.local()), &row.body);

@@ -108,6 +108,8 @@ impl DoremiApp {
                                     title: &media.title,
                                     subtitle: if media.id.provider.as_str() == "wikimedia-commons" {
                                         "Commons · CC0"
+                                    } else if media.id.provider.as_str() == "youtube-music" {
+                                        "YouTube Music"
                                     } else {
                                         "Audio en este dispositivo"
                                     },
@@ -128,6 +130,12 @@ impl DoremiApp {
                                             rect,
                                             radius,
                                             doremi_ui::Icon::Music,
+                                        );
+                                        self.media_artwork(
+                                            ui,
+                                            &media.id,
+                                            rect,
+                                            radius.min(127.0) as u8,
                                         );
                                     }
                                     doremi_ui::cards::Slot::Text {

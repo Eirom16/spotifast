@@ -1038,39 +1038,16 @@ impl DoremiApp {
             &format!("catalog-open:{}", entry.media.id.local()),
             &row.body,
         );
-        if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
-            && ui.is_rect_visible(row.cover_rect())
-        {
-            let model = self.model.as_mut().unwrap();
-            let url = model
-                .music
-                .session
-                .client
-                .try_lock()
-                .ok()
-                .and_then(|client| {
-                    client
-                        .as_ref()
-                        .and_then(|client| client.as_ref().ok())
-                        .and_then(|client| client.thumbnail(&entry.media.id))
-                });
-            model
-                .artwork
-                .request_thumbnail(&entry.media.id, url, ui.ctx());
-            if let Some(cover) =
-                self.artwork_textures
-                    .current(&model.artwork, &entry.media.id, ui.ctx())
-            {
-                egui::Image::new((cover.id(), cover.size_vec2()))
-                    .fit_to_exact_size(row.cover_rect().size())
-                    .corner_radius(if entry.kind == EntityKind::Artist {
-                        20
-                    } else {
-                        4
-                    })
-                    .paint_at(ui, row.cover_rect());
-            }
-        }
+        self.media_artwork(
+            ui,
+            &entry.media.id,
+            row.cover_rect(),
+            if entry.kind == EntityKind::Artist {
+                20
+            } else {
+                4
+            },
+        );
         {
             let saved = self
                 .model
