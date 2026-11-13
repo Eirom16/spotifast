@@ -497,6 +497,7 @@ mod tests {
             .join("../../target")
             .join(format!("visible-music-images-{}", std::process::id()));
         assert!(!directory.exists());
+        std::fs::create_dir(&directory).unwrap();
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
         let id = doremi_youtube::id("abcdefghijk").unwrap();
