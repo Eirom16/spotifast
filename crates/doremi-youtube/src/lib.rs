@@ -107,6 +107,7 @@ pub struct Client {
     session: Option<session::Session>,
     base: String,
     player_diagnostic: Option<stream::PlayerDiagnostic>,
+    resolution_stage: &'static str,
     player_config: Option<player_config::PlayerConfig>,
     thumbnails: std::collections::VecDeque<(MediaId, String)>,
 }
@@ -124,6 +125,7 @@ impl Client {
             session: None,
             base: format!("{ORIGIN}/youtubei/v1/"),
             player_diagnostic: None,
+            resolution_stage: "idle",
             player_config: None,
             thumbnails: std::collections::VecDeque::new(),
         })
@@ -136,6 +138,9 @@ impl Client {
     }
     pub fn player_diagnostic(&self) -> Option<stream::PlayerDiagnostic> {
         self.player_diagnostic
+    }
+    pub fn resolution_stage(&self) -> &'static str {
+        self.resolution_stage
     }
     pub async fn sign_in(&mut self, cookie: String) -> Result<Account, Error> {
         self.session = Some(session::Session::parse(&cookie)?);

@@ -363,6 +363,14 @@ async fn source(
         {
             Ok(client) => {
                 let result = client.resolve(media).await;
+                if result.is_err() {
+                    let message =
+                        format!("YTM resolve failure stage={}", client.resolution_stage());
+                    #[cfg(target_os = "android")]
+                    log::warn!("{message}");
+                    #[cfg(not(target_os = "android"))]
+                    eprintln!("{message}");
+                }
                 if result.is_err()
                     && let Some(d) = client.player_diagnostic()
                 {

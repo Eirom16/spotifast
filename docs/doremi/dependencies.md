@@ -159,6 +159,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-youtube: dependencies` | `getrandom` | `0.3` |
 | `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json', 'blocking']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `rquickjs` | `default-features=False; features=['std']; version==0.14.0` |
 | `crates/doremi-youtube: dependencies` | `serde` | `features=['derive']; version=1` |
@@ -171,12 +172,12 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-youtube: dependencies` | `tokio` | `features=['rt', 'sync']; version=1` |
 | `crates/doremi-youtube: dependencies` | `ytdlp-ejs` | `default-features=False; features=['external']; version==0.1.1` |
 | `crates/doremi-youtube: dev-dependencies` | `tokio` | `features=['rt', 'macros', 'net', 'io-util', 'time']; version=1` |
-| `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `getrandom` | `0.3` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `keyring-core` | `1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `rusqlite` | `default-features=False; features=['bundled']; version=0.41.1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tempfile` | `3` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tungstenite` | `default-features=False; features=['handshake']; version=0.28` |
 | `crates/doremi-youtube/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
+| `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `log` | `0.4` |
 | `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 | `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `rquickjs` | `default-features=False; features=['std', 'bindgen']; version==0.14.0` |
 | `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `libc` | `0.2` |

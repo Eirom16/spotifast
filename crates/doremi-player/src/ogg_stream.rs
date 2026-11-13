@@ -6,14 +6,34 @@ use crate::{
     wav_stream::{FrameReader, Info},
 };
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
 use symphonia::core::{
     audio::SampleBuffer,
     codecs::{CODEC_TYPE_AAC, CODEC_TYPE_VORBIS, CodecType, Decoder, DecoderOptions},
+    errors::Error as FormatError,
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo},
     io::{MediaSource, MediaSourceStream, MediaSourceStreamOptions},
     meta::{Limit, MetadataOptions},
     probe::Hint,
 };
+fn input_or_format(error: FormatError, invalid: DecodeError, observed: &AtomicU8) -> DecodeError {
+    match observed.load(Ordering::Acquire) {
+        1 => return DecodeError::Input,
+        2 => return DecodeError::Cancelled,
+        _ => {}
+    }
+    match error {
+        FormatError::IoError(error) => match error.kind() {
+            std::io::ErrorKind::ConnectionAborted => DecodeError::Cancelled,
+            std::io::ErrorKind::UnexpectedEof => invalid,
+            _ => DecodeError::Input,
+        },
+        _ => invalid,
+    }
+}
 
 pub struct Vorbis {
     format: Box<dyn FormatReader>,
@@ -25,6 +45,7 @@ pub struct Vorbis {
     cursor: usize,
     invalid: DecodeError,
     aac: bool,
+    input_error: Arc<AtomicU8>,
 }
 impl Vorbis {
     pub fn from_read_seek<R: Read + Seek + Send + Sync + 'static>(
@@ -63,8 +84,12 @@ impl Vorbis {
         }) {
             return Err(DecodeError::UnsupportedFormat);
         }
+        let input_error = Arc::new(AtomicU8::new(0));
         let stream = MediaSourceStream::new(
-            input,
+            Box::new(ObservedInput {
+                input,
+                error: input_error.clone(),
+            }),
             MediaSourceStreamOptions {
                 buffer_len: 64 * 1024,
             },
@@ -84,7 +109,7 @@ impl Vorbis {
                     limit_visual_bytes: Limit::Maximum(0),
                 },
             )
-            .map_err(|_| invalid)?
+            .map_err(|error| input_or_format(error, invalid, &input_error))?
             .format;
         if format.tracks().len() != 1 {
             return Err(DecodeError::UnsupportedFormat);
@@ -149,11 +174,16 @@ impl Vorbis {
             cursor: 0,
             invalid,
             aac,
+            input_error,
         })
     }
     fn packet(&mut self) -> Result<(), DecodeError> {
         for _ in 0..32 {
-            let packet = self.format.next_packet().map_err(|_| self.invalid)?;
+            self.input_error.store(0, Ordering::Release);
+            let packet = self
+                .format
+                .next_packet()
+                .map_err(|error| input_or_format(error, self.invalid, &self.input_error))?;
             if packet.track_id() != self.track {
                 return Err(DecodeError::UnsupportedFormat);
             }
@@ -205,6 +235,48 @@ impl Vorbis {
         Err(self.invalid)
     }
 }
+// Probe::next treats an initial read error as EOF. Keep only its typed cause,
+// never an IO message/URL, across that layer so a denied stream isn't called
+// corrupt media. This wrapper belongs exclusively to the decoder worker.
+struct ObservedInput {
+    input: Box<dyn MediaSource>,
+    error: Arc<AtomicU8>,
+}
+impl ObservedInput {
+    fn observe<T>(&self, result: std::io::Result<T>) -> std::io::Result<T> {
+        if let Err(error) = &result {
+            let code = match error.kind() {
+                std::io::ErrorKind::UnexpectedEof => 0,
+                std::io::ErrorKind::ConnectionAborted => 2,
+                _ => 1,
+            };
+            if code != 0 {
+                self.error.store(code, Ordering::Release);
+            }
+        }
+        result
+    }
+}
+impl Read for ObservedInput {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        let result = self.input.read(bytes);
+        self.observe(result)
+    }
+}
+impl Seek for ObservedInput {
+    fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
+        let result = self.input.seek(from);
+        self.observe(result)
+    }
+}
+impl MediaSource for ObservedInput {
+    fn is_seekable(&self) -> bool {
+        self.input.is_seekable()
+    }
+    fn byte_len(&self) -> Option<u64> {
+        self.input.byte_len()
+    }
+}
 struct Seekable<R> {
     input: R,
     length: u64,
@@ -246,6 +318,7 @@ impl FrameReader for Vorbis {
         if frame == 0 && self.position == 0 {
             return Ok(());
         }
+        self.input_error.store(0, Ordering::Release);
         let seek = self
             .format
             .seek(
@@ -255,7 +328,7 @@ impl FrameReader for Vorbis {
                     track_id: self.track,
                 },
             )
-            .map_err(|_| self.invalid)?;
+            .map_err(|error| input_or_format(error, self.invalid, &self.input_error))?;
         if seek.track_id != self.track || seek.actual_ts > frame {
             return Err(self.invalid);
         }
@@ -349,6 +422,36 @@ mod tests {
 #[cfg(all(test, feature = "aac-mp4"))]
 mod aac_tests {
     use super::*;
+    struct Unreadable(std::io::ErrorKind);
+    impl Read for Unreadable {
+        fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+            Err(self.0.into())
+        }
+    }
+    impl Seek for Unreadable {
+        fn seek(&mut self, _: SeekFrom) -> std::io::Result<u64> {
+            Ok(0)
+        }
+    }
+    #[test]
+    fn input_refusals_and_cancellation_are_not_misreported_as_invalid_mp4() {
+        for (kind, expected) in [
+            (std::io::ErrorKind::PermissionDenied, DecodeError::Input),
+            (std::io::ErrorKind::ConnectionReset, DecodeError::Input),
+            (
+                std::io::ErrorKind::ConnectionAborted,
+                DecodeError::Cancelled,
+            ),
+        ] {
+            assert!(
+                matches!(Vorbis::aac_from_read_seek(Unreadable(kind),1024),Err(error) if error==expected)
+            );
+        }
+        assert!(matches!(
+            Vorbis::aac_from_read_seek(std::io::Cursor::new(vec![0; 12]), 12),
+            Err(DecodeError::InvalidMp4)
+        ));
+    }
     #[test]
     fn incremental_aac_decode_and_seek_use_the_shared_frame_reader() {
         let bytes = include_bytes!("../tests/fixtures/scale.m4a");

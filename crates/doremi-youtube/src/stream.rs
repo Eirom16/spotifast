@@ -13,6 +13,15 @@ use std::{
 const PLAYER: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 const CHUNK: usize = 64 * 1024;
+fn playback_nonce() -> Result<String, Error> {
+    const ALPHABET: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
+    let mut bytes = [0; 16];
+    getrandom::fill(&mut bytes).map_err(|_| Error::Unavailable)?;
+    Ok(bytes
+        .iter()
+        .map(|b| ALPHABET[usize::from(b & 63)] as char)
+        .collect())
+}
 /// Redacted protocol outcome, never a response body, URL or session value.
 #[derive(Clone, Copy, Debug)]
 pub struct PlayerDiagnostic {
@@ -131,7 +140,15 @@ impl Stream {
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Reader, Error> {
         let http = reqwest::blocking::Client::builder()
-            .redirect(Policy::none())
+            .redirect(Policy::custom(|attempt| {
+                // CDN routing is part of the same media grant. Never follow
+                // consent pages, third-party hosts, downgrade or redirect loops.
+                if attempt.previous().len() > 3 || media_url(attempt.url().as_str()).is_err() {
+                    attempt.stop()
+                } else {
+                    attempt.follow()
+                }
+            }))
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(6))
             .user_agent(self.user_agent)
@@ -150,27 +167,36 @@ impl Stream {
 impl Client {
     pub async fn resolve(&mut self, media: &MediaId) -> Result<Stream, Error> {
         self.player_diagnostic = None;
+        self.resolution_stage = "identity";
         if media.provider.as_str() != PROVIDER
             || media.local().len() != 11
             || id(media.local()).is_err()
         {
             return Err(Error::InvalidRequest);
         }
+        let nonce = playback_nonce()?;
         if self.signed_in() {
             // VISIONOS is a guest client in the reference implementation.
             // Verify expiry, then use the account's Music client and identity.
+            self.resolution_stage = "account";
             self.account().await?;
+            self.resolution_stage = "bootstrap";
             let timestamp = self.signature_timestamp().await?;
+            self.resolution_stage = "player";
             let value = self
-                .post("player", json!({"videoId":media.local(),"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS","signatureTimestamp":timestamp}}}))
+                .post("player", json!({"videoId":media.local(),"cpn":nonce,"playbackContext":{"contentPlaybackContext":{"html5Preference":"HTML5_PREF_WANTS","signatureTimestamp":timestamp}}}))
                 .await?;
             validate(media, &value)?;
-            let url = self.resolve_format_url(candidate(&value)?).await?;
+            self.resolution_stage = "signature";
+            let mut url = self.resolve_format_url(candidate(&value)?).await?;
+            with_nonce(&mut url, &nonce);
             let mut stream = parse_with_url(media, &value, Some(url))?;
             stream.user_agent = crate::USER_AGENT;
+            self.resolution_stage = "ready";
             return Ok(stream);
         }
-        let body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local()});
+        let body = json!({"context":{"client":{"clientName":"VISIONOS","clientVersion":"1.02","deviceMake":"Apple","deviceModel":"RealityDevice17,1","osName":"visionOS","osVersion":"26.5.23O471","hl":"en"}},"videoId":media.local(),"cpn":nonce});
+        self.resolution_stage = "player";
         let request = self
             .http
             .post(PLAYER)
@@ -205,8 +231,24 @@ impl Client {
         }
         let value = serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)?;
         self.player_diagnostic = Some(PlayerDiagnostic::response(200, &value));
-        parse(media, &value)
+        let mut stream = parse(media, &value)?;
+        let mut url = media_url(&stream.url)?;
+        with_nonce(&mut url, &nonce);
+        stream.url = url.into();
+        self.resolution_stage = "ready";
+        Ok(stream)
     }
+}
+fn with_nonce(url: &mut Url, nonce: &str) {
+    let pairs: Vec<_> = url
+        .query_pairs()
+        .filter(|(key, _)| key != "cpn")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    url.query_pairs_mut()
+        .clear()
+        .extend_pairs(pairs)
+        .append_pair("cpn", nonce);
 }
 fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
     parse_with_url(media, value, None)
@@ -330,12 +372,22 @@ impl Reader {
             .header("Range", format!("bytes={start}-{end}"))
             .header("Accept-Encoding", "identity")
             .send()
-            .map_err(|_| io::Error::other("YouTube audio transport failed"))?;
+            .map_err(|_| {
+                range_event(0, "transport", 0);
+                io::Error::other("YouTube audio transport failed")
+            })?;
         self.check()?;
+        let status = response.status().as_u16();
         match response.status().as_u16() {
             206 => {}
-            401 | 403 => return Err(io::ErrorKind::PermissionDenied.into()),
-            _ => return Err(io::Error::other("YouTube audio range unavailable")),
+            401 | 403 => {
+                range_event(status, "refused", 0);
+                return Err(io::ErrorKind::PermissionDenied.into());
+            }
+            _ => {
+                range_event(status, "range_status", 0);
+                return Err(io::Error::other("YouTube audio range unavailable"));
+            }
         }
         let expected = format!("bytes {start}-{end}/{}", self.grant.length);
         if response
@@ -344,6 +396,7 @@ impl Reader {
             .and_then(|v| v.to_str().ok())
             != Some(expected.as_str())
         {
+            range_event(status, "content_range", 0);
             return Err(io::Error::other("YouTube audio range changed"));
         }
         let size = (end - start + 1) as usize;
@@ -352,15 +405,38 @@ impl Reader {
             .by_ref()
             .take(size as u64 + 1)
             .read_to_end(&mut self.bytes)
-            .map_err(|_| io::Error::other("YouTube audio read failed"))?;
+            .map_err(|_| {
+                range_event(status, "read", 0);
+                io::Error::other("YouTube audio read failed")
+            })?;
         self.check()?;
         if self.bytes.len() != size {
             self.bytes.clear();
-            return Err(io::ErrorKind::UnexpectedEof.into());
+            range_event(status, "truncated", 0);
+            return Err(io::ErrorKind::ConnectionReset.into());
+        }
+        if start == 0 {
+            range_event(
+                status,
+                if self.bytes.get(4..8) == Some(b"ftyp") {
+                    "mp4"
+                } else {
+                    "other_container"
+                },
+                self.bytes.len(),
+            );
         }
         self.cached_at = start;
         Ok(())
     }
+}
+fn range_event(http: u16, stage: &'static str, bytes: usize) {
+    // Fixed categories and counts only. Never inspect/log URL query, response
+    // headers, body text, player identifiers or credentials.
+    #[cfg(target_os = "android")]
+    log::info!("YTM range http={http} stage={stage} bytes={bytes}");
+    #[cfg(not(target_os = "android"))]
+    eprintln!("YTM range http={http} stage={stage} bytes={bytes}");
 }
 impl Read for Reader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
@@ -398,6 +474,41 @@ impl Seek for Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn media_redirect_boundary_and_nonce_preserve_the_same_grant() {
+        for value in [
+            "http://rr.googlevideo.com/videoplayback",
+            "https://googlevideo.com.evil.invalid/",
+            "https://accounts.google.com/",
+            "https://secret@rr.googlevideo.com/",
+            "https://rr.googlevideo.com:8443/",
+            "https://rr.googlevideo.com/#other",
+        ] {
+            assert!(media_url(value).is_err());
+        }
+        let mut url = media_url(
+            "https://rr.googlevideo.com/videoplayback?sig=fixture%3D&n=fixtureN&cpn=old&cpn=older",
+        )
+        .unwrap();
+        with_nonce(&mut url, "abcdefghijklmnop");
+        let pairs: Vec<_> = url.query_pairs().collect();
+        assert_eq!(pairs.iter().filter(|(key, _)| key == "cpn").count(), 1);
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "sig" && value == "fixture=")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "n" && value == "fixtureN")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(key, value)| key == "cpn" && value == "abcdefghijklmnop")
+        );
+    }
     fn response() -> Value {
         json!({"playabilityStatus":{"status":"OK"},"videoDetails":{"videoId":"abcdefghijk","lengthSeconds":"180"},"streamingData":{"expiresInSeconds":"600","adaptiveFormats":[{"mimeType":"audio/mp4; codecs=\"mp4a.40.2\"","contentLength":"100000","url":"https://r1.googlevideo.com/videoplayback?expire=123&token=fixture"}]}})
     }
@@ -445,12 +556,18 @@ mod tests {
             let session = json!({"schema":1,"cookie":"SAPISID=fixture-only","visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"});
             client.sign_in(session.to_string()).await.unwrap();
             let result = client.resolve(&id("abcdefghijk").unwrap()).await;
+            let mut delivered_nonce = None;
             if denied {
                 assert!(matches!(result, Err(Error::AccessDenied)));
             } else {
                 let grant = result.unwrap();
                 assert_eq!(grant.length(), 100000);
                 assert_eq!(grant.user_agent, crate::USER_AGENT);
+                delivered_nonce = Url::parse(&grant.url)
+                    .unwrap()
+                    .query_pairs()
+                    .find(|(key, _)| key == "cpn")
+                    .map(|(_, value)| value.into_owned());
                 if ciphered {
                     let url = Url::parse(&grant.url).unwrap();
                     let pairs: std::collections::HashMap<_, _> = url.query_pairs().collect();
@@ -480,6 +597,14 @@ mod tests {
             assert_eq!(body["context"]["client"]["clientName"], "WEB_REMIX");
             assert_eq!(body["context"]["user"]["onBehalfOfUser"], "fixture-channel");
             assert_eq!(body["videoId"], "abcdefghijk");
+            let nonce = body["cpn"].as_str().unwrap();
+            assert!(
+                nonce.len() == 16
+                    && nonce
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b))
+            );
+            assert!(denied || delivered_nonce.as_deref() == Some(nonce));
             assert_eq!(
                 body["playbackContext"]["contentPlaybackContext"]["html5Preference"],
                 "HTML5_PREF_WANTS"
@@ -542,6 +667,54 @@ mod range_tests {
         Arc,
         atomic::{AtomicBool, Ordering},
     };
+    #[test]
+    fn refusals_and_broken_ranges_fail_once_without_reading_a_full_file() {
+        for (status, range, body, expected) in [
+            (403, "", b"".as_slice(), io::ErrorKind::PermissionDenied),
+            (200, "", b"".as_slice(), io::ErrorKind::Other),
+            (
+                206,
+                "bytes 1-2/100000",
+                b"".as_slice(),
+                io::ErrorKind::Other,
+            ),
+            (
+                206,
+                "bytes 0-65535/100000",
+                b"x".as_slice(),
+                io::ErrorKind::ConnectionReset,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                use std::io::Write;
+                write!(socket,"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Range: {range}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                socket.write_all(body).unwrap();
+            });
+            let grant = Stream {
+                url: format!("http://{address}/fixture"),
+                user_agent: crate::USER_AGENT,
+                length: 100000,
+                expires: Instant::now() + Duration::from_secs(10),
+                duration_ms: 60000,
+            };
+            let mut reader = grant.reader(|| false).unwrap();
+            assert_eq!(reader.read(&mut [0; 1]).unwrap_err().kind(), expected);
+            thread.join().unwrap();
+        }
+    }
     #[test]
     fn ranges_start_playback_without_downloading_the_whole_track_and_seek_is_cancelable() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
