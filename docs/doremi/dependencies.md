@@ -171,6 +171,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-youtube: dependencies` | `swc_ecma_parser` | `=32.0.0` |
 | `crates/doremi-youtube: dependencies` | `tokio` | `features=['rt', 'sync']; version=1` |
 | `crates/doremi-youtube: dependencies` | `ytdlp-ejs` | `default-features=False; features=['external']; version==0.1.1` |
+| `crates/doremi-youtube: dev-dependencies` | `doremi-player` | `features=['aac-mp4', 'native-output']; path=../doremi-player` |
 | `crates/doremi-youtube: dev-dependencies` | `tokio` | `features=['rt', 'macros', 'net', 'io-util', 'time']; version=1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `keyring-core` | `1` |
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `rusqlite` | `default-features=False; features=['bundled']; version=0.41.1` |

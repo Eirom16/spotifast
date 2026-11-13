@@ -250,6 +250,23 @@ fn with_nonce(url: &mut Url, nonce: &str) {
         .extend_pairs(pairs)
         .append_pair("cpn", nonce);
 }
+fn range_url(value: &str, start: u64, end: u64) -> io::Result<Url> {
+    let mut url = Url::parse(value).map_err(|_| io::ErrorKind::InvalidInput)?;
+    // googlevideo uses a query range (Tubefast's download protocol), not an
+    // HTTP Range header. Preserve the signed query byte-for-byte, replacing
+    // only an existing range so a seek cannot reuse the resolver's old range.
+    let query = url
+        .query()
+        .unwrap_or_default()
+        .split('&')
+        .filter(|pair| !pair.is_empty() && pair.split('=').next() != Some("range"))
+        .collect::<Vec<_>>()
+        .join("&");
+    url.set_query(if query.is_empty() { None } else { Some(&query) });
+    url.query_pairs_mut()
+        .append_pair("range", &format!("{start}-{end}"));
+    Ok(url)
+}
 fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
     parse_with_url(media, value, None)
 }
@@ -368,8 +385,7 @@ impl Reader {
         let end = (start + CHUNK as u64).min(self.grant.length) - 1;
         let mut response = self
             .http
-            .get(&self.grant.url)
-            .header("Range", format!("bytes={start}-{end}"))
+            .get(range_url(&self.grant.url, start, end)?)
             .header("Accept-Encoding", "identity")
             .send()
             .map_err(|_| {
@@ -379,7 +395,7 @@ impl Reader {
         self.check()?;
         let status = response.status().as_u16();
         match response.status().as_u16() {
-            206 => {}
+            200 | 206 => {}
             401 | 403 => {
                 range_event(status, "refused", 0);
                 return Err(io::ErrorKind::PermissionDenied.into());
@@ -390,29 +406,48 @@ impl Reader {
             }
         }
         let expected = format!("bytes {start}-{end}/{}", self.grant.length);
-        if response
-            .headers()
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            != Some(expected.as_str())
+        // Query-range replies can be 200 without Content-Range. When the
+        // server supplies that header, it must still identify the exact bytes.
+        // A 206 without it is not a valid partial-content response.
+        let content_range = response.headers().get("content-range");
+        if content_range.is_some_and(|value| value.to_str().ok() != Some(expected.as_str()))
+            || (status == 206 && content_range.is_none())
         {
             range_event(status, "content_range", 0);
             return Err(io::Error::other("YouTube audio range changed"));
         }
         let size = (end - start + 1) as usize;
         self.bytes.clear();
-        response
-            .by_ref()
-            .take(size as u64 + 1)
-            .read_to_end(&mut self.bytes)
-            .map_err(|_| {
-                range_event(status, "read", 0);
-                io::Error::other("YouTube audio read failed")
-            })?;
-        self.check()?;
-        if self.bytes.len() != size {
+        self.bytes.reserve_exact(size + 1);
+        let result = (|| {
+            // Never accept an ignored range as a complete-track download.
+            // Read one extra byte to detect overflow, checking cancellation
+            // between blocks as well as at the request's bounded deadline.
+            let mut block = [0; 16 * 1024];
+            while self.bytes.len() <= size {
+                self.check()?;
+                let limit = block.len().min(size + 1 - self.bytes.len());
+                let read = response.read(&mut block[..limit]).map_err(|_| {
+                    range_event(status, "read", self.bytes.len());
+                    io::Error::other("YouTube audio read failed")
+                })?;
+                self.check()?;
+                if read == 0 {
+                    break;
+                }
+                self.bytes.extend_from_slice(&block[..read]);
+            }
+            Ok(())
+        })();
+        if let Err(error) = result {
+            // A failed fill must not leave partial bytes eligible as a cache
+            // hit on the next read.
             self.bytes.clear();
-            range_event(status, "truncated", 0);
+            return Err(error);
+        }
+        if self.bytes.len() != size {
+            range_event(status, "truncated", self.bytes.len());
+            self.bytes.clear();
             return Err(io::ErrorKind::ConnectionReset.into());
         }
         if start == 0 {
@@ -668,12 +703,32 @@ mod range_tests {
         atomic::{AtomicBool, Ordering},
     };
     #[test]
+    fn query_ranges_preserve_signed_octets_and_replace_previous_ranges() {
+        let url = range_url(
+            "https://rr.googlevideo.com/videoplayback?sig=fixture%2f%3D&n=a%20b&range=0-9&cpn=fixture&range=2-4",
+            65536,
+            99999,
+        )
+        .unwrap();
+        assert_eq!(
+            url.query(),
+            Some("sig=fixture%2f%3D&n=a%20b&cpn=fixture&range=65536-99999")
+        );
+    }
+    #[test]
     fn refusals_and_broken_ranges_fail_once_without_reading_a_full_file() {
         for (status, range, body, expected) in [
             (403, "", b"".as_slice(), io::ErrorKind::PermissionDenied),
-            (200, "", b"".as_slice(), io::ErrorKind::Other),
+            (200, "", b"".as_slice(), io::ErrorKind::ConnectionReset),
+            (206, "", b"".as_slice(), io::ErrorKind::Other),
             (
                 206,
+                "bytes 1-2/100000",
+                b"".as_slice(),
+                io::ErrorKind::Other,
+            ),
+            (
+                200,
                 "bytes 1-2/100000",
                 b"".as_slice(),
                 io::ErrorKind::Other,
@@ -700,7 +755,16 @@ mod range_tests {
                     assert!(request.len() < 8192);
                 }
                 use std::io::Write;
-                write!(socket,"HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nContent-Range: {range}\r\nConnection: close\r\n\r\n",body.len()).unwrap();
+                write!(
+                    socket,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    body.len()
+                )
+                .unwrap();
+                if !range.is_empty() {
+                    write!(socket, "Content-Range: {range}\r\n").unwrap();
+                }
+                write!(socket, "\r\n").unwrap();
                 socket.write_all(body).unwrap();
             });
             let grant = Stream {
@@ -712,11 +776,60 @@ mod range_tests {
             };
             let mut reader = grant.reader(|| false).unwrap();
             assert_eq!(reader.read(&mut [0; 1]).unwrap_err().kind(), expected);
+            assert!(reader.bytes.is_empty());
+            thread.join().unwrap();
+        }
+    }
+    #[test]
+    fn ignored_ranges_and_partial_read_errors_never_publish_cached_bytes() {
+        for (sent, declared, expected) in [
+            (CHUNK + 1, CHUNK + 1, io::ErrorKind::ConnectionReset),
+            (CHUNK - 1, CHUNK, io::ErrorKind::Other),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let thread = std::thread::spawn(move || {
+                use std::io::Write;
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(3)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut byte = [0];
+                while !request.ends_with(b"\r\n\r\n") {
+                    socket.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                    assert!(request.len() < 8192);
+                }
+                write!(
+                    socket,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+                )
+                .unwrap();
+                socket.write_all(&vec![1; sent]).unwrap();
+            });
+            let grant = Stream {
+                url: format!("http://{address}/fixture"),
+                user_agent: crate::USER_AGENT,
+                length: 100000,
+                expires: Instant::now() + Duration::from_secs(10),
+                duration_ms: 60000,
+            };
+            let mut reader = grant.reader(|| false).unwrap();
+            assert_eq!(reader.read(&mut [0; 1]).unwrap_err().kind(), expected);
+            assert_eq!(reader.position, 0);
+            assert!(reader.bytes.is_empty());
+            assert_eq!(reader.bytes.capacity(), CHUNK + 1);
             thread.join().unwrap();
         }
     }
     #[test]
     fn ranges_start_playback_without_downloading_the_whole_track_and_seek_is_cancelable() {
+        for status in [200, 206] {
+            query_range_round_trip(status);
+        }
+    }
+    fn query_range_round_trip(status: u16) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let length = 4 * CHUNK;
@@ -735,14 +848,26 @@ mod range_tests {
                     assert!(request.len() < 8192);
                 }
                 let headers = String::from_utf8(request).unwrap().to_ascii_lowercase();
-                assert!(headers.contains(&format!("range: bytes={start}-{end}")));
+                assert!(
+                    headers.starts_with(&format!("get /fixture?range={start}-{end} http/1.1\r\n"))
+                );
+                assert!(!headers.contains("\r\nrange:"));
                 assert!(headers.contains(&format!(
                     "user-agent: {}",
                     crate::USER_AGENT.to_ascii_lowercase()
                 )));
                 assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
                 use std::io::Write;
-                write!(socket,"HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{length}\r\nConnection: close\r\n\r\n",end-start+1).unwrap();
+                write!(
+                    socket,
+                    "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    end - start + 1
+                )
+                .unwrap();
+                if status == 206 {
+                    write!(socket, "Content-Range: bytes {start}-{end}/{length}\r\n").unwrap();
+                }
+                write!(socket, "\r\n").unwrap();
                 let data: Vec<_> = (start..=end).map(|i| (i % 251) as u8).collect();
                 socket.write_all(&data).unwrap();
                 transferred += data.len();
