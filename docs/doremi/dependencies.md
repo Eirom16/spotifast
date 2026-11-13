@@ -178,6 +178,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-youtube/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tungstenite` | `default-features=False; features=['handshake']; version=0.28` |
 | `crates/doremi-youtube/cfg(not(target_os = "android")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots']; version=0.12` |
 | `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
+| `crates/doremi-youtube/cfg(target_os = "android"): dependencies` | `rquickjs` | `default-features=False; features=['std', 'bindgen']; version==0.14.0` |
 | `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `libc` | `0.2` |
 | `crates/doremi-youtube/cfg(target_os = "linux"): dependencies` | `zbus-secret-service-keyring-store` | `features=['rt-tokio-crypto-rust']; version=1.0.1` |
 | `crates/doremi-youtube/cfg(target_os = "windows"): dependencies` | `windows-native-keyring-store` | `default-features=False; version=1.1` |
@@ -185,7 +186,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 
 ## Fuentes transitivas bloqueadas
 
-`Cargo.lock`: 949 entradas (incluye miembros locales).
+`Cargo.lock`: 951 entradas (incluye miembros locales).
 
 | Paquetes | Fuente exacta |
 |---|---|
@@ -196,7 +197,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | 7 | `git+https://github.com/crmne/librespot?rev=3ba977f1f918582edce566cfc16617f8eccdfb1e#3ba977f1f918582edce566cfc16617f8eccdfb1e` |
 | 1 | `git+https://github.com/crmne/projectm-rs?rev=93852ff7299e5a63ed1315437593fc70915c0863#93852ff7299e5a63ed1315437593fc70915c0863` |
 | 2 | `git+https://github.com/crmne/winit?rev=0bed9dc0a7db02590a279fb8bac795fa39ee6948#0bed9dc0a7db02590a279fb8bac795fa39ee6948` |
-| 893 | `registry+https://github.com/rust-lang/crates.io-index` |
+| 895 | `registry+https://github.com/rust-lang/crates.io-index` |
 | 12 | `workspace` |
 
 ## Patches

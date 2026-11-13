@@ -48,6 +48,11 @@ jobs:
           gradle-version: '8.13'
           cache-disabled: true
       - run: rustup show active-toolchain
+      - name: Android FFI generator
+        if: env.DOREMI_NATIVE_RUN == ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev
       - name: Require successful native gates before reusing identical Rust
         if: env.DOREMI_NATIVE_RUN != ''
         run: |
