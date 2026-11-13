@@ -514,6 +514,7 @@ impl Model {
                     }
                     EngineEvent::Failed(r, error) => {
                         self.notice = match error {
+                            EngineError::Decode(doremi_player::DecodeError::AccessDenied) => "El origen denegó el acceso al audio de esta pista.".into(),
                             EngineError::Input | EngineError::Decode(doremi_player::DecodeError::Input) => "No se pudo leer el audio desde su origen. Comprueba su disponibilidad o permisos.".into(),
                             EngineError::Decode(doremi_player::DecodeError::InvalidMp4) => "La pista no contiene un MP4 de audio que Doremi pueda decodificar.".into(),
                             _ => format!("La salida de audio falló: {error:?}"),

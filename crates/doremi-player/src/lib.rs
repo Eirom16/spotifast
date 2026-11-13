@@ -82,6 +82,7 @@ pub enum DecodeError {
     UnsupportedFormat,
     InvalidOutputRate,
     Input,
+    AccessDenied,
 }
 pub struct Pcm {
     samples: Vec<f32>,

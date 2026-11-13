@@ -23,11 +23,13 @@ fn input_or_format(error: FormatError, invalid: DecodeError, observed: &AtomicU8
     match observed.load(Ordering::Acquire) {
         1 => return DecodeError::Input,
         2 => return DecodeError::Cancelled,
+        3 => return DecodeError::AccessDenied,
         _ => {}
     }
     match error {
         FormatError::IoError(error) => match error.kind() {
             std::io::ErrorKind::ConnectionAborted => DecodeError::Cancelled,
+            std::io::ErrorKind::PermissionDenied => DecodeError::AccessDenied,
             std::io::ErrorKind::UnexpectedEof => invalid,
             _ => DecodeError::Input,
         },
@@ -248,6 +250,7 @@ impl ObservedInput {
             let code = match error.kind() {
                 std::io::ErrorKind::UnexpectedEof => 0,
                 std::io::ErrorKind::ConnectionAborted => 2,
+                std::io::ErrorKind::PermissionDenied => 3,
                 _ => 1,
             };
             if code != 0 {
@@ -436,7 +439,10 @@ mod aac_tests {
     #[test]
     fn input_refusals_and_cancellation_are_not_misreported_as_invalid_mp4() {
         for (kind, expected) in [
-            (std::io::ErrorKind::PermissionDenied, DecodeError::Input),
+            (
+                std::io::ErrorKind::PermissionDenied,
+                DecodeError::AccessDenied,
+            ),
             (std::io::ErrorKind::ConnectionReset, DecodeError::Input),
             (
                 std::io::ErrorKind::ConnectionAborted,

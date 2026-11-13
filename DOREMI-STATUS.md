@@ -4,11 +4,11 @@
 - Catálogo principal YouTube Music nativo, adaptado de Tubefast MIT: búsqueda,
   artistas, álbumes, playlists e inicio con secciones reales. MusicBrainz opcional.
   Sin equivalencias ocultas de títulos o IDs entre proveedores.
-- CI `43334288394`, commit `e31f4c7`: APK y hosts Doremi Linux/Windows aprobados,
+- CI `43339882488`, commit `77af1b5`: APK y hosts Doremi Linux/Windows aprobados,
   incluidos auxiliares, licencias, versión y checksums. Android genera los bindings
   QuickJS con el NDK en ambas ABI. Clippy general aprobado en `43334288569`;
   última CI general completa en verde: `43271026631` (`d605179`).
-- APK `e31f4c7` instalada sin borrar datos ni sesión en Samsung ARMv7: aislamiento y cancelación
+- APK `77af1b5` instalada sin borrar datos ni sesión en Samsung ARMv7: aislamiento y cancelación
   del login comprobados. Inicio con 30 elementos, carátulas y buscador superior con
   teclado comprobados en `4f4e49e`, en ambos temas. Biblioteca conserva su hash.
   Navegación Linux real: 20 canciones, artista con 59 elementos, álbum con 18 pistas
@@ -29,7 +29,7 @@
   personales cargadas; auxiliar retirado y biblioteca local conservada. Login
   Windows pendiente de prueba real. Comparación con Meld/Metrolist GPL-3.0 adaptada con
   código propio, conservando licencias y sin registrar credenciales.
-- CachyOS: bundle `e31f4c7` instalado con acceso directo y auxiliar verificados;
+- CachyOS: bundle `77af1b5` instalado con acceso directo y auxiliar verificados;
   versiones anteriores y perfiles conservados. Cancelación y retiro de los
   procesos del navegador comprobados desde la instalación.
   Carátula real del álbum de 18 pistas comprobada en claro y oscuro en `f67b410`.
@@ -42,12 +42,16 @@
   Misma sesión WEB_REMIX de catálogo, comprobación de caducidad y sin fallback
   tras una negativa. `d605179` corrigió UNPLAYABLE: prueba real Android devuelve
   OK y un AAC sin DRM que requiere firma de URL. `e31f4c7` supera la resolución,
-  pero la apertura falla con InvalidMp4 en Samsung y CachyOS; todavía sin PCM.
+  pero la apertura fallaba con InvalidMp4 en Samsung y CachyOS.
   Firma y parámetro n integrados con preprocesado MIT y QuickJS acotado en el
   cliente compartido: pruebas offline y Clippy aprobados; firma y n comprobados
   con dos versiones públicas del reproductor. Nonce compartido entre petición y
-  recurso, transporte CDN acotado y distinción entre fallo de entrada/decodificación
-  integrados; prueba real del ajuste pendiente.
+  recurso y transporte CDN acotado comprobados en `77af1b5`: Samsung recibe
+  64 KiB de MP4 (HTTP 206) y después HTTP 403; CachyOS recibe HTTP 403 al abrir.
+  Symphonia ocultaba el error de entrada como InvalidMp4; corregido. Denegación,
+  cancelación y error de formato se distinguen. Todavía sin PCM ni escucha real.
+  Firma y n coinciden con el solver EJS completo de referencia en dos entradas
+  sintéticas sobre el programa público `fad7e4e9`; no prueba acceso al audio.
   Sesión y biblioteca conservadas. Invitado carga inicio; reproducción exige login por verificación
   antibot del proveedor desde la conexión del Samsung. No se reintenta otro cliente.
 - Biblioteca, playlists propias, cola e historial conservados. CI gráfica Linux
