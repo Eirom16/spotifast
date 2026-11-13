@@ -452,10 +452,10 @@ impl DoremiApp {
             id.provider.as_str() != doremi_youtube::PROVIDER || model.artwork.needs_thumbnail(id)
         }) {
             (detail, url)
-        } else if catalog_visible && model.music.selected && model.music.youtube {
-            thumbnail.map_or((None, None), |(id, url)| (Some(id), Some(url)))
         } else {
-            (None, None)
+            // Player, queue, library and history register visible thumbnails
+            // too. Offscreen work is still dropped by next_thumbnail().
+            thumbnail.map_or((None, None), |(id, url)| (Some(id), Some(url)))
         };
         if model.artwork.selected == id && model.artwork.url != url {
             model.artwork.select(None);
@@ -489,6 +489,53 @@ fn youtube_detail_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn visible_music_images_dispatch_outside_the_catalog_without_offscreen_prefetch() {
+        let _guard = UI_TEST_LOCK.lock().unwrap();
+        DoremiApp::shutdown();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target")
+            .join(format!("visible-music-images-{}", std::process::id()));
+        assert!(!directory.exists());
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let id = doremi_youtube::id("abcdefghijk").unwrap();
+        for page in [
+            Page::Player,
+            Page::Queue,
+            Page::Library,
+            Page::History,
+            Page::Playlist,
+        ] {
+            let (commands, requests) = mpsc::sync_channel(1);
+            let (_send, events) = mpsc::sync_channel(1);
+            let model = app.model.as_mut().unwrap();
+            model.page = page;
+            model.music.selected = false;
+            model.artwork = State::new();
+            model.artwork.worker = Some(Worker {
+                commands,
+                events,
+                generation: Arc::new(AtomicU64::new(0)),
+                closed: Arc::new(AtomicBool::new(false)),
+                thread: None,
+            });
+            model.artwork.request_thumbnail(
+                &id,
+                Some("https://i.ytimg.com/fixture.jpg".into()),
+                &ctx,
+            );
+            app.poll_artwork(&ctx);
+            assert_eq!(requests.try_recv().unwrap().id, id);
+            // No visible request on the next frame: abandon the pending image.
+            app.poll_artwork(&ctx);
+            assert!(app.model.as_ref().unwrap().artwork.selected.is_none());
+            assert!(requests.try_recv().is_err());
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn browsing_keeps_an_unknown_hero_source_pending_without_blocking_the_ui() {
         let client = Arc::new(tokio::sync::Mutex::new(None));
