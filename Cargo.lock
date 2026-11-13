@@ -1988,6 +1988,7 @@ name = "doremi-youtube"
 version = "0.1.0"
 dependencies = [
  "doremi-core",
+ "doremi-player",
  "getrandom 0.3.4",
  "keyring-core",
  "libc",
