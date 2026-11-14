@@ -1035,29 +1035,7 @@ impl DoremiApp {
         let page = self.model.as_ref().unwrap().page;
         match page {
             Page::Home => {
-                ui.heading("Tu música, a tu ritmo");
-                ui.label("Busca canciones, artistas y álbumes. Guarda tus descubrimientos en este dispositivo.");
-                if self.button(ui, "browse-catalog", "Buscar música", 220.0) {
-                    self.navigate(Page::Search);
-                }
-                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-                ui.add_enabled_ui(
-                    self.model.as_ref().unwrap().music.can_refresh_home(),
-                    |ui| {
-                        if self.button(
-                            ui,
-                            "youtube-home",
-                            if self.model.as_ref().unwrap().music.home_root() {
-                                "Actualizar inicio"
-                            } else {
-                                "Explorar YouTube Music"
-                            },
-                            250.0,
-                        ) {
-                            self.model.as_mut().unwrap().refresh_music_home();
-                        }
-                    },
-                );
+                self.home_header(ui);
                 self.recent_shelf(ui);
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 if self.model.as_ref().unwrap().music.home_root() {

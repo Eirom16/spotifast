@@ -37,6 +37,13 @@ Los datos demo siguen separados y silenciosos.
 Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
 Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
 
+Los controles de aleatorio y repetición del reproductor muestran el estado real
+de la cola con el acento del tema y un fondo de selección. Repetir una canción
+usa el icono «1»; las etiquetas accesibles distinguen los tres modos de repetición.
+El mismo tratamiento se utiliza en escritorio y en el reproductor móvil.
+Inicio agrupa la bienvenida y las acciones de búsqueda en una cabecera adaptable:
+los botones se colocan en una fila cuando caben y se apilan en pantallas estrechas.
+
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
 upstream y su clave pública. No usarlo para distribuir Doremi ni aceptar sus

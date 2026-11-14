@@ -489,6 +489,8 @@ fn youtube_detail_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::UI_TEST_LOCK;
+
     #[test]
     fn visible_music_images_dispatch_outside_the_catalog_without_offscreen_prefetch() {
         let _guard = UI_TEST_LOCK.lock().unwrap();

@@ -113,6 +113,78 @@ impl DoremiApp {
         }
     }
 
+    pub(super) fn home_header(&mut self, ui: &mut egui::Ui) {
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        Frame::new()
+            .fill(palette.surface)
+            .corner_radius(16)
+            .inner_margin(Margin::same(20))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("DOREMI")
+                        .font(theme::semibold(12.0))
+                        .color(palette.accent),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Tu música, a tu ritmo")
+                        .font(theme::bold(if ui.available_width() < 400.0 {
+                            26.0
+                        } else {
+                            32.0
+                        }))
+                        .color(palette.text),
+                );
+                ui.label(
+                    RichText::new("Busca canciones, artistas y álbumes. Guarda tus descubrimientos en este dispositivo.")
+                        .font(theme::regular(14.0))
+                        .color(palette.secondary),
+                );
+                ui.add_space(16.0);
+                let width = ui.available_width();
+                // A disabled scope is one layout item, not a wrapping button.
+                // Choose the direction from the whole group's required width.
+                let inline = width >= 220.0 + GAP + 250.0;
+                let layout = if inline {
+                    Layout::left_to_right(Align::Center)
+                } else {
+                    Layout::top_down(Align::Min)
+                };
+                let height = if ui.ctx().content_rect().width() >= 760.0 {
+                    32.0
+                } else {
+                    TOUCH
+                };
+                let height = if inline { height } else { 2.0 * height + GAP };
+                ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(GAP);
+                    if self.button(ui, "browse-catalog", "Buscar música", width.min(220.0)) {
+                        self.navigate(Page::Search);
+                    }
+                    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                    ui.add_enabled_ui(
+                        self.model.as_ref().unwrap().music.can_refresh_home(),
+                        |ui| {
+                            if self.button(
+                                ui,
+                                "youtube-home",
+                                if self.model.as_ref().unwrap().music.home_root() {
+                                    "Actualizar inicio"
+                                } else {
+                                    "Explorar YouTube Music"
+                                },
+                                width.min(250.0),
+                            ) {
+                                self.model.as_mut().unwrap().refresh_music_home();
+                            }
+                        },
+                    );
+                });
+            });
+    }
+
     pub(super) fn shell(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let wide = ui.available_width() >= 760.0;
         let ctx = ui.ctx().clone();
@@ -344,7 +416,24 @@ impl DoremiApp {
         ui.horizontal(|ui| self.transport_controls(ui, palette, touch));
     }
     fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
-        if self.icon_control(ui, palette, "shuffle", Icon::Shuffle, "Aleatorio", touch) {
+        // Explicit spacing also keeps the mobile centering calculation truthful.
+        ui.spacing_mut().item_spacing.x = GAP;
+        let dimensions = if touch { [24.0, TOUCH] } else { [20.0, 32.0] };
+        let shuffle_active = self.model.as_ref().unwrap().queue.shuffled();
+        let response = theme::icon_toggle(
+            ui,
+            palette,
+            Icon::Shuffle,
+            dimensions,
+            shuffle_active,
+            if shuffle_active {
+                "Aleatorio activado"
+            } else {
+                "Aleatorio desactivado"
+            },
+        );
+        self.record("shuffle", &response);
+        if response.clicked() {
             let queue = &self.model.as_ref().unwrap().queue;
             let order = if queue.shuffled() {
                 Order::Sequential
@@ -385,7 +474,12 @@ impl DoremiApp {
         ) {
             self.model.as_mut().unwrap().command(Command::Next);
         }
-        if self.icon_control(ui, palette, "repeat", Icon::Repeat, "Repetir", touch) {
+        let repeat = self.model.as_ref().unwrap().queue.repeat();
+        let (icon, label) = repeat_presentation(repeat);
+        let response =
+            theme::icon_toggle(ui, palette, icon, dimensions, repeat != Repeat::Off, label);
+        self.record("repeat", &response);
+        if response.clicked() {
             let repeat = match self.model.as_ref().unwrap().queue.repeat() {
                 Repeat::Off => Repeat::Context,
                 Repeat::Context => Repeat::Track,
@@ -800,7 +894,8 @@ impl DoremiApp {
     fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.progress_sized(ui, TOUCH);
         ui.horizontal(|ui| {
-            let width = 4.0 * TOUCH + 64.0 + 4.0 * 8.0;
+            ui.spacing_mut().item_spacing.x = GAP;
+            let width = 4.0 * TOUCH + 64.0 + 4.0 * GAP;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
             self.transport_controls(ui, palette, true);
         });
@@ -1054,6 +1149,14 @@ impl DoremiApp {
     }
 }
 
+fn repeat_presentation(repeat: Repeat) -> (Icon, &'static str) {
+    match repeat {
+        Repeat::Off => (Icon::Repeat, "Repetición desactivada"),
+        Repeat::Context => (Icon::Repeat, "Repetir toda la lista"),
+        Repeat::Track => (Icon::Repeat1, "Repetir una canción"),
+    }
+}
+
 fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     {
@@ -1108,5 +1211,81 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
         "En pausa"
     } else {
         "Audio nativo"
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn home_actions_wrap_inside_narrow_and_desktop_headers() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/home-header-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for width in [320.0, 384.0, 440.0, 760.0, 1280.0] {
+                for _ in 0..3 {
+                    app.controls.clear();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.home_header(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let search = app
+                    .controls
+                    .iter()
+                    .find(|c| c.name == "browse-catalog")
+                    .unwrap();
+                assert!(search.rect[0] >= 20.0);
+                assert!(search.rect[2] <= width - 20.0);
+                assert!(
+                    search.rect[1] < 220.0,
+                    "Actions must follow the text, not center in the remaining viewport"
+                );
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                {
+                    let explore = app
+                        .controls
+                        .iter()
+                        .find(|c| c.name == "youtube-home")
+                        .unwrap();
+                    assert!(explore.rect[0] >= 20.0);
+                    assert!(explore.rect[2] <= width - 20.0);
+                    if width < 510.0 {
+                        assert!(explore.rect[1] >= search.rect[3] + GAP);
+                    } else {
+                        assert_eq!(explore.rect[1], search.rect[1]);
+                        assert!(explore.rect[0] >= search.rect[2] + GAP);
+                    }
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn repeat_modes_have_distinct_labels_and_single_track_glyph() {
+        let (off_icon, off_label) = repeat_presentation(Repeat::Off);
+        let (context_icon, context_label) = repeat_presentation(Repeat::Context);
+        let (track_icon, track_label) = repeat_presentation(Repeat::Track);
+        assert!(matches!(off_icon, Icon::Repeat));
+        assert!(matches!(context_icon, Icon::Repeat));
+        assert!(matches!(track_icon, Icon::Repeat1));
+        assert_ne!(off_label, context_label);
+        assert_ne!(context_label, track_label);
+        assert_ne!(off_label, track_label);
     }
 }

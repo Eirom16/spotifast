@@ -480,6 +480,52 @@ pub fn icon_button_sized(
     }
 }
 
+/// A persistent transport mode. Selection has a surface as well as a tint,
+/// remains visible on hover, and is exposed to assistive technology.
+pub fn icon_toggle(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    icon: Icon,
+    dimensions: [f32; 2],
+    selected: bool,
+    label: &str,
+) -> Response {
+    let [size, edge] = dimensions;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge.max(size)), Sense::click());
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+    });
+    if ui.is_rect_visible(rect) {
+        let hovered = response.hovered() || response.has_focus();
+        let fill = if selected {
+            palette
+                .accent
+                .gamma_multiply(if hovered { 0.22 } else { 0.14 })
+        } else if hovered {
+            palette.surface_hover
+        } else {
+            Color32::TRANSPARENT
+        };
+        ui.painter()
+            .rect_filled(rect, CornerRadius::same(RADIUS), fill);
+        let tint = if selected {
+            palette.accent
+        } else if hovered {
+            palette.text
+        } else {
+            palette.secondary
+        };
+        let scale = if response.is_pointer_button_down_on() {
+            0.92
+        } else {
+            1.0
+        };
+        paint_icon(ui, icon, rect, size * scale, tint);
+    }
+    focus_ring(ui, &response);
+    response.on_hover_text(label)
+}
+
 /// Horizontal offset that optically centers play triangles.
 ///
 /// Lucide includes a 1/24-width shift; a measured 3% shift centers the icon at
@@ -1090,4 +1136,100 @@ pub fn virtual_rows(
         ui.allocate_space(vec2(width, (count - last) as f32 * row_height));
     }
     ui.spacing_mut().item_spacing = previous_spacing;
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+
+    #[test]
+    fn mode_selection_has_a_surface_without_changing_geometry() {
+        let ctx = egui::Context::default();
+        fastframe_icons::install::<Icon>(&ctx);
+        for palette in [Palette::dark(), Palette::light()] {
+            for dimensions in [[20.0, 32.0], [24.0, 48.0]] {
+                for selected in [false, true] {
+                    let mut rect = Rect::NOTHING;
+                    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                        rect = icon_toggle(
+                            ui,
+                            &palette,
+                            Icon::Shuffle,
+                            dimensions,
+                            selected,
+                            "Aleatorio",
+                        )
+                        .rect;
+                    });
+                    output.textures_delta.clear();
+                    assert_eq!(rect.size(), Vec2::splat(dimensions[1]));
+                    let selected_fill = palette.accent.gamma_multiply(0.14);
+                    let has_selected_surface = output.shapes.iter().any(|shape| {
+                        matches!(&shape.shape, egui::Shape::Rect(shape)
+                            if shape.rect == rect && shape.fill == selected_fill)
+                    });
+                    assert_eq!(has_selected_surface, selected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mode_button_preserves_keyboard_activation_and_disabled_state() {
+        let ctx = egui::Context::default();
+        fastframe_icons::install::<Icon>(&ctx);
+        let palette = Palette::dark();
+        let mut id = None;
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let response = icon_toggle(
+                ui,
+                &palette,
+                Icon::Repeat1,
+                [24.0, 48.0],
+                true,
+                "Repetir una canción",
+            );
+            id = Some(response.id);
+            response.request_focus();
+        });
+        output.textures_delta.clear();
+        let input = || egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Enter,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input(), |ui| {
+            let response = icon_toggle(
+                ui,
+                &palette,
+                Icon::Repeat1,
+                [24.0, 48.0],
+                true,
+                "Repetir una canción",
+            );
+            assert_eq!(Some(response.id), id);
+            assert!(response.has_focus());
+            assert!(response.clicked());
+        });
+        output.textures_delta.clear();
+        let mut output = ctx.run_ui(input(), |ui| {
+            ui.disable();
+            let response = icon_toggle(
+                ui,
+                &palette,
+                Icon::Repeat1,
+                [24.0, 48.0],
+                true,
+                "Repetir una canción",
+            );
+            assert!(!response.enabled());
+            assert!(!response.clicked());
+        });
+        output.textures_delta.clear();
+    }
 }
