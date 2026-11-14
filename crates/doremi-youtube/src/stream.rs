@@ -1,7 +1,6 @@
-//! Single-attempt native media resolution and bounded HTTP range input.
-//! Signed-in playback uses the same WEB_REMIX client as the musical account
-//! and library; guest playback retains Tubefast's primary player client.
-//! A refusal never causes client rotation, guest retries or content overrides.
+//! Desktop yt-dlp resolution and bounded native HTTP range input.
+//! The original native resolver is retained for explicit diagnostics and Android,
+//! never as an automatic fallback after an extractor or media access refusal.
 use crate::{Client, Error, PROVIDER, id};
 use doremi_core::media::MediaId;
 use reqwest::{Url, redirect::Policy};
@@ -129,7 +128,7 @@ impl PlayerDiagnostic {
 /// Ephemeral, non-serializable grant. Its transport URL is never a media ID.
 pub struct Stream {
     url: String,
-    user_agent: &'static str,
+    user_agent: String,
     length: u64,
     expires: Instant,
     pub duration_ms: u64,
@@ -154,7 +153,7 @@ impl Stream {
             }))
             .connect_timeout(Duration::from_secs(4))
             .timeout(Duration::from_secs(6))
-            .user_agent(self.user_agent)
+            .user_agent(&self.user_agent)
             .build()
             .map_err(|_| Error::Transport)?;
         Ok(Reader {
@@ -166,9 +165,72 @@ impl Stream {
             cancelled: Box::new(cancelled),
         })
     }
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    pub(crate) fn extracted(
+        url: String,
+        length: u64,
+        duration_ms: u64,
+        user_agent: String,
+    ) -> Result<Self, Error> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let uri = media_url(&url)?;
+        if !(1..=512 * 1024 * 1024).contains(&length)
+            || !(1..=6 * 3600 * 1000).contains(&duration_ms)
+        {
+            return Err(Error::TooLarge);
+        }
+        if user_agent.is_empty()
+            || user_agent.len() > 4096
+            || reqwest::header::HeaderValue::from_str(&user_agent).is_err()
+        {
+            return Err(Error::InvalidResponse);
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|_| Error::Unavailable)?
+            .as_secs();
+        let expires = uri
+            .query_pairs()
+            .find(|(key, _)| key == "expire")
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+            .and_then(|expires| expires.checked_sub(now))
+            .filter(|seconds| *seconds > 0)
+            .ok_or(Error::AccessDenied)?;
+        Ok(Self {
+            url,
+            user_agent,
+            length,
+            duration_ms,
+            expires: Instant::now() + Duration::from_secs(expires.min(6 * 3600)),
+        })
+    }
 }
 impl Client {
     pub async fn resolve(&mut self, media: &MediaId) -> Result<Stream, Error> {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        {
+            self.player_diagnostic = None;
+            self.resolution_stage = "identity";
+            if media.provider.as_str() != PROVIDER
+                || media.local().len() != 11
+                || id(media.local()).is_err()
+            {
+                return Err(Error::InvalidRequest);
+            }
+            if self.signed_in() {
+                self.resolution_stage = "account";
+                self.account().await?;
+            }
+            self.resolution_stage = "extractor";
+            let stream = crate::extractor::resolve(media, self.session.as_ref()).await?;
+            self.resolution_stage = "ready";
+            Ok(stream)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+        self.resolve_native(media).await
+    }
+    /// Preserved native experiment. It is not retried after a desktop failure.
+    pub async fn resolve_native(&mut self, media: &MediaId) -> Result<Stream, Error> {
         self.player_diagnostic = None;
         self.resolution_stage = "identity";
         if media.provider.as_str() != PROVIDER
@@ -194,7 +256,7 @@ impl Client {
             let mut url = self.resolve_format_url(candidate(&value)?).await?;
             with_nonce(&mut url, &nonce);
             let mut stream = parse_with_url(media, &value, Some(url))?;
-            stream.user_agent = crate::USER_AGENT;
+            stream.user_agent = crate::USER_AGENT.into();
             self.resolution_stage = "ready";
             return Ok(stream);
         }
@@ -357,7 +419,7 @@ fn parse_with_url(media: &MediaId, value: &Value, resolved: Option<Url>) -> Resu
         .clamp(1, 6 * 3600);
     Ok(Stream {
         url: uri.into(),
-        user_agent: UA,
+        user_agent: UA.into(),
         length,
         expires: Instant::now() + Duration::from_secs(seconds),
         duration_ms,
@@ -594,7 +656,7 @@ mod tests {
             });
             let session = json!({"schema":1,"cookie":"SAPISID=fixture-only","visitor_data":"fixture-visitor","data_sync_id":"fixture-channel","auth_user":"1"});
             client.sign_in(session.to_string()).await.unwrap();
-            let result = client.resolve(&id("abcdefghijk").unwrap()).await;
+            let result = client.resolve_native(&id("abcdefghijk").unwrap()).await;
             let mut delivered_nonce = None;
             if denied {
                 assert!(matches!(result, Err(Error::AccessDenied)));
@@ -663,7 +725,7 @@ mod tests {
         client.base = base;
         client.sign_in("SAPISID=fixture-only".into()).await.unwrap();
         assert!(matches!(
-            client.resolve(&id("abcdefghijk").unwrap()).await,
+            client.resolve_native(&id("abcdefghijk").unwrap()).await,
             Err(Error::AccessDenied)
         ));
         assert!(!client.signed_in());
@@ -773,7 +835,7 @@ mod range_tests {
             });
             let grant = Stream {
                 url: format!("http://{address}/fixture"),
-                user_agent: crate::USER_AGENT,
+                user_agent: crate::USER_AGENT.into(),
                 length: 100000,
                 expires: Instant::now() + Duration::from_secs(10),
                 duration_ms: 60000,
@@ -814,7 +876,7 @@ mod range_tests {
             });
             let grant = Stream {
                 url: format!("http://{address}/fixture"),
-                user_agent: crate::USER_AGENT,
+                user_agent: crate::USER_AGENT.into(),
                 length: 100000,
                 expires: Instant::now() + Duration::from_secs(10),
                 duration_ms: 60000,
@@ -882,7 +944,7 @@ mod range_tests {
         let signal = cancel.clone();
         let grant = Stream {
             url: format!("http://{address}/fixture"),
-            user_agent: crate::USER_AGENT,
+            user_agent: crate::USER_AGENT.into(),
             length: length as u64,
             expires: Instant::now() + Duration::from_secs(10),
             duration_ms: 60_000,

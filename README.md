@@ -35,7 +35,12 @@ CC0 de Membeth: el motor nativo reproduce bloques HTTP verificados sin descargar
 la pieza completa. La selección Commons también conserva dos tonos de prueba.
 Los datos demo siguen separados y silenciosos.
 Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
-Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
+La reproducción YouTube Music de escritorio usa yt-dlp como extractor y
+conserva el catálogo y el reproductor nativo Rust. Requiere Python, yt-dlp con
+EJS y Deno instalados por separado; requisitos y prueba con el binario de CI en
+[`crates/doremi-youtube/README.md`](crates/doremi-youtube/README.md).
+Android todavía no incluye este extractor: su verificación funcional sigue
+pendiente.
 
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al

@@ -68,10 +68,10 @@ struct Running {
     job: Option<WindowsJob>,
 }
 #[cfg(windows)]
-struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct WindowsJob(windows_sys::Win32::Foundation::HANDLE);
 #[cfg(windows)]
 impl WindowsJob {
-    fn new(child: &Child) -> Result<Self, Error> {
+    pub(crate) fn new(child: &Child) -> Result<Self, Error> {
         use std::os::windows::io::AsRawHandle;
         use windows_sys::Win32::System::JobObjects::*;
         // The process is still waiting for its private stdin handshake here.

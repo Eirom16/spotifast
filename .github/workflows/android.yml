@@ -114,6 +114,8 @@ jobs:
           cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,local-flac,local-mp3,aac-mp4 --all-targets -- -D warnings
           cargo clippy --locked -p doremi-app -p doremi-auth --all-targets -- -D warnings
           cargo build --locked -p doremi-app -p doremi-auth --bins
+          cargo build --locked -p doremi-youtube --example stream_probe
+          python3 -c "import ast,pathlib; ast.parse(pathlib.Path('crates/doremi-youtube/src/yt_dlp_bridge.py').read_text())"
           RUSTDOCFLAGS="-D warnings" cargo doc --locked -p doremi-library -p doremi-commons -p doremi-player -p doremi-app --no-deps
       - name: Real X11 navigation, keyboard and queue sequence
         env:
@@ -122,6 +124,7 @@ jobs:
           mkdir -p target/native-dist
           cp target/native-cargo/debug/doremi target/native-cargo/debug/doremi-auth target/native-dist/
           cp target/native-cargo/debug/doremi-app target/native-dist/
+          cp target/native-cargo/debug/examples/stream_probe target/native-dist/
           cp LICENSE Cargo.lock target/native-dist/
           mkdir -p target/native-dist/licenses
           cp assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
@@ -193,8 +196,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --locked -p doremi-auth
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --locked -p doremi-youtube --example stream_probe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -c "import ast,pathlib; ast.parse(pathlib.Path('crates/doremi-youtube/src/yt_dlp_bridge.py').read_text())"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           New-Item -ItemType Directory -Force target/native-dist/licenses | Out-Null
           Copy-Item target/native-cargo/debug/doremi.exe, target/native-cargo/debug/doremi-auth.exe, LICENSE, Cargo.lock target/native-dist/
+          Copy-Item target/native-cargo/debug/examples/stream_probe.exe target/native-dist/
           Copy-Item assets/doremi/LICENSE target/native-dist/licenses/Doremi-assets-GPL-3.txt
           Copy-Item assets/doremi/PROVENANCE.md, assets/fonts/Inter-LICENSE.txt, assets/icons/LICENSE.txt target/native-dist/licenses/
           Copy-Item assets/audio/LICENSE.txt target/native-dist/licenses/Audio-CC0.txt
