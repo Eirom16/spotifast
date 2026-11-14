@@ -57,7 +57,7 @@ def main():
             wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
         wait(lambda s:bool(s['controls']))
         def tap(name):
-            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume','player-more'}
+            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','player-now-playing','seek','volume','player-more'}
             for attempt in range(45):
                 data=state()
                 if name.startswith('playlist-add:') and not any(c['name']==name for c in data['controls']):
@@ -284,6 +284,15 @@ def main():
         tap('clear');wait(lambda s:not s['manual'])
         assert state()['current_occurrence']==current and state()['context_occurrences']==context
         tap('queue-current');wait(lambda s:s['page']=='Player');capture('player')
+        if state()['viewport'][0]>=760:
+            selected=state()['current'];was_saved=selected in state()['library']
+            tap('player-save');wait(lambda s:(selected in s['library'])!=was_saved)
+            tap('player-save');wait(lambda s:(selected in s['library'])==was_saved)
+            tap('player-queue');wait(lambda s:s['page']=='Queue')
+            tap('queue-current');wait(lambda s:s['page']=='Player')
+            tap('player-back');wait(lambda s:s['page']=='Queue')
+            tap('player-now-playing');wait(lambda s:s['page']=='Player')
+            assert state()['current_occurrence']==current and state()['context_occurrences']==context
         tap('home');tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
         tap('player')
         tap('library');capture('mini-player-light');tap('player')

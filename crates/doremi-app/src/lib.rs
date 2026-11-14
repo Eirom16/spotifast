@@ -25,6 +25,7 @@ mod file_input;
 mod library_ui;
 mod listening;
 mod local_media;
+mod player_view;
 mod playlists;
 mod presentation;
 mod queue_ui;
@@ -1335,27 +1336,7 @@ impl DoremiApp {
                     self.empty_player(ui);
                     return;
                 }
-                let model = self.model.as_ref().unwrap();
-                let title = model
-                    .queue
-                    .current()
-                    .map(|e| e.media.title.as_str())
-                    .unwrap_or("Ninguna canción seleccionada");
-                ui.heading(title);
-                ui.label(if !model.real_audio() {
-                    "Esta selección es una demostración sin audio."
-                } else if model.queue.playback() == Playback::Loading {
-                    "Preparando audio…"
-                } else if model.queue.playback() == Playback::Failed {
-                    "No se pudo reproducir esta selección."
-                } else if model.queue.playback() == Playback::Paused {
-                    "En pausa"
-                } else {
-                    "Reproducción nativa"
-                });
-                ui.label(&model.notice);
-                #[cfg(target_os = "android")]
-                ui.small("La reproducción se pausa al salir. MediaSession aún pendiente.");
+                self.desktop_player(ui);
             }
         }
     }

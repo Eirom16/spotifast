@@ -50,6 +50,10 @@ permite filtrar canciones, álbumes, artistas y playlists sin cambiar los favori
 ni la cola. Las cabeceras de colección apilan carátula y texto en pantallas estrechas;
 las playlists reutilizan la carátula disponible de su primera canción.
 
+El reproductor de escritorio muestra la carátula disponible y permite guardar la
+canción o abrir la cola sin duplicar los controles de transporte de la barra inferior.
+La carátula y el título de esa barra también permiten abrir el reproductor.
+
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
 upstream y su clave pública. No usarlo para distribuir Doremi ni aceptar sus
