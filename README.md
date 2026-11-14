@@ -44,6 +44,12 @@ El mismo tratamiento se utiliza en escritorio y en el reproductor móvil.
 Inicio agrupa la bienvenida y las acciones de búsqueda en una cabecera adaptable:
 los botones se colocan en una fila cuando caben y se apilan en pantallas estrechas.
 
+Buscar distingue visualmente la fuente y categoría activas, muestra estados reales
+de carga/error y presenta álbumes y artistas en tarjetas adaptables. Biblioteca
+permite filtrar canciones, álbumes, artistas y playlists sin cambiar los favoritos
+ni la cola. Las cabeceras de colección apilan carátula y texto en pantallas estrechas;
+las playlists reutilizan la carátula disponible de su primera canción.
+
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
 upstream y su clave pública. No usarlo para distribuir Doremi ni aceptar sus

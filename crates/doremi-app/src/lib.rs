@@ -22,6 +22,7 @@ mod youtube_session;
 use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
+mod library_ui;
 mod listening;
 mod local_media;
 mod playlists;
@@ -740,6 +741,7 @@ impl TextField {
 }
 pub struct DoremiApp {
     instance: usize,
+    library_filter: library_ui::Filter,
     editor: TextField,
     model: Option<Model>,
     writer: Option<persistence::Writer>,
@@ -787,6 +789,7 @@ impl DoremiApp {
         doremi_ui::install(ctx);
         Self {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            library_filter: library_ui::Filter::default(),
             editor: TextField::Search,
             model: Some(model),
             writer: Some(writer),
@@ -1249,20 +1252,7 @@ impl DoremiApp {
                 self.rows(ui, &results);
             }
             Page::Library => {
-                ui.heading("Biblioteca");
-                let library = self.model.as_ref().unwrap().library.clone();
-                ui.label("Tu música y tus playlists, guardadas en este dispositivo.");
-                if !self.model.as_ref().unwrap().write_library {
-                    ui.small("Solo lectura: el archivo anterior se conserva.");
-                }
-                ui.add_space(8.0);
-                self.playlist_library(ui);
-                ui.add_space(16.0);
-                ui.heading("Tu música guardada");
-                self.rows(ui, library.items());
-                if !library.items().is_empty() {
-                    ui.add_space(12.0);
-                }
+                self.library_content(ui);
                 #[cfg(any(target_os = "linux", target_os = "android"))]
                 {
                     if self.model.as_ref().unwrap().local_files.pending() {

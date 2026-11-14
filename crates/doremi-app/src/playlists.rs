@@ -191,6 +191,9 @@ impl DoremiApp {
                     action_label: "Abrir playlist",
                 },
             );
+            if let Some(media) = list.entries.first() {
+                self.media_artwork(ui, &media.id, row.cover_rect(), 4);
+            }
             self.record(&format!("playlist-open:{}", list.id), &row.body);
             if row.body.clicked() {
                 self.open_playlist(list.id);
@@ -227,7 +230,10 @@ impl DoremiApp {
             },
             |ui, slot| match slot {
                 HeroSlot::Cover { rect, radius, .. } => {
-                    theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic)
+                    theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic);
+                    if let Some(media) = list.entries.first() {
+                        self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
+                    }
                 }
                 HeroSlot::Text { text, font, color } => {
                     ui.label(egui::RichText::new(text).font(font).color(color));

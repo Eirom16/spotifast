@@ -1195,7 +1195,7 @@ fn repeat_presentation(repeat: Repeat) -> (Icon, &'static str) {
     }
 }
 
-fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
+pub(super) fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     {
         doremi_youtube::entity_kind(id).or_else(|| doremi_musicbrainz::entity_kind(id).ok())
