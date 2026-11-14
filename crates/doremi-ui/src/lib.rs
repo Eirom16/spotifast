@@ -4,6 +4,7 @@
 pub mod bitmap;
 pub mod cards;
 pub mod collection;
+pub mod feedback;
 
 use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Vec2, pos2, vec2};
 
@@ -772,7 +773,18 @@ pub fn list_row(
     id: egui::Id,
     row: ListRow<'_>,
 ) -> ListRowResponse {
-    list_row_inner(ui, palette, id, row, true)
+    list_row_inner(ui, palette, id, row, true, false)
+}
+
+/// A result matching the current track, without inventing playback state.
+pub fn selected_list_row(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    id: egui::Id,
+    row: ListRow<'_>,
+    selected: bool,
+) -> ListRowResponse {
+    list_row_inner(ui, palette, id, row, true, selected)
 }
 /// The same compact geometry for a queue occurrence with no body action.
 /// Trailing controls remain independent; the text is neither a button nor a
@@ -783,7 +795,7 @@ pub fn static_list_row(
     id: egui::Id,
     row: ListRow<'_>,
 ) -> ListRowResponse {
-    list_row_inner(ui, palette, id, row, false)
+    list_row_inner(ui, palette, id, row, false, false)
 }
 fn list_row_inner(
     ui: &mut egui::Ui,
@@ -791,6 +803,7 @@ fn list_row_inner(
     id: egui::Id,
     row: ListRow<'_>,
     interactive: bool,
+    selected: bool,
 ) -> ListRowResponse {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
     let reserved = row.actions as f32 * 48.0 + row.actions.saturating_sub(1) as f32 * 8.0;
@@ -805,19 +818,12 @@ fn list_row_inner(
         },
     );
     body.widget_info(|| {
-        egui::WidgetInfo::labeled(
-            if interactive {
-                egui::WidgetType::Button
-            } else {
-                egui::WidgetType::Label
-            },
-            true,
-            if interactive {
-                format!("{} {}", row.action_label, row.title)
-            } else {
-                row.title.to_owned()
-            },
-        )
+        let label = format!("{} {} · {}", row.action_label, row.title, row.subtitle);
+        if interactive {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label)
+        } else {
+            egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), row.title)
+        }
     });
     if body.gained_focus() {
         body.scroll_to_me(None);
@@ -826,7 +832,7 @@ fn list_row_inner(
         ui,
         palette,
         rect,
-        false,
+        selected,
         interactive && (body.hovered() || body.has_focus()),
     );
     focus_ring(ui, &body);
@@ -851,11 +857,13 @@ fn list_row_inner(
         );
         child.spacing_mut().item_spacing.y = 2.0;
         child.add(
-            egui::Label::new(
-                egui::RichText::new(row.title)
-                    .font(medium(14.0))
-                    .color(palette.text),
-            )
+            egui::Label::new(egui::RichText::new(row.title).font(semibold(14.0)).color(
+                if selected {
+                    palette.accent
+                } else {
+                    palette.text
+                },
+            ))
             .truncate(),
         );
         child.add(
@@ -868,7 +876,7 @@ fn list_row_inner(
         );
     }
     ListRowResponse {
-        body,
+        body: body.on_hover_text(format!("{}\n{}", row.title, row.subtitle)),
         rect,
         actions: row.actions,
     }

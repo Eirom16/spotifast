@@ -65,16 +65,28 @@ pub fn card(
     ui: &mut Ui,
     palette: &Palette,
     card: Card<'_>,
+    slot: impl FnMut(&mut Ui, Slot<'_>),
+) -> CardResponse {
+    card_sized(ui, palette, card, CARD_WIDTH, slot)
+}
+
+/// Responsive catalog tiles use the same padding and typography as shelves.
+pub fn card_sized(
+    ui: &mut Ui,
+    palette: &Palette,
+    card: Card<'_>,
+    width: f32,
     mut slot: impl FnMut(&mut Ui, Slot<'_>),
 ) -> CardResponse {
+    let art = (width - 24.0).max(1.0);
     let (title_row, subtitle_row) = ui.fonts_mut(|fonts| {
         (
             fonts.row_height(&crate::semibold(14.0)),
             fonts.row_height(&crate::regular(12.5)),
         )
     });
-    let height = 12.0 + CARD_ART + 10.0 + title_row + 2.0 + 2.0 * subtitle_row + 8.0;
-    let (rect, response) = ui.allocate_exact_size(vec2(CARD_WIDTH, height), Sense::click());
+    let height = 12.0 + art + 10.0 + title_row + 2.0 + 2.0 * subtitle_row + 8.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(
             egui::WidgetType::Button,
@@ -97,21 +109,17 @@ pub fn card(
                     .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
             );
         }
-        let image = Rect::from_min_size(rect.min + vec2(12.0, 12.0), Vec2::splat(CARD_ART));
+        let image = Rect::from_min_size(rect.min + vec2(12.0, 12.0), Vec2::splat(art));
         slot(
             ui,
             Slot::Cover {
                 rect: image,
-                radius: if card.cover.circular {
-                    CARD_ART / 2.0
-                } else {
-                    6.0
-                },
+                radius: if card.cover.circular { art / 2.0 } else { 6.0 },
             },
         );
         let title_rect = Rect::from_min_size(
             pos2(rect.left() + 12.0, image.bottom() + 10.0),
-            vec2(CARD_ART, title_row),
+            vec2(art, title_row),
         );
         slot(
             ui,
@@ -129,7 +137,7 @@ pub fn card(
                 text: card.subtitle,
                 rect: Rect::from_min_size(
                     pos2(title_rect.left(), title_rect.bottom() + 2.0),
-                    vec2(CARD_ART, 2.0 * subtitle_row),
+                    vec2(art, 2.0 * subtitle_row),
                 ),
                 font: crate::regular(12.5),
                 color: palette.secondary,
