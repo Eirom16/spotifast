@@ -29,6 +29,7 @@ env = os.environ.copy()
 env.pop('WAYLAND_DISPLAY', None)
 env.pop('WAYLAND_SOCKET', None)
 env['DOREMI_DATA_DIR'] = str(output/'profile')
+env['DOREMI_INTERNAL_QA'] = '1'
 log = (output/'runtime.log').open('w')
 with args.binary.open('rb') as handle:
     binary_hash = hashlib.file_digest(handle, 'sha256').hexdigest()

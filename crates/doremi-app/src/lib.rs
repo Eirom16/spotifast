@@ -28,6 +28,7 @@ mod local_media;
 mod player_view;
 mod playlists;
 mod presentation;
+mod product_ui;
 mod queue_ui;
 mod saved;
 mod search_view;
@@ -745,6 +746,8 @@ impl TextField {
 }
 pub struct DoremiApp {
     instance: usize,
+    /// Explicit, isolated development profiles only. Never a persisted preference.
+    internal_ui: bool,
     library_filter: library_ui::Filter,
     editor: TextField,
     model: Option<Model>,
@@ -766,9 +769,9 @@ pub struct DoremiApp {
 impl DoremiApp {
     #[cfg(not(target_os = "android"))]
     pub fn new(cc: &eframe::CreationContext<'_>, directory: PathBuf) -> Self {
-        let app = Self::new_context(&cc.egui_ctx, directory);
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        let mut app = app;
+        let mut app = Self::new_context(&cc.egui_ctx, directory);
+        app.internal_ui = std::env::var("DOREMI_INTERNAL_QA").as_deref() == Ok("1")
+            && std::env::var_os("DOREMI_DATA_DIR").is_some();
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         if std::env::var_os("DOREMI_DATA_DIR").is_none() {
             app.model.as_mut().unwrap().music.session.restore();
@@ -793,6 +796,7 @@ impl DoremiApp {
         doremi_ui::install(ctx);
         Self {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            internal_ui: false,
             library_filter: library_ui::Filter::default(),
             editor: TextField::Search,
             model: Some(model),
@@ -1004,6 +1008,9 @@ impl DoremiApp {
     }
 
     pub(crate) fn search_field(&mut self, ui: &mut egui::Ui) {
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        self.ensure_product_search();
+        let cancel = !self.internal_ui && self.search_active();
         let online = self.model.as_ref().unwrap().online_search_selected();
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = doremi_ui::palette(prefs.light, prefs.green);
@@ -1024,8 +1031,12 @@ impl DoremiApp {
                         20.0,
                         palette.secondary,
                     );
-                    ui.add_sized(
-                        [ui.available_width(), TOUCH],
+                    let response = ui.add_sized(
+                        [
+                            (ui.available_width() - if cancel { TOUCH + 10.0 } else { 0.0 })
+                                .max(24.0),
+                            TOUCH,
+                        ],
                         egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
                             .id(egui::Id::new("catalog-query"))
                             .frame(egui::Frame::NONE)
@@ -1036,7 +1047,22 @@ impl DoremiApp {
                                 "Busca música por nombre o artista"
                             })
                             .char_limit(128),
-                    )
+                    );
+                    if cancel {
+                        let button = doremi_ui::icon_button_sized(
+                            ui,
+                            doremi_ui::Icon::CircleX,
+                            [20.0, TOUCH],
+                            palette.secondary,
+                            palette.text,
+                            "Cancelar búsqueda",
+                        );
+                        self.record("cancel-search", &button);
+                        if button.clicked() {
+                            self.model.as_mut().unwrap().cancel_search();
+                        }
+                    }
+                    response
                 })
                 .inner
             });
@@ -1080,19 +1106,29 @@ impl DoremiApp {
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 if self.model.as_ref().unwrap().music.home_root() {
                     ui.add_space(16.0);
-                    ui.heading("YouTube Music");
+                    ui.heading("Para descubrir");
                     self.music_results(ui);
                 }
                 ui.add_space(16.0);
                 ui.heading("Tu biblioteca");
-                let library = self.model.as_ref().unwrap().library.clone();
-                if library.items().is_empty() {
+                let library: Vec<_> = self
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .library
+                    .items()
+                    .iter()
+                    .filter(|media| self.media_visible(media))
+                    .cloned()
+                    .collect();
+                if library.is_empty() {
                     ui.weak("Guarda música desde Buscar para encontrarla aquí.");
                 } else {
-                    self.rows(ui, library.items());
+                    self.rows(ui, &library);
                 }
                 ui.add_space(16.0);
-                let response=egui::CollapsingHeader::new("Muestras originales y demostración").id_salt("demo-examples").show(ui,|ui| {
+                if self.internal_ui {
+                    let response=egui::CollapsingHeader::new("Muestras originales y demostración").id_salt("demo-examples").show(ui,|ui| {
                     ui.small("Muestras de prueba CC0 y datos de demostración. No son resultados del catálogo musical.");
                     if self.button(ui,"local-audio","Audio original",220.0) {
                         let model=self.model.as_mut().unwrap();model.start_context(vec![Builtin::Scale.media(),Builtin::Chord.media()],0);self.navigate(Page::Player);
@@ -1102,10 +1138,13 @@ impl DoremiApp {
                     }
                     self.rows(ui,&songs());
                 });
-                self.record("demo-examples", &response.header_response);
+                    self.record("demo-examples", &response.header_response);
+                }
             }
             Page::History => self.history_page(ui),
             Page::Search => {
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+                self.ensure_product_search();
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 if self.model.as_ref().unwrap().music.selected
                     && self.model.as_ref().unwrap().music.detail.is_some()
@@ -1115,71 +1154,73 @@ impl DoremiApp {
                 }
                 if ui.ctx().content_rect().width() >= 760.0 {
                     ui.heading("Buscar");
+                    self.search_field(ui);
                 }
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 {
                     let width = ((ui.available_width() - 3.0 * GAP) / 4.0)
                         .floor()
                         .max(TOUCH);
-                    let model = self.model.as_ref().unwrap();
-                    let youtube = model.music.selected && model.music.youtube;
-                    let musicbrainz = model.music.selected && !model.music.youtube;
-                    let commons = !model.music.selected && model.online.selected;
-                    let demo = !model.music.selected && !model.online.selected;
-                    ui.horizontal_wrapped(|ui| {
-                        if ui.ctx().content_rect().width() < 760.0 {
-                            ui.spacing_mut().button_padding.x = 4.0;
-                        }
-                        if self.choice_button(
-                            ui,
-                            "source-youtube",
+                    if self.internal_ui {
+                        let model = self.model.as_ref().unwrap();
+                        let youtube = model.music.selected && model.music.youtube;
+                        let musicbrainz = model.music.selected && !model.music.youtube;
+                        let commons = !model.music.selected && model.online.selected;
+                        let demo = !model.music.selected && !model.online.selected;
+                        ui.horizontal_wrapped(|ui| {
                             if ui.ctx().content_rect().width() < 760.0 {
-                                "YouTube\nMusic"
-                            } else {
-                                "YouTube Music"
-                            },
-                            width,
-                            youtube,
-                        ) {
-                            let model = self.model.as_mut().unwrap();
-                            model.cancel_search();
-                            model.set_online_source(false);
-                            model.music.selected = true;
-                            model.music.youtube = true;
-                            model.search();
-                            model.revision += 1;
-                        }
-                        if self.choice_button(
-                            ui,
-                            "source-musicbrainz",
-                            if ui.ctx().content_rect().width() < 760.0 {
-                                "Music\nBrainz"
-                            } else {
-                                "MusicBrainz"
-                            },
-                            width,
-                            musicbrainz,
-                        ) {
-                            let model = self.model.as_mut().unwrap();
-                            model.cancel_search();
-                            model.set_online_source(false);
-                            model.music.selected = true;
-                            model.music.youtube = false;
-                            if model.music.kind == doremi_core::media::EntityKind::Playlist {
-                                model.music.kind = doremi_core::media::EntityKind::Recording;
+                                ui.spacing_mut().button_padding.x = 4.0;
                             }
-                            model.search();
-                            model.revision += 1;
-                        }
-                        if self.choice_button(ui, "source-commons", "Commons", width, commons) {
-                            self.model.as_mut().unwrap().set_online_source(true);
-                        }
-                        if self.choice_button(ui, "source-demo", "Demo", width, demo) {
-                            self.model.as_mut().unwrap().set_online_source(false);
-                        }
-                    });
-                    let model = self.model.as_ref().unwrap();
-                    ui.small(if model.music.selected {
+                            if self.choice_button(
+                                ui,
+                                "source-youtube",
+                                if ui.ctx().content_rect().width() < 760.0 {
+                                    "YouTube\nMusic"
+                                } else {
+                                    "YouTube Music"
+                                },
+                                width,
+                                youtube,
+                            ) {
+                                let model = self.model.as_mut().unwrap();
+                                model.cancel_search();
+                                model.set_online_source(false);
+                                model.music.selected = true;
+                                model.music.youtube = true;
+                                model.search();
+                                model.revision += 1;
+                            }
+                            if self.choice_button(
+                                ui,
+                                "source-musicbrainz",
+                                if ui.ctx().content_rect().width() < 760.0 {
+                                    "Music\nBrainz"
+                                } else {
+                                    "MusicBrainz"
+                                },
+                                width,
+                                musicbrainz,
+                            ) {
+                                let model = self.model.as_mut().unwrap();
+                                model.cancel_search();
+                                model.set_online_source(false);
+                                model.music.selected = true;
+                                model.music.youtube = false;
+                                if model.music.kind == doremi_core::media::EntityKind::Playlist {
+                                    model.music.kind = doremi_core::media::EntityKind::Recording;
+                                }
+                                model.search();
+                                model.revision += 1;
+                            }
+                            if self.choice_button(ui, "source-commons", "Commons", width, commons) {
+                                self.model.as_mut().unwrap().set_online_source(true);
+                            }
+                            if self.choice_button(ui, "source-demo", "Demo", width, demo) {
+                                self.model.as_mut().unwrap().set_online_source(false);
+                            }
+                        });
+                        let model = self.model.as_ref().unwrap();
+                        ui.small(if model.music.selected {
                         if model.music.youtube {
                             "Fuente: YouTube Music"
                         } else {
@@ -1190,8 +1231,15 @@ impl DoremiApp {
                     } else {
                         "Fuente: demostración offline · sin audio."
                     });
+                    }
                     if self.model.as_ref().unwrap().music.selected {
                         ui.horizontal_wrapped(|ui| {
+                            let filter_width = ((ui.available_width() - 12.0) / 4.0).max(TOUCH);
+                            ui.spacing_mut().item_spacing.x = 4.0;
+                            ui.spacing_mut().button_padding.x = 4.0;
+                            if ui.ctx().content_rect().width() < 760.0 {
+                                ui.style_mut().override_font_id = Some(doremi_ui::medium(13.0));
+                            }
                             for (kind, label) in [
                                 (doremi_core::media::EntityKind::Recording, "Canciones"),
                                 (doremi_core::media::EntityKind::Artist, "Artistas"),
@@ -1207,21 +1255,21 @@ impl DoremiApp {
                                     ui,
                                     &format!("catalog-kind:{kind:?}"),
                                     label,
-                                    0.0,
+                                    if self.internal_ui { 0.0 } else { filter_width },
                                     self.model.as_ref().unwrap().music.kind == kind,
                                 ) {
                                     let model = self.model.as_mut().unwrap();
-                                    model.music.kind = kind;
-                                    model.search();
+                                    if model.music.kind != kind {
+                                        model.music.kind = kind;
+                                        model.search();
+                                    }
                                 }
                             }
                         });
                     }
                 }
-                if ui.ctx().content_rect().width() >= 760.0 {
-                    self.search_field(ui);
-                }
-                if self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0) {
+                if self.internal_ui && self.button(ui, "cancel-search", "Cancelar búsqueda", 200.0)
+                {
                     self.model.as_mut().unwrap().cancel_search();
                 }
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -1298,11 +1346,7 @@ impl DoremiApp {
                         }
                     }
                 });
-                ui.label(if cfg!(any(target_os = "linux", target_os = "android", target_os = "windows")) {
-                    "Datos propios de Doremi. Commons es opcional y no requiere cuenta."
-                } else {
-                    "Datos propios de Doremi. Sin permisos de red ni acceso a archivos personales."
-                });
+                ui.weak("Tu biblioteca y tus preferencias se guardan en este dispositivo.");
             }
             Page::Player => {
                 if ui.ctx().content_rect().width() < 760.0 {
@@ -1311,7 +1355,7 @@ impl DoremiApp {
                     self.mobile_player(ui, &palette);
                     return;
                 }
-                if self.model.as_ref().unwrap().queue.current().is_none() {
+                if !self.current_visible() {
                     self.empty_player(ui);
                     return;
                 }
@@ -1487,6 +1531,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.navigate(Page::Settings);
         app.editor = TextField::SessionCookie;
         const FIXTURE: &str = "SAPISID=synthetic-diagnostics-fixture-only";
@@ -1525,6 +1570,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.navigate(Page::Library);
         app.editor = TextField::PlaylistName;
         app.receive_editor_text("search", "must not search");
@@ -1566,6 +1612,7 @@ mod tests {
             .join(format!("../../target/artist-tabs-{}", std::process::id()));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.model.as_mut().unwrap().music.detail = Some(CatalogEntry {
             media: Media {
                 id: MediaId::new(
@@ -1622,6 +1669,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         // Own synthetic metadata exercises the layout only. The opt-in GUI
         // journey separately proves history produced by real CC0 playback.
         for index in 0..500 {
@@ -1739,6 +1787,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         {
             app.model.as_mut().unwrap().music.selected = false;
@@ -1835,6 +1884,7 @@ mod tests {
             .join(format!("../../target/playlist-ime-{}", std::process::id()));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let model = app.model.as_mut().unwrap();
         let id = model.playlists.create("Café nocturno").unwrap();
         for _ in 0..8 {
@@ -1954,6 +2004,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         for light in [false, true] {
             for (size, scale) in [
                 [360.0, 640.0],
@@ -2094,6 +2145,7 @@ mod tests {
         ));
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let demo = songs();
         let metadata = Media {
             id: MediaId::new(
@@ -2218,6 +2270,7 @@ mod tests {
             .join("../../target/source-picker-layout-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.model.as_mut().unwrap().page = Page::Search;
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
@@ -2345,6 +2398,7 @@ mod tests {
         let ctx = egui::Context::default();
         DoremiApp::shutdown();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.model.as_mut().unwrap().start_context(songs(), 0);
         app.model.as_mut().unwrap().command(Command::Pause);
         app.model.as_mut().unwrap().page = Page::Home;
@@ -2434,6 +2488,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/native-layout-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         app.model.as_mut().unwrap().start_context(songs(), 0);
         app.model.as_mut().unwrap().command(Command::Pause);
         app.model.as_mut().unwrap().page = Page::Home;
@@ -2582,6 +2637,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/queue-render-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let model = app.model.as_mut().unwrap();
         model.command(Command::ClearManual);
         model.command(Command::StartContext {

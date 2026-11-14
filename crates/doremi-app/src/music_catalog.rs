@@ -705,6 +705,9 @@ impl Model {
 impl DoremiApp {
     pub(super) fn music_results(&mut self, ui: &mut egui::Ui) {
         use doremi_ui::feedback::{self, Kind};
+        if !self.internal_ui && !self.model.as_ref().unwrap().music.youtube {
+            return;
+        }
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = doremi_ui::palette(prefs.light, prefs.green);
         let detail = self.model.as_ref().unwrap().music.detail.clone();
@@ -724,12 +727,14 @@ impl DoremiApp {
                 ui,
                 &palette,
                 Kind::Loading,
-                if state.youtube {
+                if !self.internal_ui {
+                    "Cargando música…"
+                } else if state.youtube {
                     "Consultando YouTube Music…"
                 } else {
                     "Consultando MusicBrainz…"
                 },
-                "Los resultados aparecerán aquí cuando responda el catálogo.",
+                "Los resultados aparecerán aquí en cuanto estén disponibles.",
             );
         }
         if let Some(error) = state.error {
@@ -967,13 +972,17 @@ impl DoremiApp {
             Hero {
                 kind: kind_label(entry.kind),
                 title: &entry.media.title,
-                description: Some(
-                    if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER {
-                        "YouTube Music"
-                    } else {
-                        "MusicBrainz · metadatos públicos"
-                    },
-                ),
+                description: if self.internal_ui {
+                    Some(
+                        if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER {
+                            "YouTube Music"
+                        } else {
+                            "MusicBrainz · metadatos públicos"
+                        },
+                    )
+                } else {
+                    None
+                },
                 round: entry.kind == EntityKind::Artist,
                 cover_clickable: false,
             },
@@ -1063,17 +1072,19 @@ impl DoremiApp {
                     .caption(&entry.media.id),
             );
         }
-        ui.collapsing("Información del catálogo", |ui| {
-            ui.small(format!(
-                "ID de {}: {}",
-                if youtube {
-                    "YouTube Music"
-                } else {
-                    "MusicBrainz"
-                },
-                entry.media.id.local()
-            ))
-        });
+        if self.internal_ui {
+            ui.collapsing("Información del catálogo", |ui| {
+                ui.small(format!(
+                    "ID de {}: {}",
+                    if youtube {
+                        "YouTube Music"
+                    } else {
+                        "MusicBrainz"
+                    },
+                    entry.media.id.local()
+                ))
+            });
+        }
         {
             let saved = self
                 .model
@@ -1307,7 +1318,7 @@ impl DoremiApp {
 
 fn kind_label(kind: EntityKind) -> &'static str {
     match kind {
-        EntityKind::Recording => "Grabación",
+        EntityKind::Recording => "Canción",
         EntityKind::Artist => "Artista",
         EntityKind::Release => "Álbum / edición",
         EntityKind::Playlist => "Playlist",
@@ -1384,7 +1395,7 @@ mod tests {
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
         for (waiting, error, empty, expected) in [
             (false, None, false, "Encuentra tu próxima canción"),
-            (true, None, true, "Consultando YouTube Music"),
+            (true, None, true, "Cargando música"),
             (false, None, true, "No hay resultados"),
             (
                 false,

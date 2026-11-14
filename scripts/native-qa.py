@@ -33,6 +33,7 @@ def main():
             (directory/name).write_bytes(data)
     env=os.environ.copy(); env.pop('WAYLAND_DISPLAY',None);env.pop('WAYLAND_SOCKET',None)
     env['DOREMI_DATA_DIR']=str(directory)
+    env['DOREMI_INTERNAL_QA']='1'
     logfile=(output/'runtime.log').open('w')
     process=subprocess.Popen([str(args.binary.resolve())],env=env,stdout=logfile,stderr=subprocess.STDOUT)
     def xdo(*command):

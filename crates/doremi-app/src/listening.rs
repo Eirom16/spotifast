@@ -59,7 +59,15 @@ impl Model {
 }
 impl DoremiApp {
     pub(super) fn recent_shelf(&mut self, ui: &mut egui::Ui) {
-        let recent = self.model.as_ref().unwrap().history.recent(16);
+        let recent: Vec<_> = self
+            .model
+            .as_ref()
+            .unwrap()
+            .history
+            .recent(16)
+            .into_iter()
+            .filter(|media| self.media_visible(media))
+            .collect();
         if recent.is_empty() {
             return;
         }
@@ -106,7 +114,9 @@ impl DoremiApp {
                                 &palette,
                                 doremi_ui::cards::Card {
                                     title: &media.title,
-                                    subtitle: if media.id.provider.as_str() == "wikimedia-commons" {
+                                    subtitle: if !self.internal_ui {
+                                        "Escuchado recientemente"
+                                    } else if media.id.provider.as_str() == "wikimedia-commons" {
                                         "Commons · CC0"
                                     } else if media.id.provider.as_str() == "youtube-music" {
                                         "YouTube Music"
@@ -174,11 +184,20 @@ impl DoremiApp {
     }
     pub(super) fn history_page(&mut self, ui: &mut egui::Ui) {
         ui.heading("Historial");
-        ui.weak("Escuchas en este dispositivo, de más reciente a más antigua. Se conservan las últimas 500.");
+        ui.weak(if self.internal_ui {
+            "Escuchas en este dispositivo, de más reciente a más antigua. Se conservan las últimas 500."
+        } else {
+            "Tu música escuchada, de más reciente a más antigua."
+        });
         let history = self.model.as_ref().unwrap().history.clone();
+        let plays: Vec<_> = history
+            .plays()
+            .iter()
+            .filter(|play| self.media_visible(&play.media))
+            .collect();
         if !self.model.as_ref().unwrap().write_history {
             ui.weak("Solo lectura: el archivo anterior se conserva.");
-        } else if !history.plays().is_empty() {
+        } else if !plays.is_empty() {
             if self.button(ui, "history-clear", "Vaciar historial", 190.0) {
                 self.model.as_mut().unwrap().history_clear_pending = true;
             }
@@ -193,16 +212,20 @@ impl DoremiApp {
                 }
             }
         }
-        if history.plays().is_empty() {
-            ui.label("Las escuchas aparecerán aquí después de 30 segundos, o la mitad de una pista corta.");
+        if plays.is_empty() {
+            ui.label(if self.internal_ui {
+                "Las escuchas aparecerán aquí después de 30 segundos, o la mitad de una pista corta."
+            } else {
+                "Tus escuchas aparecerán aquí cuando reproduzcas música."
+            });
             return;
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64);
-        doremi_ui::virtual_rows(ui, history.plays().len(), 56.0, |ui, index| {
-            let play = &history.plays()[index];
+        doremi_ui::virtual_rows(ui, plays.len(), 56.0, |ui, index| {
+            let play = plays[index];
             let when = relative_time(play.played_at_ms, now);
             ui.push_id(("history-row", index), |ui| {
                 self.rows_with_subtitle(ui, std::slice::from_ref(&play.media), Some(&when))

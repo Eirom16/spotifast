@@ -21,6 +21,9 @@ impl DoremiApp {
         let Some(current) = model.queue.current() else {
             return;
         };
+        if !self.media_visible(&current.media) {
+            return;
+        }
         let media = current.media.clone();
         let saved = model.library.contains(&media.id);
         let writable = model.write_library;
@@ -69,6 +72,7 @@ impl DoremiApp {
             return;
         }
         let source = match media.id.provider.as_str() {
+            _ if !self.internal_ui => "Tu música",
             "youtube-music" => "YouTube Music",
             "wikimedia-commons" => "Commons · CC0",
             "doremi-demo" => "Demostración · sin audio",
@@ -148,7 +152,11 @@ impl DoremiApp {
                 &palette,
                 Kind::Error,
                 "No se pudo reproducir esta selección",
-                &notice,
+                if self.internal_ui {
+                    &notice
+                } else {
+                    "Intenta reproducir de nuevo o elige otra canción."
+                },
             ),
             Playback::Loading => feedback::panel(
                 ui,
@@ -165,7 +173,7 @@ impl DoremiApp {
                 "Esta selección muestra la interfaz y no reproduce música.",
             ),
             _ => {
-                if !notice.is_empty() {
+                if self.internal_ui && !notice.is_empty() {
                     ui.add(
                         egui::Label::new(egui::RichText::new(notice).color(palette.secondary))
                             .wrap(),
@@ -187,6 +195,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/player-favorite-ui-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let media = songs()[0].clone();
         app.model
             .as_mut()
@@ -254,6 +263,7 @@ mod tests {
             .join("../../target/desktop-player-layout-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let mut media = songs()[0].clone();
         media.title = "Canción con un título muy largo para comprobar la disposición ".repeat(8);
         app.model.as_mut().unwrap().command(Command::StartContext {

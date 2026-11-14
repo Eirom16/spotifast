@@ -62,7 +62,7 @@ fn main() -> eframe::Result {
                 .join("doremi/native-dev")
         });
     let result = eframe::run_native(
-        "Doremi Native Dev",
+        "Doremi",
         eframe::NativeOptions {
             viewport: eframe::egui::ViewportBuilder::default()
                 .with_inner_size([1240.0, 800.0])

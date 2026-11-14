@@ -29,6 +29,7 @@ def main():
     env.pop('WAYLAND_DISPLAY', None)
     env.pop('WAYLAND_SOCKET', None)
     env['DOREMI_DATA_DIR'] = str(profile)
+    env['DOREMI_INTERNAL_QA'] = '1'
     log = (output / 'runtime.log').open('w')
     binary_sha256 = hashlib.sha256(args.binary.resolve().read_bytes()).hexdigest()
     script_sha256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()

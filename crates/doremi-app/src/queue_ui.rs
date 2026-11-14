@@ -7,9 +7,18 @@ impl DoremiApp {
     pub(super) fn queue_page(&mut self, ui: &mut egui::Ui) {
         let model = self.model.as_ref().unwrap();
         let palette = theme::palette(model.prefs.light, model.prefs.green);
-        let current = model.queue.current().cloned();
+        let current = model
+            .queue
+            .current()
+            .filter(|entry| self.media_visible(&entry.media))
+            .cloned();
         let caption = super::presentation::playback_caption(model);
-        let entries = model.queue.upcoming().cloned().collect::<Vec<_>>();
+        let entries = model
+            .queue
+            .upcoming()
+            .filter(|entry| self.media_visible(&entry.media))
+            .cloned()
+            .collect::<Vec<_>>();
         let manual = model
             .queue
             .manual()

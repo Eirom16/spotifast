@@ -44,6 +44,7 @@ env = os.environ.copy()
 env.pop("WAYLAND_DISPLAY", None)
 env.pop("WAYLAND_SOCKET", None)
 env["DOREMI_DATA_DIR"] = str(profile)
+env["DOREMI_INTERNAL_QA"] = "1"
 # Native chooser history/config stay in this test profile, never in the user's
 # desktop data. The test wrapper supplies a separate non-activating session bus.
 if args.local_import_only:

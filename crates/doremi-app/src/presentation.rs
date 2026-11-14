@@ -68,6 +68,10 @@ impl DoremiApp {
         }
         model.page = page;
         model.revision += 1;
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        if page == Page::Search {
+            self.ensure_product_search();
+        }
     }
     pub(super) fn can_go_back(&self) -> bool {
         self.model.as_ref().is_some_and(|model| {
@@ -210,6 +214,8 @@ impl DoremiApp {
                                 "youtube-home",
                                 if self.model.as_ref().unwrap().music.home_root() {
                                     "Actualizar inicio"
+                                } else if !self.internal_ui {
+                                    "Explorar música"
                                 } else {
                                     "Explorar YouTube Music"
                                 },
@@ -230,7 +236,8 @@ impl DoremiApp {
             self.navigate(Page::Search);
             ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("catalog-query")));
         }
-        if !ctx.egui_wants_keyboard_input()
+        if self.current_visible()
+            && !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             let model = self.model.as_mut().unwrap();
@@ -275,9 +282,7 @@ impl DoremiApp {
         }
         if wide {
             self.player_bar(ui, palette);
-        } else if self.model.as_ref().unwrap().page != Page::Player
-            && self.model.as_ref().unwrap().queue.current().is_some()
-        {
+        } else if self.model.as_ref().unwrap().page != Page::Player && self.current_visible() {
             self.mini_player(ui, palette);
         }
         if wide {
@@ -316,7 +321,16 @@ impl DoremiApp {
                     ui.separator();
                     ui.add_space(10.0);
                     ui.label(RichText::new("Tu biblioteca").font(theme::bold(15.0)));
-                    let rows = self.model.as_ref().unwrap().library.items().to_vec();
+                    let rows: Vec<_> = self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .library
+                        .items()
+                        .iter()
+                        .filter(|media| self.media_visible(media))
+                        .cloned()
+                        .collect();
                     let playlists = self.model.as_ref().unwrap().playlists.clone();
                     egui::ScrollArea::vertical()
                         .id_salt("sidebar-library")
@@ -325,6 +339,9 @@ impl DoremiApp {
                                 ui.weak("Guarda música para encontrarla aquí.");
                             }
                             for list in playlists.lists() {
+                                if !self.collection_visible(&list.entries) {
+                                    continue;
+                                }
                                 let model = self.model.as_ref().unwrap();
                                 let response = theme::nav_row(
                                     ui,
@@ -458,6 +475,12 @@ impl DoremiApp {
         });
     }
     fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
+        ui.add_enabled_ui(self.current_visible(), |ui| {
+            self.transport_controls_inner(ui, palette, touch);
+        });
+    }
+
+    fn transport_controls_inner(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
         // Explicit spacing also keeps the mobile centering calculation truthful.
         ui.spacing_mut().item_spacing.x = GAP;
         let dimensions = if touch { [24.0, TOUCH] } else { [20.0, 32.0] };
@@ -620,11 +643,20 @@ impl DoremiApp {
 
     fn now_playing(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let model = self.model.as_ref().unwrap();
-        let id = model.queue.current().map(|entry| entry.media.id.clone());
-        let caption = playback_caption(model);
+        let current = model
+            .queue
+            .current()
+            .filter(|entry| self.media_visible(&entry.media));
+        let id = current.map(|entry| entry.media.id.clone());
+        let caption = if current.is_some() {
+            playback_caption(model)
+        } else {
+            "Elige qué escuchar"
+        };
         let title = model
             .queue
             .current()
+            .filter(|entry| self.media_visible(&entry.media))
             .map(|entry| entry.media.title.as_str())
             .unwrap_or("Ninguna canción seleccionada")
             .to_owned();
@@ -836,10 +868,7 @@ impl DoremiApp {
     pub(super) fn mobile_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let width = self.page_rect[2] - self.page_rect[0];
         let height = self.page_rect[3] - self.page_rect[1];
-        if width >= 616.0
-            && width > height
-            && self.model.as_ref().unwrap().queue.current().is_some()
-        {
+        if width >= 616.0 && width > height && self.current_visible() {
             self.mobile_player_landscape(ui, palette, height);
             return;
         }
@@ -852,11 +881,19 @@ impl DoremiApp {
             self.empty_player(ui);
             return;
         };
+        if !self.media_visible(&current.media) {
+            self.empty_player(ui);
+            return;
+        }
         let title = current.media.title.clone();
         let id = current.media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = model.notice.clone();
+        let notice = if self.internal_ui {
+            model.notice.clone()
+        } else {
+            "Intenta reproducir de nuevo o elige otra canción.".into()
+        };
         ui.spacing_mut().item_spacing.y = 8.0;
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
         let art = (height * 0.28).clamp(96.0, 256.0).min(ui.available_width());
@@ -898,7 +935,11 @@ impl DoremiApp {
         let id = model.queue.current().unwrap().media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = model.notice.clone();
+        let notice = if self.internal_ui {
+            model.notice.clone()
+        } else {
+            "Intenta reproducir de nuevo o elige otra canción.".into()
+        };
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.columns(2, |columns| {
             if self.mobile_player_header(&mut columns[0], palette) {
@@ -996,6 +1037,9 @@ impl DoremiApp {
         let Some(media) = rows.get(index) else {
             return;
         };
+        if !self.media_visible(media) {
+            return;
+        }
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if media.id.provider.as_str() == "musicbrainz"
             || metadata_kind(&media.id)
@@ -1021,7 +1065,8 @@ impl DoremiApp {
         let playable: Vec<_> = rows
             .iter()
             .filter(|item| {
-                item.id.provider.as_str() != "musicbrainz"
+                self.media_visible(item)
+                    && item.id.provider.as_str() != "musicbrainz"
                     && metadata_kind(&item.id)
                         .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
             })
@@ -1031,7 +1076,8 @@ impl DoremiApp {
             let index = rows[..index]
                 .iter()
                 .filter(|item| {
-                    item.id.provider.as_str() != "musicbrainz"
+                    self.media_visible(item)
+                        && item.id.provider.as_str() != "musicbrainz"
                         && metadata_kind(&item.id)
                             .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
                 })
@@ -1050,11 +1096,24 @@ impl DoremiApp {
         rows: &[Media],
         prefix: Option<&str>,
     ) {
+        let visible: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, media)| self.media_visible(media))
+            .collect();
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        for (index, media) in rows.iter().enumerate() {
+        for (index, media) in visible {
             ui.push_id((&media.id, index), |ui| {
-                let subtitle = if media.id.provider.as_str() == "musicbrainz"
+                let subtitle = if !self.internal_ui {
+                    match metadata_kind(&media.id) {
+                        Some(doremi_core::media::EntityKind::Artist) => "Artista",
+                        Some(doremi_core::media::EntityKind::Release) => "Álbum",
+                        Some(doremi_core::media::EntityKind::Playlist) => "Playlist",
+                        _ if media.id.provider.as_str() == "local-files" => "Audio local",
+                        _ => "Canción",
+                    }
+                } else if media.id.provider.as_str() == "musicbrainz"
                     || media.id.provider.as_str() == "youtube-music"
                 {
                     match metadata_kind(&media.id) {
@@ -1294,11 +1353,11 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
             .and_then(Engine::metrics)
             .is_some_and(|metrics| metrics.buffering)
     {
-        "Buffering…"
+        "Preparando reproducción…"
     } else if model.queue.playback() == Playback::Paused {
         "En pausa"
     } else {
-        "Audio nativo"
+        "Reproduciendo"
     }
 }
 
@@ -1313,6 +1372,7 @@ mod presentation_tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mini-player-layout-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         let mut media = songs()[0].clone();
         media.title =
             "Un título muy largo que no debe invadir los controles del reproductor".repeat(4);

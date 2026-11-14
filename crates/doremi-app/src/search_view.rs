@@ -98,6 +98,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/neutral-search-ui-test");
         let ctx = egui::Context::default();
         let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         app.model.as_mut().unwrap().set_online_source(false);
         for light in [false, true] {

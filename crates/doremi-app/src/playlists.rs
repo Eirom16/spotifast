@@ -179,6 +179,9 @@ impl DoremiApp {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
         for list in snapshot.lists() {
+            if !self.collection_visible(&list.entries) {
+                continue;
+            }
             let row = theme::list_row(
                 ui,
                 &palette,
@@ -191,7 +194,7 @@ impl DoremiApp {
                     action_label: "Abrir playlist",
                 },
             );
-            if let Some(media) = list.entries.first() {
+            if let Some(media) = list.entries.iter().find(|media| self.media_visible(media)) {
                 self.media_artwork(ui, &media.id, row.cover_rect(), 4);
             }
             self.record(&format!("playlist-open:{}", list.id), &row.body);
@@ -213,6 +216,13 @@ impl DoremiApp {
             }
             return;
         };
+        if !self.collection_visible(&list.entries) {
+            ui.heading("Esta playlist no está disponible");
+            if self.button(ui, "playlist-library", "Volver a Biblioteca", 220.0) {
+                self.navigate(Page::Library);
+            }
+            return;
+        }
         let palette = theme::palette(model.prefs.light, model.prefs.green);
         if self.button(ui, "playlist-library", "Biblioteca", 140.0) {
             self.navigate(Page::Library);
@@ -231,7 +241,8 @@ impl DoremiApp {
             |ui, slot| match slot {
                 HeroSlot::Cover { rect, radius, .. } => {
                     theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic);
-                    if let Some(media) = list.entries.first() {
+                    if let Some(media) = list.entries.iter().find(|media| self.media_visible(media))
+                    {
                         self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
                     }
                 }
@@ -250,13 +261,13 @@ impl DoremiApp {
         let playable = list
             .entries
             .iter()
-            .any(|media| media.id.provider.as_str() != "musicbrainz");
+            .any(|media| self.media_visible(media) && playlist_track(media));
         ui.add_enabled_ui(playable, |ui| {
             if self.button(ui, "playlist-play", "Reproducir playlist", 220.0) {
                 let rows: Vec<_> = list
                     .entries
                     .iter()
-                    .filter(|media| media.id.provider.as_str() != "musicbrainz")
+                    .filter(|media| self.media_visible(media) && playlist_track(media))
                     .cloned()
                     .collect();
                 self.model.as_mut().unwrap().start_context(rows, 0);

@@ -32,15 +32,26 @@ impl Filter {
 impl DoremiApp {
     pub(super) fn library_content(&mut self, ui: &mut egui::Ui) {
         let model = self.model.as_ref().unwrap();
-        let library = model.library.clone();
-        let playlists = model.playlists.lists().len();
+        let library: Vec<_> = model
+            .library
+            .items()
+            .iter()
+            .filter(|media| self.media_visible(media))
+            .cloned()
+            .collect();
+        let playlists = model
+            .playlists
+            .lists()
+            .iter()
+            .filter(|list| self.collection_visible(&list.entries))
+            .count();
         let palette = theme::palette(model.prefs.light, model.prefs.green);
         ui.label(egui::RichText::new("Biblioteca").font(theme::bold(28.0)));
         ui.label(
             egui::RichText::new(format!(
                 "{} {} · {} {} en este dispositivo",
-                library.items().len(),
-                if library.items().len() == 1 {
+                library.len(),
+                if library.len() == 1 {
                     "elemento guardado"
                 } else {
                     "elementos guardados"
@@ -90,7 +101,6 @@ impl DoremiApp {
             ui.add_space(20.0);
         }
         let rows: Vec<_> = library
-            .items()
             .iter()
             .filter(|media| self.library_filter.includes(media))
             .cloned()
