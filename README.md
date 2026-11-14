@@ -28,12 +28,9 @@ Premium del baseline. La estructura nueva no elimina ese acoplamiento.
 El bridge conserva la integración manual del legado. El host independiente
 `doremi-app` usa el core para selección, duplicados, cola, modos y restauración
 pausada y almacenamiento propio. `doremi-ui` extrae componentes reales del
-legado para la presentación neutral. MusicBrainz permite buscar y explorar
-grabaciones/artistas/ediciones y guardar sus IDs; no se les asigna audio de otra
-fuente. En Buscar → Commons → Chopin puede seleccionarse una interpretación
-CC0 de Membeth: el motor nativo reproduce bloques HTTP verificados sin descargar
-la pieza completa. La selección Commons también conserva dos tonos de prueba.
-Los datos demo siguen separados y silenciosos.
+legado para la presentación neutral. La navegación normal usa YouTube Music sin
+selectores técnicos de proveedor. MusicBrainz, Commons y las muestras se conservan
+internamente para QA, sin sustituir audio ni aparecer en el catálogo de producto.
 Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
 Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
 
@@ -44,13 +41,14 @@ El mismo tratamiento se utiliza en escritorio y en el reproductor móvil.
 Inicio agrupa la bienvenida y las acciones de búsqueda en una cabecera adaptable:
 los botones se colocan en una fila cuando caben y se apilan en pantallas estrechas.
 
-Buscar distingue visualmente la fuente y categoría activas, muestra estados reales
+Buscar ofrece filtros de Canciones, Artistas, Álbumes y Playlists, muestra estados reales
 de carga/error y presenta álbumes y artistas en tarjetas adaptables. Biblioteca
 permite filtrar canciones, álbumes, artistas y playlists sin cambiar los favoritos
 ni la cola. Las cabeceras de colección apilan carátula y texto en pantallas estrechas;
 las playlists reutilizan la carátula disponible de su primera canción.
-Demo y Commons usan los mismos paneles de información, carga, error y búsqueda vacía;
-una consulta vacía invita a buscar, no se presenta como un resultado fallido.
+Una consulta vacía invita a buscar. La cancelación aparece discretamente en el
+campo solo durante una operación activa. Los perfiles internos de QA conservan
+las herramientas y pruebas anteriores sin exponerlas en la navegación normal.
 
 El reproductor de escritorio muestra la carátula disponible y permite guardar la
 canción o abrir la cola sin duplicar los controles de transporte de la barra inferior.
@@ -68,12 +66,19 @@ actualizaciones como actualizaciones de Doremi.** El roadmap conserva los gates 
 ## Desarrollo
 
 Consulta [CONTRIBUTING.md](CONTRIBUTING.md) para dependencias y checks.
+En este equipo las compilaciones, tests Rust y APK se ejecutan en GitHub Actions;
+la validación local utiliza únicamente sus artefactos ya compilados.
+
+Las herramientas internas del host de escritorio requieren activar explícitamente
+`DOREMI_INTERNAL_QA=1` junto con un `DOREMI_DATA_DIR` aislado. Un perfil personalizado
+por sí solo no activa controles de QA. En Android solo los perfiles `qa/<nombre>`
+de una compilación de depuración muestran esas herramientas. No es un ajuste del producto.
 
 ```sh
-python3 scripts/check-local.py
-cargo test --locked -p doremi-core
-# Baseline visual con datos de prueba, no reproducción yt-dlp:
-cargo run --locked -p spotifast --features demo -- --demo
+gh run list --repo Eirom16/spotifast --workflow ci.yml --limit 5
+# Con RUN_ID y COMMIT correspondientes a la misma versión:
+gh run download "$RUN_ID" --repo Eirom16/spotifast \
+  --name "doremi-native-linux-$COMMIT" --dir target/ci-artifacts
 ```
 
 GitHub Actions es el entorno principal para compilar el cliente completo.

@@ -416,6 +416,14 @@ jobs:
         run: |
           chmod +x target/native-binary/doremi target/native-binary/doremi-app
           xvfb-run -a -s "-screen 0 1440x1000x24" python3 scripts/native-qa.py target/native-binary/doremi target/ci-reports/native-visual
+      - name: Verify the normal product UI without development controls
+        run: |
+          for geometry in "384 760" "682 360" "1100 800"; do
+            set -- $geometry
+            python3 scripts/ci-report.py run "product-ui-$1x$2" -- \
+              xvfb-run -a -s "-screen 0 1440x1000x24" python3 scripts/product-ui-qa.py \
+              target/native-binary/doremi "target/ci-reports/product-ui-$1x$2" --size "$1" "$2"
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: doremi-native-linux-${{ github.sha }}
