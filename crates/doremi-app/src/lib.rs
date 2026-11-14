@@ -30,6 +30,7 @@ mod playlists;
 mod presentation;
 mod queue_ui;
 mod saved;
+mod search_view;
 #[cfg(not(target_os = "android"))]
 mod wav_probe;
 use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
@@ -1228,31 +1229,7 @@ impl DoremiApp {
                     self.music_results(ui);
                     return;
                 }
-                let online = self.model.as_ref().unwrap().online_search_selected();
-                let results = self.model.as_ref().unwrap().catalog.results().to_vec();
-                if let Some((error, message)) = self.model.as_ref().unwrap().search_feedback() {
-                    if error {
-                        ui.colored_label(ui.visuals().error_fg_color, message);
-                    } else {
-                        ui.label(message);
-                    }
-                } else {
-                    ui.label(format!(
-                        "{} {} {}",
-                        results.len(),
-                        if results.len() == 1 {
-                            "resultado"
-                        } else {
-                            "resultados"
-                        },
-                        if online {
-                            "CC0 de Commons"
-                        } else {
-                            "de demostración"
-                        }
-                    ));
-                }
-                self.rows(ui, &results);
+                self.neutral_search_results(ui);
             }
             Page::Library => {
                 self.library_content(ui);

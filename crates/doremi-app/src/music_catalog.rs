@@ -739,25 +739,7 @@ impl DoremiApp {
                 &palette,
                 Kind::Error,
                 "No se pudo cargar la música",
-                match error {
-                    ProviderError::RateLimited { .. } => {
-                        "El servicio está ocupado o ha limitado las consultas. Espera antes de reintentar."
-                    }
-                    ProviderError::Timeout => {
-                        "La consulta tardó demasiado. Puedes volver a intentarlo."
-                    }
-                    ProviderError::AccessDenied => {
-                        "El proveedor rechazó la consulta. No se utilizará otro método de acceso."
-                    }
-                    ProviderError::Unavailable => "El catálogo no está disponible en este momento.",
-                    ProviderError::Cancelled => "Consulta cancelada.",
-                    ProviderError::Transport => {
-                        "No se pudo conectar con el catálogo. Revisa la conexión y vuelve a intentarlo."
-                    }
-                    _ => {
-                        "La respuesta del catálogo no pudo utilizarse. Vuelve a intentarlo más tarde."
-                    }
-                },
+                crate::search_view::provider_error_message(error),
             );
             if error != ProviderError::AccessDenied {
                 let response = ui.add_enabled(retry, egui::Button::new("Reintentar"));

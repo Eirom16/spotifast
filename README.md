@@ -49,6 +49,8 @@ de carga/error y presenta álbumes y artistas en tarjetas adaptables. Biblioteca
 permite filtrar canciones, álbumes, artistas y playlists sin cambiar los favoritos
 ni la cola. Las cabeceras de colección apilan carátula y texto en pantallas estrechas;
 las playlists reutilizan la carátula disponible de su primera canción.
+Demo y Commons usan los mismos paneles de información, carga, error y búsqueda vacía;
+una consulta vacía invita a buscar, no se presenta como un resultado fallido.
 
 El reproductor de escritorio muestra la carátula disponible y permite guardar la
 canción o abrir la cola sin duplicar los controles de transporte de la barra inferior.
