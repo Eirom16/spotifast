@@ -8,6 +8,8 @@ pub mod browser;
 pub mod credentials;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 pub mod embedded;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod extractor;
 pub mod parser;
 mod player_config;
 mod player_program;

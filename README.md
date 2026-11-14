@@ -32,7 +32,12 @@ legado para la presentación neutral. La navegación normal usa YouTube Music si
 selectores técnicos de proveedor. MusicBrainz, Commons y las muestras se conservan
 internamente para QA, sin sustituir audio ni aparecer en el catálogo de producto.
 Estado, plataformas y límites: [DOREMI-PRODUCT-REPORT.md](DOREMI-PRODUCT-REPORT.md).
-Rust nativo y yt-dlp siguen en evaluación para resolución musical admisible.
+La reproducción YouTube Music de escritorio usa yt-dlp como extractor y
+conserva el catálogo y el reproductor nativo Rust. Requiere Python, yt-dlp con
+EJS y Deno instalados por separado; requisitos y prueba con el binario de CI en
+[`crates/doremi-youtube/README.md`](crates/doremi-youtube/README.md).
+Android todavía no incluye este extractor: su verificación funcional sigue
+pendiente.
 
 Los controles de aleatorio y repetición del reproductor muestran el estado real
 de la cola con el acento del tema y un fondo de selección. Repetir una canción
