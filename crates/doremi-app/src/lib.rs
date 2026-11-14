@@ -48,6 +48,8 @@ pub use wav_probe::run as wav_audio_probe;
 static NEXT_INSTANCE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 const TOUCH: f32 = 48.0;
 const GAP: f32 = 8.0;
+/// Includes the floating card's outer breathing room, not just its touch row.
+const MINI_PLAYER_HEIGHT: f32 = 88.0;
 
 // A pointer gesture belongs to one occurrence. Reusing the widget's auto ID
 // after EOF would apply a still-held seek to the following song as well.
@@ -2007,7 +2009,9 @@ mod tests {
                 app.model.as_mut().unwrap().command(Command::Pause);
                 render(&mut app, &ctx, size, scale);
                 assert!(
-                    (empty_height - (app.page_rect[3] - app.page_rect[1]) - 72.0).abs() < 1.0,
+                    (empty_height - (app.page_rect[3] - app.page_rect[1]) - MINI_PLAYER_HEIGHT)
+                        .abs()
+                        < 1.0,
                     "Mini-player reserves the wrong height"
                 );
                 for name in ["player", "play", "next"] {

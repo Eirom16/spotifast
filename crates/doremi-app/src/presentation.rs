@@ -689,12 +689,15 @@ impl DoremiApp {
 
     fn mini_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         egui::Panel::bottom("mobile-mini-player")
-            .exact_size(72.0)
+            .exact_size(MINI_PLAYER_HEIGHT)
             .resizable(false)
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(palette.panel)
+                    .fill(palette.surface)
+                    .stroke(egui::Stroke::new(1.0, palette.outline))
+                    .corner_radius(12)
+                    .outer_margin(Margin::same(8))
                     .inner_margin(Margin::symmetric(12, 6)),
             )
             .show(ui, |ui| {
@@ -717,15 +720,23 @@ impl DoremiApp {
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
                         true,
-                        format!("Abrir reproductor: {}", media.title),
+                        format!("Abrir reproductor: {} · {caption}", media.title),
                     )
                 });
+                let hover = ui.ctx().animate_bool(
+                    response.id.with("hover"),
+                    response.hovered() || response.has_focus(),
+                );
+                if hover > 0.0 {
+                    ui.painter()
+                        .rect_filled(body, 6, palette.surface_hover.gamma_multiply(hover));
+                }
                 let cover = egui::Rect::from_center_size(
                     egui::pos2(body.left() + 20.0, body.center().y),
                     Vec2::splat(40.0),
                 );
-                theme::cover_placeholder(ui, palette, cover, 4.0, Icon::Music);
-                self.media_artwork(ui, &media.id, cover, 4);
+                theme::cover_placeholder(ui, palette, cover, 6.0, Icon::Music);
+                self.media_artwork(ui, &media.id, cover, 6);
                 let text = egui::Rect::from_min_max(
                     egui::pos2(cover.right() + 12.0, body.top() + 5.0),
                     egui::pos2(body.right() - 4.0, body.bottom()),
@@ -784,10 +795,11 @@ impl DoremiApp {
                 ) {
                     self.model.as_mut().unwrap().command(Command::Next);
                 }
-                let (track, _) = ui.allocate_exact_size(
+                let (track, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width(), 2.0),
                     egui::Sense::hover(),
                 );
+                self.record("mini-progress", &response);
                 ui.painter().rect_filled(track, 1.0, palette.outline);
                 if let Some(duration) = media.duration_ms.filter(|duration| *duration > 0) {
                     let progress = egui::Rect::from_min_size(
@@ -1289,6 +1301,86 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn floating_mini_player_keeps_independent_touch_targets_and_progress_at_multiple_scales() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mini-player-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let mut media = songs()[0].clone();
+        media.title =
+            "Un título muy largo que no debe invadir los controles del reproductor".repeat(4);
+        app.model.as_mut().unwrap().command(Command::StartContext {
+            media: vec![media],
+            start: 0,
+            order: Order::Sequential,
+        });
+        app.navigate(Page::Library);
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for scale in [1.0, 1.5, 2.0] {
+                for size in [
+                    [320.0, 640.0],
+                    [384.0, 760.0],
+                    [440.0, 800.0],
+                    [682.0, 336.0],
+                ] {
+                    for _ in 0..3 {
+                        let mut input = egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                size.into(),
+                            )),
+                            ..Default::default()
+                        };
+                        input
+                            .viewports
+                            .get_mut(&egui::ViewportId::ROOT)
+                            .unwrap()
+                            .native_pixels_per_point = Some(scale);
+                        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+                        output.textures_delta.clear();
+                    }
+                    let find = |name: &str| {
+                        app.controls
+                            .iter()
+                            .find(|control| control.name == name)
+                            .unwrap()
+                            .rect
+                    };
+                    let body = find("player");
+                    let play = app
+                        .controls
+                        .iter()
+                        .find(|control| matches!(control.name.as_str(), "play" | "pause"))
+                        .unwrap()
+                        .rect;
+                    let next = find("next");
+                    let progress = find("mini-progress");
+                    for rect in [body, play, next, progress] {
+                        assert!(
+                            rect[0] >= 0.0
+                                && rect[2] <= size[0]
+                                && rect[1] >= 0.0
+                                && rect[3] <= size[1],
+                            "{size:?} at {scale}: {rect:?}"
+                        );
+                    }
+                    for rect in [body, play, next] {
+                        assert!(rect[3] - rect[1] >= TOUCH);
+                    }
+                    assert!((play[0] - body[2] - GAP).abs() < 0.1);
+                    assert!((next[0] - play[2] - GAP).abs() < 0.1);
+                    assert!(progress[1] > body[3] && progress[3] < find("home")[1]);
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn home_actions_wrap_inside_narrow_and_desktop_headers() {

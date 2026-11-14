@@ -53,6 +53,8 @@ las playlists reutilizan la carátula disponible de su primera canción.
 El reproductor de escritorio muestra la carátula disponible y permite guardar la
 canción o abrir la cola sin duplicar los controles de transporte de la barra inferior.
 La carátula y el título de esa barra también permiten abrir el reproductor.
+En pantallas estrechas, el mini-player usa una tarjeta flotante con progreso real,
+controles táctiles independientes y un resaltado discreto al pasar el puntero o enfocar.
 
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
