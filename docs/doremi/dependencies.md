@@ -160,7 +160,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-musicbrainz/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-youtube: dependencies` | `getrandom` | `0.3` |
-| `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json', 'blocking']; version=0.12` |
+| `crates/doremi-youtube: dependencies` | `reqwest` | `default-features=False; features=['json', 'blocking', 'gzip']; version=0.12` |
 | `crates/doremi-youtube: dependencies` | `rquickjs` | `default-features=False; features=['std']; version==0.14.0` |
 | `crates/doremi-youtube: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-youtube: dependencies` | `serde_json` | `1` |

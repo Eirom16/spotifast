@@ -37,12 +37,19 @@ impl Client {
 async fn load(http: &Http, origin: &str) -> Result<(u32, Arc<str>), Error> {
     // Only the eight hex digits are taken from the public response. Neither a
     // returned URL nor a redirect can select a host, path or query for this GET.
-    let iframe = resource(http, &format!("{origin}/iframe_api"), IFRAME_LIMIT).await?;
+    let iframe = resource(
+        http,
+        &format!("{origin}/iframe_api"),
+        IFRAME_LIMIT,
+        Duration::from_secs(15),
+    )
+    .await?;
     let version = player_version(&iframe).ok_or(Error::InvalidResponse)?;
     let script = resource(
         http,
         &format!("{origin}/s/player/{version}/player_ias.vflset/en_US/base.js"),
         crate::MAX_BYTES,
+        Duration::from_secs(60),
     )
     .await?;
     Ok((
@@ -51,9 +58,19 @@ async fn load(http: &Http, origin: &str) -> Result<(u32, Arc<str>), Error> {
     ))
 }
 
-async fn resource(http: &Http, url: &str, limit: usize) -> Result<String, Error> {
+async fn resource(
+    http: &Http,
+    url: &str,
+    limit: usize,
+    timeout: Duration,
+) -> Result<String, Error> {
     // Deliberately use the public HTTP client directly, never authenticate().
-    let mut response = http.get(url).send().await.map_err(crate::network_error)?;
+    let mut response = http
+        .get(url)
+        .timeout(timeout)
+        .send()
+        .await
+        .map_err(crate::network_error)?;
     match response.status().as_u16() {
         200 => {}
         401 | 403 => return Err(Error::AccessDenied),
@@ -187,6 +204,7 @@ mod tests {
         assert!(requests[1].starts_with("GET /s/player/a5c2aafe/player_ias.vflset/en_US/base.js "));
         for request in requests {
             let headers = request.to_ascii_lowercase();
+            assert!(headers.contains("accept-encoding:") && headers.contains("gzip"));
             assert!(!headers.contains("cookie:") && !headers.contains("authorization:"));
             assert!(!headers.contains("fixture-only") && !headers.contains("untrusted.invalid"));
         }

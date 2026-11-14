@@ -167,13 +167,11 @@ impl Model {
                     media: id.clone(),
                     position,
                     deadline: Instant::now()
-                        + Duration::from_secs(
-                            if id.provider.as_str() == doremi_youtube::PROVIDER {
-                                20
-                            } else {
-                                12
-                            },
-                        ),
+                        + if id.provider.as_str() == doremi_youtube::PROVIDER {
+                            doremi_youtube::stream::RESOLVE_TIMEOUT
+                        } else {
+                            Duration::from_secs(12)
+                        },
                     sent: false,
                 });
                 self.notice = if id.provider.as_str() == doremi_youtube::PROVIDER {
@@ -468,6 +466,27 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cold_youtube_resolution_keeps_its_budget_and_can_still_be_cancelled() {
+        let mut model = Model::new(Preferences::default());
+        let before = Instant::now();
+        model.start_context(
+            vec![Media {
+                id: doremi_youtube::id("abcdefghijk").unwrap(),
+                title: "Synthetic selection".into(),
+                duration_ms: Some(180000),
+            }],
+            0,
+        );
+        let load = model.online.load.as_ref().unwrap();
+        let budget = doremi_youtube::stream::RESOLVE_TIMEOUT;
+        assert!(load.deadline >= before + budget);
+        assert!(load.deadline <= Instant::now() + budget);
+        let generation = load.generation;
+        model.cancel_online_load(None);
+        assert!(model.online.load.is_none());
+        assert!(!model.online.worker.as_ref().unwrap().current(1, generation));
+    }
     #[test]
     fn suspension_preserves_completed_results_without_starting_a_worker() {
         let mut model = Model::new(Preferences::default());
