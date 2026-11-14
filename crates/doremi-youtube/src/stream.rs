@@ -13,6 +13,9 @@ use std::{
 const PLAYER: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 const CHUNK: usize = 64 * 1024;
+/// Cold public-player download plus account/player requests and bounded JS work.
+/// Hosts must still cancel the future immediately on a superseding user intent.
+pub const RESOLVE_TIMEOUT: Duration = Duration::from_secs(120);
 fn playback_nonce() -> Result<String, Error> {
     const ALPHABET: &[u8; 64] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_";
     let mut bytes = [0; 16];
@@ -389,7 +392,7 @@ impl Reader {
             .header("Accept-Encoding", "identity")
             .send()
             .map_err(|_| {
-                range_event(0, "transport", 0);
+                range_event(0, "transport", 0, start);
                 io::Error::other("YouTube audio transport failed")
             })?;
         self.check()?;
@@ -397,11 +400,11 @@ impl Reader {
         match response.status().as_u16() {
             200 | 206 => {}
             401 | 403 => {
-                range_event(status, "refused", 0);
+                range_event(status, "refused", 0, start);
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
             _ => {
-                range_event(status, "range_status", 0);
+                range_event(status, "range_status", 0, start);
                 return Err(io::Error::other("YouTube audio range unavailable"));
             }
         }
@@ -413,7 +416,7 @@ impl Reader {
         if content_range.is_some_and(|value| value.to_str().ok() != Some(expected.as_str()))
             || (status == 206 && content_range.is_none())
         {
-            range_event(status, "content_range", 0);
+            range_event(status, "content_range", 0, start);
             return Err(io::Error::other("YouTube audio range changed"));
         }
         let size = (end - start + 1) as usize;
@@ -428,7 +431,7 @@ impl Reader {
                 self.check()?;
                 let limit = block.len().min(size + 1 - self.bytes.len());
                 let read = response.read(&mut block[..limit]).map_err(|_| {
-                    range_event(status, "read", self.bytes.len());
+                    range_event(status, "read", self.bytes.len(), start);
                     io::Error::other("YouTube audio read failed")
                 })?;
                 self.check()?;
@@ -446,7 +449,7 @@ impl Reader {
             return Err(error);
         }
         if self.bytes.len() != size {
-            range_event(status, "truncated", self.bytes.len());
+            range_event(status, "truncated", self.bytes.len(), start);
             self.bytes.clear();
             return Err(io::ErrorKind::ConnectionReset.into());
         }
@@ -459,19 +462,20 @@ impl Reader {
                     "other_container"
                 },
                 self.bytes.len(),
+                start,
             );
         }
         self.cached_at = start;
         Ok(())
     }
 }
-fn range_event(http: u16, stage: &'static str, bytes: usize) {
+fn range_event(http: u16, stage: &'static str, bytes: usize, offset: u64) {
     // Fixed categories and counts only. Never inspect/log URL query, response
     // headers, body text, player identifiers or credentials.
     #[cfg(target_os = "android")]
-    log::info!("YTM range http={http} stage={stage} bytes={bytes}");
+    log::info!("YTM range http={http} stage={stage} bytes={bytes} offset={offset}");
     #[cfg(not(target_os = "android"))]
-    eprintln!("YTM range http={http} stage={stage} bytes={bytes}");
+    eprintln!("YTM range http={http} stage={stage} bytes={bytes} offset={offset}");
 }
 impl Read for Reader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {

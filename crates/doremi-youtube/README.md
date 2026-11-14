@@ -8,10 +8,15 @@ los solicitados ni convierte una denegación en un reintento con otro cliente.
 La caché conserva como máximo un bloque más un byte para detectar desbordes.
 Un bloque incompleto o cancelado no se publica en la caché.
 
-`YTM range` solo muestra estado HTTP, categoría fija y número de bytes.
+`YTM range` solo muestra estado HTTP, categoría fija, número de bytes y offset.
 `stage=read` identifica un fallo leyendo HTTP, no un rechazo del códec.
 `stage=mp4` identifica la cabecera del primer bloque, no prueba que se haya
 decodificado ni reproducido audio.
+
+El script público del reproductor negocia gzip y tiene un plazo de 60 s.
+La resolución en frío dispone de 120 s en el host, incluida la verificación
+de cuenta y del player. Cancelar o cambiar de pista sigue retirando el future
+sin esperar ese plazo. No se amplían permisos ni se reintentan denegaciones.
 
 ## Prueba explícita con audio nativo
 
