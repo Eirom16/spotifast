@@ -814,6 +814,25 @@ impl DoremiApp {
             });
     }
 
+    fn mobile_player_header(&mut self, ui: &mut egui::Ui, palette: &Palette) -> bool {
+        let mut back = false;
+        ui.horizontal(|ui| {
+            back = self.can_go_back()
+                && self.icon_control(
+                    ui,
+                    palette,
+                    "player-back",
+                    Icon::ChevronDown,
+                    "Volver",
+                    true,
+                );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.player_favorite(ui, palette);
+            });
+        });
+        back
+    }
+
     pub(super) fn mobile_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let width = self.page_rect[2] - self.page_rect[0];
         let height = self.page_rect[3] - self.page_rect[1];
@@ -824,16 +843,7 @@ impl DoremiApp {
             self.mobile_player_landscape(ui, palette, height);
             return;
         }
-        if self.can_go_back()
-            && self.icon_control(
-                ui,
-                palette,
-                "player-back",
-                Icon::ChevronDown,
-                "Volver",
-                true,
-            )
-        {
+        if self.mobile_player_header(ui, palette) {
             self.go_back();
             return;
         }
@@ -891,15 +901,9 @@ impl DoremiApp {
         let notice = model.notice.clone();
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.columns(2, |columns| {
-            if self.icon_control(
-                &mut columns[0],
-                palette,
-                "player-back",
-                Icon::ChevronDown,
-                "Volver",
-                true,
-            ) {
+            if self.mobile_player_header(&mut columns[0], palette) {
                 self.go_back();
+                return;
             }
             columns[0].vertical_centered(|ui| {
                 #[cfg(any(target_os = "android", test))]

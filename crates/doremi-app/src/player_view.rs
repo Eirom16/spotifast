@@ -1,4 +1,4 @@
-//! Full desktop player. The persistent bar remains the single transport surface.
+//! Player presentation and favorite actions shared by the native hosts.
 use super::*;
 use doremi_ui::{
     self as theme, Icon,
@@ -7,6 +7,51 @@ use doremi_ui::{
 };
 
 impl DoremiApp {
+    fn toggle_player_saved(&mut self, media: &Media) {
+        let model = self.model.as_mut().unwrap();
+        if model.library.contains(&media.id) {
+            model.remove_saved(&media.id);
+        } else {
+            model.save_media(media.clone());
+        }
+    }
+
+    pub(super) fn player_favorite(&mut self, ui: &mut egui::Ui, palette: &theme::Palette) {
+        let model = self.model.as_ref().unwrap();
+        let Some(current) = model.queue.current() else {
+            return;
+        };
+        let media = current.media.clone();
+        let saved = model.library.contains(&media.id);
+        let writable = model.write_library;
+        let response = ui
+            .add_enabled_ui(writable, |ui| {
+                theme::icon_toggle(
+                    ui,
+                    palette,
+                    if saved {
+                        Icon::HeartFilled
+                    } else {
+                        Icon::Heart
+                    },
+                    [22.0, TOUCH],
+                    saved,
+                    if !writable {
+                        "Biblioteca de solo lectura"
+                    } else if saved {
+                        "Quitar de biblioteca"
+                    } else {
+                        "Guardar canción"
+                    },
+                )
+            })
+            .inner;
+        self.record("player-save", &response);
+        if response.clicked() {
+            self.toggle_player_saved(&media);
+        }
+    }
+
     pub(super) fn desktop_player(&mut self, ui: &mut egui::Ui) {
         let model = self.model.as_ref().unwrap();
         let Some(current) = model.queue.current() else {
@@ -73,23 +118,24 @@ impl DoremiApp {
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(GAP);
             let saved = self.model.as_ref().unwrap().library.contains(&media.id);
-            if self.choice_button(
-                ui,
-                "player-save",
-                if saved {
-                    "Quitar de biblioteca"
-                } else {
-                    "Guardar canción"
-                },
-                200.0,
-                saved,
-            ) {
-                let model = self.model.as_mut().unwrap();
-                if saved {
-                    model.remove_saved(&media.id);
-                } else {
-                    model.save_media(media.clone());
-                }
+            let writable = self.model.as_ref().unwrap().write_library;
+            if ui
+                .add_enabled_ui(writable, |ui| {
+                    self.choice_button(
+                        ui,
+                        "player-save",
+                        if saved {
+                            "Quitar de biblioteca"
+                        } else {
+                            "Guardar canción"
+                        },
+                        200.0,
+                        saved,
+                    )
+                })
+                .inner
+            {
+                self.toggle_player_saved(&media);
             }
             if self.choice_button(ui, "player-queue", "Ver cola", 140.0, false) {
                 self.navigate(Page::Queue);
@@ -133,6 +179,73 @@ impl DoremiApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn player_favorite_toggles_saved_media_without_touching_queue_and_respects_read_only() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/player-favorite-ui-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let media = songs()[0].clone();
+        app.model
+            .as_mut()
+            .unwrap()
+            .start_context(vec![media.clone()], 0);
+        let occurrence = app.model.as_ref().unwrap().queue.current().unwrap().id;
+        let palette = theme::Palette::dark();
+        let render = |app: &mut DoremiApp, events| {
+            app.controls.clear();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.player_favorite(ui, &palette),
+            );
+            output.textures_delta.clear();
+            let rect = app
+                .controls
+                .iter()
+                .find(|control| control.name == "player-save")
+                .unwrap()
+                .rect;
+            egui::pos2((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0)
+        };
+        for (writable, expected) in [(true, true), (true, false), (false, false)] {
+            app.model.as_mut().unwrap().write_library = writable;
+            let pointer = render(&mut app, vec![]);
+            for pressed in [true, false] {
+                render(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pointer),
+                        egui::Event::PointerButton {
+                            pos: pointer,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                app.model.as_ref().unwrap().library.contains(&media.id),
+                expected
+            );
+            assert_eq!(
+                app.model.as_ref().unwrap().queue.current().unwrap().id,
+                occurrence
+            );
+            assert_eq!(
+                app.model.as_ref().unwrap().queue.playback(),
+                Playback::Playing
+            );
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn desktop_player_uses_real_media_and_one_centered_transport_in_both_themes() {

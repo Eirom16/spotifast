@@ -73,7 +73,13 @@ def main():
                     tap('player');data=state()
                 if not any(c['name']==name for c in data['controls']) and name.startswith(('add:','forget:','save-again:')):
                     tap('row-more:'+name.split(':',1)[1]);data=state()
-                control=next(c for c in data['controls'] if c['name']==name)
+                control=next((c for c in data['controls'] if c['name']==name),None)
+                if control is None:
+                    # Navigation and the writer's diagnostic snapshot can land
+                    # in adjacent frames. Stay within this attempt bound and
+                    # never inject input using a previous page's geometry.
+                    time.sleep(.1)
+                    continue
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
                 is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:','up:','down:','remove:'))
@@ -91,7 +97,7 @@ def main():
                     return
                 xdo('mousemove','--window',window,round((left+right)*scale/2),round((top+bottom)*scale/2),'click',4 if y1<top else 5)
                 time.sleep(.15)
-            raise AssertionError(f'Control did not scroll into the page: {name}')
+            raise AssertionError(f'Control unavailable or did not scroll into the page: {name}')
         def capture(name):
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
@@ -289,10 +295,10 @@ def main():
         tap('clear');wait(lambda s:not s['manual'])
         assert state()['current_occurrence']==current and state()['context_occurrences']==context
         tap('queue-current');wait(lambda s:s['page']=='Player');capture('player')
+        selected=state()['current'];was_saved=selected in state()['library']
+        tap('player-save');wait(lambda s:(selected in s['library'])!=was_saved)
+        tap('player-save');wait(lambda s:(selected in s['library'])==was_saved)
         if state()['viewport'][0]>=760:
-            selected=state()['current'];was_saved=selected in state()['library']
-            tap('player-save');wait(lambda s:(selected in s['library'])!=was_saved)
-            tap('player-save');wait(lambda s:(selected in s['library'])==was_saved)
             tap('player-queue');wait(lambda s:s['page']=='Queue')
             tap('queue-current');wait(lambda s:s['page']=='Player')
             tap('player-back');wait(lambda s:s['page']=='Queue')
