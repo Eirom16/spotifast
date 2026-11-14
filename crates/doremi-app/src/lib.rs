@@ -998,17 +998,50 @@ impl DoremiApp {
 
     pub(crate) fn search_field(&mut self, ui: &mut egui::Ui) {
         let online = self.model.as_ref().unwrap().online_search_selected();
-        let response = ui.add_sized(
-            [ui.available_width(), TOUCH],
-            egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
-                .id(egui::Id::new("catalog-query"))
-                .hint_text(if online {
-                    "Busca música CC0, por ejemplo Chopin"
-                } else {
-                    "Busca música por nombre o artista"
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = doremi_ui::palette(prefs.light, prefs.green);
+        let field = egui::Frame::new()
+            .fill(palette.surface)
+            .stroke(egui::Stroke::new(1.0, palette.outline))
+            .corner_radius(12)
+            .inner_margin(egui::Margin::symmetric(12, 0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::Vec2::new(20.0, TOUCH), egui::Sense::hover());
+                    doremi_ui::paint_icon(
+                        ui,
+                        doremi_ui::Icon::Search,
+                        rect,
+                        20.0,
+                        palette.secondary,
+                    );
+                    ui.add_sized(
+                        [ui.available_width(), TOUCH],
+                        egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().query)
+                            .id(egui::Id::new("catalog-query"))
+                            .frame(egui::Frame::NONE)
+                            .vertical_align(egui::Align::Center)
+                            .hint_text(if online {
+                                "Busca música CC0, por ejemplo Chopin"
+                            } else {
+                                "Busca música por nombre o artista"
+                            })
+                            .char_limit(128),
+                    )
                 })
-                .char_limit(128),
-        );
+                .inner
+            });
+        let response = field.inner;
+        if response.has_focus() {
+            ui.painter().rect_stroke(
+                field.response.rect,
+                12,
+                egui::Stroke::new(1.5, palette.accent),
+                egui::StrokeKind::Inside,
+            );
+        }
         self.controls.push(Control {
             name: "query".into(),
             rect: [
@@ -1081,11 +1114,16 @@ impl DoremiApp {
                     let width = ((ui.available_width() - 3.0 * GAP) / 4.0)
                         .floor()
                         .max(TOUCH);
+                    let model = self.model.as_ref().unwrap();
+                    let youtube = model.music.selected && model.music.youtube;
+                    let musicbrainz = model.music.selected && !model.music.youtube;
+                    let commons = !model.music.selected && model.online.selected;
+                    let demo = !model.music.selected && !model.online.selected;
                     ui.horizontal_wrapped(|ui| {
                         if ui.ctx().content_rect().width() < 760.0 {
                             ui.spacing_mut().button_padding.x = 4.0;
                         }
-                        if self.button(
+                        if self.choice_button(
                             ui,
                             "source-youtube",
                             if ui.ctx().content_rect().width() < 760.0 {
@@ -1094,6 +1132,7 @@ impl DoremiApp {
                                 "YouTube Music"
                             },
                             width,
+                            youtube,
                         ) {
                             let model = self.model.as_mut().unwrap();
                             model.cancel_search();
@@ -1103,7 +1142,7 @@ impl DoremiApp {
                             model.search();
                             model.revision += 1;
                         }
-                        if self.button(
+                        if self.choice_button(
                             ui,
                             "source-musicbrainz",
                             if ui.ctx().content_rect().width() < 760.0 {
@@ -1112,6 +1151,7 @@ impl DoremiApp {
                                 "MusicBrainz"
                             },
                             width,
+                            musicbrainz,
                         ) {
                             let model = self.model.as_mut().unwrap();
                             model.cancel_search();
@@ -1124,10 +1164,10 @@ impl DoremiApp {
                             model.search();
                             model.revision += 1;
                         }
-                        if self.button(ui, "source-commons", "Commons", width) {
+                        if self.choice_button(ui, "source-commons", "Commons", width, commons) {
                             self.model.as_mut().unwrap().set_online_source(true);
                         }
-                        if self.button(ui, "source-demo", "Demo", width) {
+                        if self.choice_button(ui, "source-demo", "Demo", width, demo) {
                             self.model.as_mut().unwrap().set_online_source(false);
                         }
                     });
@@ -1156,12 +1196,13 @@ impl DoremiApp {
                                 {
                                     continue;
                                 }
-                                let response = ui.selectable_label(
-                                    self.model.as_ref().unwrap().music.kind == kind,
+                                if self.choice_button(
+                                    ui,
+                                    &format!("catalog-kind:{kind:?}"),
                                     label,
-                                );
-                                self.record(&format!("catalog-kind:{kind:?}"), &response);
-                                if response.clicked() {
+                                    0.0,
+                                    self.model.as_ref().unwrap().music.kind == kind,
+                                ) {
                                     let model = self.model.as_mut().unwrap();
                                     model.music.kind = kind;
                                     model.search();

@@ -113,6 +113,44 @@ impl DoremiApp {
         }
     }
 
+    pub(super) fn choice_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        name: &str,
+        label: &str,
+        width: f32,
+        selected: bool,
+    ) -> bool {
+        let height = if ui.ctx().content_rect().width() < 760.0 {
+            TOUCH
+        } else {
+            36.0
+        };
+        // Measure intrinsic labels before a wrapping layout allocates their cell.
+        let width = if width > 0.0 {
+            width
+        } else {
+            ui.painter()
+                .layout_no_wrap(
+                    label.to_owned(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+                + 2.0 * ui.spacing().button_padding.x
+        };
+        let response = ui.add_sized(
+            [width.max(TOUCH), height],
+            egui::Button::new(label)
+                .selected(selected)
+                .corner_radius(18)
+                .wrap(),
+        );
+        self.record(name, &response);
+        response.clicked()
+    }
+
     pub(super) fn home_header(&mut self, ui: &mut egui::Ui) {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);

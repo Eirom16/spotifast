@@ -704,6 +704,9 @@ impl Model {
 
 impl DoremiApp {
     pub(super) fn music_results(&mut self, ui: &mut egui::Ui) {
+        use doremi_ui::feedback::{self, Kind};
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = doremi_ui::palette(prefs.light, prefs.green);
         let detail = self.model.as_ref().unwrap().music.detail.clone();
         let page = self.model.as_ref().unwrap().music.page.clone();
         if self.model.as_ref().unwrap().music.has_back()
@@ -717,24 +720,45 @@ impl DoremiApp {
         }
         let state = &self.model.as_ref().unwrap().music;
         if state.waiting {
-            ui.spinner();
-            ui.label(if state.youtube {
-                "Consultando YouTube Music…"
-            } else {
-                "Consultando MusicBrainz…"
-            });
+            feedback::panel(
+                ui,
+                &palette,
+                Kind::Loading,
+                if state.youtube {
+                    "Consultando YouTube Music…"
+                } else {
+                    "Consultando MusicBrainz…"
+                },
+                "Los resultados aparecerán aquí cuando responda el catálogo.",
+            );
         }
         if let Some(error) = state.error {
             let retry = state.can_retry();
-            ui.colored_label(ui.visuals().error_fg_color,match error {
-                ProviderError::RateLimited {..}=>"El servicio está ocupado o ha limitado las consultas. Espera antes de reintentar.",
-                ProviderError::Timeout=>"La consulta tardó demasiado. Puedes volver a intentarlo.",
-                ProviderError::AccessDenied=>"El proveedor rechazó la consulta. No se utilizará otro método de acceso.",
-                ProviderError::Unavailable=>"El catálogo no está disponible en este momento.",
-                ProviderError::Cancelled=>"Consulta cancelada.",
-                ProviderError::Transport=>"No se pudo conectar con el catálogo. Revisa la conexión y vuelve a intentarlo.",
-                _=>"La respuesta del catálogo no pudo utilizarse. Vuelve a intentarlo más tarde.",
-            });
+            feedback::panel(
+                ui,
+                &palette,
+                Kind::Error,
+                "No se pudo cargar la música",
+                match error {
+                    ProviderError::RateLimited { .. } => {
+                        "El servicio está ocupado o ha limitado las consultas. Espera antes de reintentar."
+                    }
+                    ProviderError::Timeout => {
+                        "La consulta tardó demasiado. Puedes volver a intentarlo."
+                    }
+                    ProviderError::AccessDenied => {
+                        "El proveedor rechazó la consulta. No se utilizará otro método de acceso."
+                    }
+                    ProviderError::Unavailable => "El catálogo no está disponible en este momento.",
+                    ProviderError::Cancelled => "Consulta cancelada.",
+                    ProviderError::Transport => {
+                        "No se pudo conectar con el catálogo. Revisa la conexión y vuelve a intentarlo."
+                    }
+                    _ => {
+                        "La respuesta del catálogo no pudo utilizarse. Vuelve a intentarlo más tarde."
+                    }
+                },
+            );
             if error != ProviderError::AccessDenied {
                 let response = ui.add_enabled(retry, egui::Button::new("Reintentar"));
                 self.record("catalog-retry", &response);
@@ -746,20 +770,64 @@ impl DoremiApp {
                 }
             }
         }
+        let state = &self.model.as_ref().unwrap().music;
+        if page.is_none() && !state.waiting && state.error.is_none() {
+            feedback::panel(
+                ui,
+                &palette,
+                Kind::Info,
+                "Encuentra tu próxima canción",
+                "Escribe un título, artista o álbum y elige el tipo de resultado que quieres explorar.",
+            );
+        }
         if let Some(page) = page {
-            if page.items.is_empty() {
-                ui.label("No hay resultados para esta consulta.");
+            let state = &self.model.as_ref().unwrap().music;
+            if page.items.is_empty() && !state.waiting && state.error.is_none() {
+                feedback::panel(
+                    ui,
+                    &palette,
+                    Kind::Empty,
+                    "No hay resultados para esta consulta",
+                    "Prueba otro título o nombre de artista, o cambia el tipo de resultado.",
+                );
+            } else if !page.items.is_empty() {
+                ui.add_space(12.0);
+                ui.label(
+                    egui::RichText::new(format!("{} resultados", page.items.len()))
+                        .font(doremi_ui::semibold(14.0))
+                        .color(palette.secondary),
+                );
+                ui.add_space(4.0);
             }
-            for (index, item) in page.items.iter().enumerate() {
-                if let Some(section) = page
-                    .sections
+            let tiles = !page.items.is_empty()
+                && page
+                    .items
                     .iter()
-                    .find(|section| section.rows.start == index && !section.title.trim().is_empty())
-                {
-                    ui.add_space(12.0);
-                    ui.heading(&section.title);
+                    .all(|item| item.kind != EntityKind::Recording);
+            if tiles {
+                if page.sections.is_empty() {
+                    self.music_grid(ui, &page.items);
+                } else {
+                    for (index, section) in page.sections.iter().enumerate() {
+                        ui.push_id(("catalog-section", index), |ui| {
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new(&section.title).font(doremi_ui::bold(20.0)),
+                            );
+                            self.music_grid(ui, &page.items[section.rows.clone()]);
+                        });
+                    }
                 }
-                ui.push_id(index, |ui| self.music_row(ui, item, index));
+            } else {
+                for (index, item) in page.items.iter().enumerate() {
+                    if let Some(section) = page.sections.iter().find(|section| {
+                        section.rows.start == index && !section.title.trim().is_empty()
+                    }) {
+                        ui.add_space(20.0);
+                        ui.label(egui::RichText::new(&section.title).font(doremi_ui::bold(20.0)));
+                    }
+                    ui.push_id(index, |ui| self.music_row(ui, item, index));
+                }
             }
             ui.horizontal_wrapped(|ui| {
                 if page.offset > 0 && self.button(ui, "catalog-previous", "Página anterior", 160.0)
@@ -772,6 +840,133 @@ impl DoremiApp {
             });
         }
     }
+
+    fn music_grid(&mut self, ui: &mut egui::Ui, items: &[CatalogEntry]) {
+        use doremi_ui::{self as theme, cards};
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        let width = ui.available_width();
+        let preferred = if ui.ctx().content_rect().width() < 760.0 {
+            136.0
+        } else {
+            cards::CARD_WIDTH
+        };
+        let columns = ((width + cards::CARD_GAP) / (preferred + cards::CARD_GAP))
+            .floor()
+            .max(1.0) as usize;
+        let card_width = (width - (columns - 1) as f32 * cards::CARD_GAP) / columns as f32;
+        for (chunk_index, chunk) in items.chunks(columns).enumerate() {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = cards::CARD_GAP;
+                for (index, entry) in chunk.iter().enumerate() {
+                    ui.push_id(
+                        ("catalog-card", chunk_index, index, &entry.media.id),
+                        |ui| {
+                            ui.vertical(|ui| {
+                                ui.set_width(card_width);
+                                let subtitle = if entry.artists.is_empty() {
+                                    kind_label(entry.kind).to_owned()
+                                } else {
+                                    entry
+                                        .artists
+                                        .iter()
+                                        .map(|artist| artist.name.as_str())
+                                        .collect::<Vec<_>>()
+                                        .join(", ")
+                                };
+                                let card = cards::card_sized(
+                                    ui,
+                                    &palette,
+                                    cards::Card {
+                                        title: &entry.media.title,
+                                        subtitle: &subtitle,
+                                        cover: cards::CardCover {
+                                            circular: entry.kind == EntityKind::Artist,
+                                            ..Default::default()
+                                        },
+                                        play_label: "",
+                                        play_size: TOUCH,
+                                    },
+                                    card_width,
+                                    |ui, slot| match slot {
+                                        cards::Slot::Cover { rect, radius } => {
+                                            theme::cover_placeholder(
+                                                ui,
+                                                &palette,
+                                                rect,
+                                                radius,
+                                                if entry.kind == EntityKind::Artist {
+                                                    theme::Icon::User
+                                                } else {
+                                                    theme::Icon::Disc
+                                                },
+                                            );
+                                            self.media_artwork(
+                                                ui,
+                                                &entry.media.id,
+                                                rect,
+                                                radius.min(127.0) as u8,
+                                            );
+                                        }
+                                        cards::Slot::Text {
+                                            text,
+                                            rect,
+                                            font,
+                                            color,
+                                            rows,
+                                        } => {
+                                            let mut job = egui::text::LayoutJob::simple(
+                                                text.into(),
+                                                font,
+                                                color,
+                                                rect.width(),
+                                            );
+                                            job.wrap.max_rows = rows;
+                                            let galley = ui.painter().layout_job(job);
+                                            ui.painter().galley(rect.min, galley, color);
+                                        }
+                                    },
+                                );
+                                let response = card
+                                    .response
+                                    .on_hover_text(format!("{}\n{}", entry.media.title, subtitle));
+                                self.record(
+                                    &format!("catalog-open:{}", entry.media.id.local()),
+                                    &response,
+                                );
+                                if card.clicked {
+                                    self.model.as_mut().unwrap().music.open(entry.clone());
+                                    self.navigate(Page::Search);
+                                }
+                                let saved = self
+                                    .model
+                                    .as_ref()
+                                    .unwrap()
+                                    .library
+                                    .contains(&entry.media.id);
+                                if self.choice_button(
+                                    ui,
+                                    &format!("catalog-save:{}", entry.media.id.local()),
+                                    if saved { "Quitar" } else { "Guardar" },
+                                    card_width,
+                                    saved,
+                                ) {
+                                    let model = self.model.as_mut().unwrap();
+                                    if saved {
+                                        model.remove_saved(&entry.media.id);
+                                    } else {
+                                        model.save_media(entry.media.clone());
+                                    }
+                                }
+                            });
+                        },
+                    );
+                }
+            });
+            ui.add_space(12.0);
+        }
+    }
+
     fn music_detail(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry) {
         use doremi_ui::{
             self as theme, Icon,
@@ -837,7 +1032,12 @@ impl DoremiApp {
                         if index > 0 {
                             ui.weak("•");
                         }
-                        let response = ui.link(&credit.name);
+                        let response = ui.add(
+                            egui::Button::new(&credit.name)
+                                .frame(false)
+                                .wrap()
+                                .min_size(egui::vec2(TOUCH, TOUCH)),
+                        );
                         self.record(&format!("catalog-artist:{}", credit.id.local()), &response);
                         if response.clicked() {
                             self.model.as_mut().unwrap().music.open(CatalogEntry {
@@ -881,15 +1081,17 @@ impl DoremiApp {
                     .caption(&entry.media.id),
             );
         }
-        ui.small(format!(
-            "ID de {}: {}",
-            if youtube {
-                "YouTube Music"
-            } else {
-                "MusicBrainz"
-            },
-            entry.media.id.local()
-        ));
+        ui.collapsing("Información del catálogo", |ui| {
+            ui.small(format!(
+                "ID de {}: {}",
+                if youtube {
+                    "YouTube Music"
+                } else {
+                    "MusicBrainz"
+                },
+                entry.media.id.local()
+            ))
+        });
         {
             let saved = self
                 .model
@@ -897,7 +1099,7 @@ impl DoremiApp {
                 .unwrap()
                 .library
                 .contains(&entry.media.id);
-            if self.button(
+            if self.choice_button(
                 ui,
                 &format!("catalog-save:{}", entry.media.id.local()),
                 if saved {
@@ -911,6 +1113,7 @@ impl DoremiApp {
                     }
                 },
                 190.0,
+                saved,
             ) {
                 let model = self.model.as_mut().unwrap();
                 if saved {
@@ -967,7 +1170,8 @@ impl DoremiApp {
                     let response = ui.add(
                         egui::Button::new(label)
                             .selected(releases == selected_releases)
-                            .min_size(egui::vec2(0.0, TOUCH)),
+                            .corner_radius(18)
+                            .min_size(egui::vec2(TOUCH, TOUCH)),
                     );
                     self.record(name, &response);
                     if response.clicked() {
@@ -1016,7 +1220,15 @@ impl DoremiApp {
         if !edition.is_empty() {
             subtitle = format!("{edition} · {subtitle}");
         }
-        let row = theme::list_row(
+        let selected = entry.kind == EntityKind::Recording
+            && self
+                .model
+                .as_ref()
+                .unwrap()
+                .queue
+                .current()
+                .is_some_and(|current| current.media.id == entry.media.id);
+        let row = theme::selected_list_row(
             ui,
             &palette,
             ui.id().with(("catalog-row", entry.media.id.local())),
@@ -1033,6 +1245,7 @@ impl DoremiApp {
                     "Explorar"
                 },
             },
+            selected,
         );
         self.record(
             &format!("catalog-open:{}", entry.media.id.local()),
@@ -1180,6 +1393,171 @@ mod tests {
             ..Default::default()
         }))
     }
+    #[test]
+    fn catalog_feedback_distinguishes_waiting_empty_and_access_refusal_without_network() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/catalog-feedback-ui-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for (waiting, error, empty, expected) in [
+            (false, None, false, "Encuentra tu próxima canción"),
+            (true, None, true, "Consultando YouTube Music"),
+            (false, None, true, "No hay resultados"),
+            (
+                false,
+                Some(ProviderError::AccessDenied),
+                false,
+                "El proveedor rechazó",
+            ),
+        ] {
+            let state = &mut app.model.as_mut().unwrap().music;
+            state.youtube = true;
+            state.waiting = waiting;
+            state.error = error;
+            state.page = if empty {
+                Some(Arc::new(Results {
+                    items: vec![],
+                    offset: 0,
+                    more: false,
+                    detail: None,
+                    continuation: None,
+                    sections: vec![],
+                    subtitles: vec![],
+                }))
+            } else {
+                None
+            };
+            app.controls.clear();
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.music_results(ui));
+            output.textures_delta.clear();
+            let text = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.text()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains(expected), "{text}");
+            if waiting {
+                assert!(!text.contains("No hay resultados"));
+            }
+            if error == Some(ProviderError::AccessDenied) {
+                assert!(
+                    !app.controls
+                        .iter()
+                        .any(|control| control.name == "catalog-retry")
+                );
+            }
+            assert!(app.model.as_ref().unwrap().music.worker.is_none());
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn catalog_tiles_keep_duplicate_entries_and_save_controls_inside_small_viewports() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/catalog-grid-ui-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        // Repeated IDs must still produce independent widgets at each position.
+        let album = home_fixture().items[1].clone();
+        let entries = vec![album.clone(), album.clone(), album];
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for width in [296.0, 320.0, 360.0, 682.0, 1100.0] {
+                app.controls.clear();
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 900.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.music_grid(ui, &entries),
+                );
+                output.textures_delta.clear();
+                let controls: Vec<_> = app
+                    .controls
+                    .iter()
+                    .filter(|c| c.name.starts_with("catalog-"))
+                    .collect();
+                assert_eq!(controls.len(), 6);
+                for control in &controls {
+                    assert!(
+                        control.rect[0] >= 0.0 && control.rect[2] <= width + 0.1,
+                        "{width}: {:?}",
+                        control.rect
+                    );
+                }
+                for (index, control) in controls.iter().enumerate() {
+                    let rect = egui::Rect::from_min_max(
+                        egui::pos2(control.rect[0], control.rect[1]),
+                        egui::pos2(control.rect[2], control.rect[3]),
+                    );
+                    for other in &controls[index + 1..] {
+                        let other = egui::Rect::from_min_max(
+                            egui::pos2(other.rect[0], other.rect[1]),
+                            egui::pos2(other.rect[2], other.rect[3]),
+                        );
+                        assert!(!rect.intersects(other));
+                    }
+                }
+                assert!(app.model.as_ref().unwrap().music.worker.is_none());
+                assert!(app.model.as_ref().unwrap().queue.current().is_none());
+            }
+        }
+        let save = app
+            .controls
+            .iter()
+            .find(|control| control.name.starts_with("catalog-save:"))
+            .unwrap()
+            .rect;
+        let pointer = egui::pos2((save[0] + save[2]) / 2.0, (save[1] + save[3]) / 2.0);
+        for expected_saved in [true, false] {
+            for pressed in [true, false] {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1100.0, 900.0),
+                        )),
+                        events: vec![
+                            egui::Event::PointerMoved(pointer),
+                            egui::Event::PointerButton {
+                                pos: pointer,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::NONE,
+                            },
+                        ],
+                        ..Default::default()
+                    },
+                    |ui| app.music_grid(ui, &entries),
+                );
+                output.textures_delta.clear();
+            }
+            assert_eq!(
+                app.model
+                    .as_ref()
+                    .unwrap()
+                    .library
+                    .contains(&entries[0].media.id),
+                expected_saved
+            );
+            assert!(app.model.as_ref().unwrap().queue.current().is_none());
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     #[test]
     fn home_preserves_provider_sections_and_duplicate_track_contexts_after_invalid_entries_are_removed()
      {
