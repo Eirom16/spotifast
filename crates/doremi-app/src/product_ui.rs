@@ -220,6 +220,61 @@ mod tests {
     }
 
     #[test]
+    fn retained_qa_history_cannot_hide_an_older_product_song() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/product-history-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let local = Media {
+            id: MediaId::new(
+                ProviderId::new("local-files").unwrap(),
+                "00112233445566778899aabbccddeeff",
+            )
+            .unwrap(),
+            title: "Mi canción guardada".into(),
+            duration_ms: Some(120000),
+        };
+        app.model
+            .as_mut()
+            .unwrap()
+            .history
+            .record(local.clone(), None)
+            .unwrap();
+        for index in 0..20 {
+            app.model
+                .as_mut()
+                .unwrap()
+                .history
+                .record(
+                    Media {
+                        id: MediaId::new(
+                            ProviderId::new("demo").unwrap(),
+                            format!("sample-{index}"),
+                        )
+                        .unwrap(),
+                        title: "Demostración oculta".into(),
+                        duration_ms: None,
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        for _ in 0..3 {
+            render(&mut app, &ctx, [384.0, 760.0], vec![]);
+        }
+        assert!(
+            app.controls
+                .iter()
+                .any(|control| control.name == format!("history-play:{}", local.id.local()))
+        );
+        assert_eq!(app.model.as_ref().unwrap().history.plays().len(), 21);
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
     fn product_search_has_four_content_filters_and_only_cancellable_work_shows_cancel() {
         let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();

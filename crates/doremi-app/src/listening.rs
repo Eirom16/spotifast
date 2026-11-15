@@ -64,9 +64,16 @@ impl DoremiApp {
             .as_ref()
             .unwrap()
             .history
-            .recent(16)
+            // Filter before the shelf's limit so retained QA records cannot hide
+            // older real listens. History still owns ID deduplication and order.
+            .recent(if self.internal_ui {
+                16
+            } else {
+                persistence::history::PLAY_LIMIT
+            })
             .into_iter()
             .filter(|media| self.media_visible(media))
+            .take(16)
             .collect();
         if recent.is_empty() {
             return;
