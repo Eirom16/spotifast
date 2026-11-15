@@ -51,6 +51,7 @@ pub extern "system" fn native_init(
     directory: JString<'_>,
     context: JObject<'_>,
     input_generation: jlong,
+    internal_ui: jboolean,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -131,6 +132,7 @@ pub extern "system" fn native_init(
         };
         let ctx = egui::Context::default();
         let qa_ui = cfg!(debug_assertions)
+            && internal_ui != 0
             && !normal_profile
             && directory
                 .parent()

@@ -986,16 +986,83 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
         Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",15).put("google_regions_checked",YoutubeAuthActivity.GOOGLE_DOMAINS.size()).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    private void assertProductControls() throws Exception {
+        JSONObject data=state();JSONArray controls=data.getJSONArray("controls");
+        java.util.Set<String> forbidden=new java.util.HashSet<>(java.util.Arrays.asList(
+            "demo-examples","local-audio","long-audio","session-cookie",
+            "youtube-cookie-signin","youtube-import-session","cancel-search"));
+        int filters=0;
+        for(int i=0;i<controls.length();i++) {
+            JSONObject control=controls.getJSONObject(i);String name=control.getString("name");
+            if(name.startsWith("source-") || forbidden.contains(name))
+                throw new AssertionError("Internal control exposed in product mode: "+name);
+            if(name.startsWith("catalog-kind:")) {
+                filters++;JSONArray rect=control.getJSONArray("rect"),viewport=data.getJSONArray("viewport");
+                if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) ||
+                    rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1) ||
+                    rect.getDouble(3)-rect.getDouble(1)<48)
+                    throw new AssertionError("Content filter outside the usable touch area: "+name);
+            }
+        }
+        if("Search".equals(data.optString("page"))) {
+            if(filters!=4 || !"youtube-music".equals(data.getJSONObject("music_catalog").getString("provider")))
+                throw new AssertionError("Product search must use four content filters and the musical catalog");
+        }
+        if(!data.isNull("current") || !data.isNull("audio_metrics"))
+            throw new AssertionError("The empty product profile must not fabricate playback");
+    }
+    private void productUi() throws Exception {
+        int originalOrientation=activity.getRequestedOrientation();
+        try {
+            for(boolean landscape:new boolean[]{false,true}) {
+                runOnMainSync(() -> activity.setRequestedOrientation(landscape?ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+                until(s -> (s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1))==landscape);
+                settledForeground();
+                for(String theme:new String[]{"dark","light"}) {
+                    tap("settings");until(s -> "Settings".equals(s.optString("page")));tap(theme);
+                    until(s -> s.optBoolean("light")=="light".equals(theme));
+                    for(String page:new String[]{"home","search","library","queue","settings"}) {
+                        tap(page);until(s -> page.equalsIgnoreCase(s.optString("page")));
+                        assertProductControls();
+                        if("search".equals(page)) {
+                            for(String kind:new String[]{"Artist","Release","Playlist","Recording"}) {
+                                tap("catalog-kind:"+kind);
+                                until(s -> kind.equals(s.optJSONObject("music_catalog").optString("kind")) && !s.optJSONObject("music_catalog").optBoolean("waiting"));
+                            }
+                            assertProductControls();
+                        }
+                        capture("qa-product-"+page+"-"+theme+"-"+(landscape?"landscape":"portrait"));
+                    }
+                }
+            }
+            runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+            until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));
+            settledForeground();tap("search");until(s -> "Search".equals(s.optString("page")));
+            double before=state().getJSONArray("viewport").getDouble(1);
+            tap("query");
+            until(s -> s.optJSONArray("viewport").optDouble(1)<before-48);
+            assertProductControls();capture("qa-product-ime");
+            runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+        } finally {
+            runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
+        }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if("product-ui".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.internalUi",false);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("product-ui".equals(mode)) {
+                productUi();
+                result.putString("stream","PASS: production UI in an isolated profile; four musical filters, no internal controls, portrait/landscape, themes and physical IME; no search or audio requests\n");
+                finish(Activity.RESULT_OK,result);return;
+            }
             if("youtube-auth-policy".equals(mode)) {
                 youtubeAuthPolicy();
                 result.putString("stream","PASS: isolated YouTube authentication host and allowed navigation; no real account authorization\n");finish(Activity.RESULT_OK,result);return;

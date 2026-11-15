@@ -73,6 +73,10 @@ Las herramientas internas del host de escritorio requieren activar explícitamen
 `DOREMI_INTERNAL_QA=1` junto con un `DOREMI_DATA_DIR` aislado. Un perfil personalizado
 por sí solo no activa controles de QA. En Android solo los perfiles `qa/<nombre>`
 de una compilación de depuración muestran esas herramientas. No es un ajuste del producto.
+La instrumentación `product-ui` usa también datos privados de QA, pero desactiva
+explícitamente su interfaz interna mediante `dev.eirom.doremi.qa.internalUi=false`.
+`scripts/android-product-ui-qa.py` verifica una APK de Actions y conserva capturas
+de la superficie de Doremi, sin modificar la biblioteca normal del dispositivo.
 
 ```sh
 gh run list --repo Eirom16/spotifast --workflow ci.yml --limit 5
