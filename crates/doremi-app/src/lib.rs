@@ -32,6 +32,7 @@ mod product_ui;
 mod queue_ui;
 mod saved;
 mod search_view;
+mod settings_view;
 #[cfg(not(target_os = "android"))]
 mod wav_probe;
 use doremi_player::{Builtin, Engine, EngineError, EngineEvent, Pcm};
@@ -1318,36 +1319,7 @@ impl DoremiApp {
             }
             Page::Playlist => self.playlist_page(ui),
             Page::Queue => self.queue_page(ui),
-            Page::Settings => {
-                ui.heading("Configuración");
-                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-                self.youtube_account(ui);
-                ui.label("Acento");
-                ui.horizontal_wrapped(|ui| {
-                    for (name, label, value) in
-                        [("purple", "Morado", false), ("green", "Verde", true)]
-                    {
-                        if self.button(ui, name, label, 130.0) {
-                            let model = self.model.as_mut().unwrap();
-                            model.prefs.green = value;
-                            model.revision += 1;
-                        }
-                    }
-                });
-                ui.label("Tema");
-                ui.horizontal_wrapped(|ui| {
-                    for (name, label, value) in
-                        [("dark", "Oscuro", false), ("light", "Claro", true)]
-                    {
-                        if self.button(ui, name, label, 130.0) {
-                            let model = self.model.as_mut().unwrap();
-                            model.prefs.light = value;
-                            model.revision += 1;
-                        }
-                    }
-                });
-                ui.weak("Tu biblioteca y tus preferencias se guardan en este dispositivo.");
-            }
+            Page::Settings => self.settings_content(ui),
             Page::Player => {
                 if ui.ctx().content_rect().width() < 760.0 {
                     let prefs = &self.model.as_ref().unwrap().prefs;

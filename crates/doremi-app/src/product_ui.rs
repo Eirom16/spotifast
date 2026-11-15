@@ -210,6 +210,24 @@ mod tests {
                     if page != Page::Settings {
                         assert!(!lower.contains("youtube music"), "{page:?}: {text}");
                     }
+                    if page == Page::Settings {
+                        for name in ["dark", "light", "purple", "green"] {
+                            let control = app
+                                .controls
+                                .iter()
+                                .find(|control| control.name == name)
+                                .unwrap();
+                            let [left, top, right, bottom] = control.rect;
+                            assert!(
+                                left >= 0.0 && right <= size[0] && top >= 0.0 && bottom <= size[1],
+                                "Appearance option {name} outside {size:?}: {:?}",
+                                control.rect
+                            );
+                            if size[0] < 760.0 {
+                                assert!(bottom - top >= TOUCH);
+                            }
+                        }
+                    }
                     assert_eq!(app.model.as_ref().unwrap().library.items(), samples);
                     assert_eq!(
                         app.model.as_ref().unwrap().queue.current().unwrap().id,
