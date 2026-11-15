@@ -64,3 +64,54 @@ la prueba de UI ni la prueba de la APK en Android físico.
 Las métricas de callback con muestras no nulas no son una captura acústica:
 hay que comprobar también que el audio se oye. Un timeout de resolución o
 descarga es un fallo de la prueba, nunca reproducción verificada.
+
+## Preparación y medición en la rama de integración
+
+Catálogo y resolución trabajan sobre snapshots con el mismo pool HTTP y la
+misma sesión inmutable en memoria. El mutex solo protege captura/publicación,
+no esas peticiones de red. Un cambio de sesión invalida publicaciones antiguas,
+también invitado → login → logout → invitado. Login/restauración aún verifican
+la cuenta bajo el mutex; su espera se mide, no se oculta.
+
+El host prepara **solo una resolución YouTube** en los últimos 30 segundos de
+una pista con duración conocida. No descarga fragmentos de audio ni canciones.
+Consulta la continuación real de la cola, incluido repeat/shuffle/historial.
+La preparación tiene un deadline de 15 s, retención máxima de 45 s y margen de
+caducidad de 5 s. No se refresca en bucle. Pausa, edición de cola, seek,
+logout/cambio de sesión y suspensión invalidan el trabajo. La petición directa
+retira el prefetch en curso; una concesión ya terminada solo se consume para el
+ID y sesión correctos. Saltar temprano o desconocer la duración puede no tener
+prefetch. No cambia qué pista selecciona la cola.
+
+`online.latency` y `audio_metrics` del diagnóstico del host incluyen el mismo
+RequestId y origen monotónico desde la intención recibida por la cola.
+`first_pcm_us`, `first_callback_us` y `first_nonzero_callback_us` de YouTube
+incluyen ahora espera y resolución, no solo `Engine::load_stream`.
+`first_bytes_us` significa primer bloque HTTP completo validado, no primer
+byte de socket. `device_start_us` inicia descubrimiento y `device_ready_us`
+termina construcción de salida, después del prebuffer del decoder.
+No se añaden logs de URLs/cookies ni persistencia de concesiones.
+
+Para cada intento, conservar fuera del árbol un snapshot final y capturar un
+registro sin consultas, nombres, cabeceras, bibliotecas ni URLs:
+
+```sh
+python3 scripts/playback-latency-summary.py capture /ruta/qa-state.json \
+  --commit SHA_COMPLETO_DEL_BINARIO --platform linux --scenario cold \
+  --run proceso-01 --outcome ok >> /ruta/samples.jsonl
+python3 scripts/playback-latency-summary.py summarize /ruta/samples.jsonl
+```
+
+El commit debe ser el del artefacto verificado, no otro checkout. Usar un
+`--run` diferente por proceso. Registrar también `error` y `cancelled`,
+sin volver a capturar una solicitud como muestra nueva. El resumen separa
+commit/plataforma/escenario/evidencia sintética, informa denominadores,
+p50/p95/mínimo/máximo y marca menos de 20 éxitos como exploratorio.
+La clasificación fría/caliente o primera tras login la decide el operador:
+el snapshot no demuestra el estado de las cachés del SO ni el login previo.
+Reanudar no crea otra solicitud y todavía necesita un reloj de intención de
+resume separado; no reutilizar los tiempos originales como latencia de resume.
+Este colector es explícito, no añade telemetría ni acceso automático a sesiones.
+
+La comparación cuantitativa y los gates pendientes están en
+[`DOREMI-PLAYBACK-AUDIT.md`](../../DOREMI-PLAYBACK-AUDIT.md).
