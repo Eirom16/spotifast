@@ -61,12 +61,19 @@ def main():
             scale = data["pixels_per_point"]
             fixed = name in {"home", "search", "library", "queue", "settings"}
             page_left, page_top, page_right, page_bottom = data["page_rect"]
+            if not (0 <= page_left < page_right <= args.size[0] and 0 <= page_top < page_bottom <= args.size[1]):
+                time.sleep(.1)
+                continue
             if not fixed and not (page_left <= left < right <= page_right and page_top <= top < bottom <= page_bottom):
                 xdo("mousemove", "--window", window, round((page_left + page_right) * scale / 2),
                     round((page_top + page_bottom) * scale / 2), "click", 4 if top < page_top else 5)
                 time.sleep(.15)
                 continue
-            assert 0 <= left < right <= args.size[0] and 0 <= top < bottom <= args.size[1], (name, control["rect"])
+            if not (0 <= left < right <= args.size[0] and 0 <= top < bottom <= args.size[1]):
+                # A resize snapshot can briefly pair the new viewport with
+                # controls from the previous frame. Never click outside it.
+                time.sleep(.1)
+                continue
             xdo("mousemove", "--window", window, round((left + right) * scale / 2), round((top + bottom) * scale / 2), "click", 1)
             time.sleep(.25)
             return
