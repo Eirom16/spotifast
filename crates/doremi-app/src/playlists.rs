@@ -182,13 +182,18 @@ impl DoremiApp {
             if !self.collection_visible(&list.entries) {
                 continue;
             }
+            let count = list
+                .entries
+                .iter()
+                .filter(|media| self.media_visible(media))
+                .count();
             let row = theme::list_row(
                 ui,
                 &palette,
                 ui.id().with(("playlist", list.id)),
                 theme::ListRow {
                     title: &list.name,
-                    subtitle: &format!("{} canciones · En este dispositivo", list.entries.len()),
+                    subtitle: &format!("{count} canciones · En este dispositivo"),
                     round: false,
                     actions: 0,
                     action_label: "Abrir playlist",
@@ -252,22 +257,22 @@ impl DoremiApp {
                 HeroSlot::Byline => {
                     ui.weak(format!(
                         "{} canciones · En este dispositivo",
-                        list.entries.len()
+                        list.entries
+                            .iter()
+                            .filter(|media| self.media_visible(media))
+                            .count()
                     ));
                 }
             },
         );
         ui.add_space(12.0);
-        let playable = list
-            .entries
-            .iter()
-            .any(|media| self.media_visible(media) && playlist_track(media));
+        let playable = list.entries.iter().any(|media| self.playable_media(media));
         ui.add_enabled_ui(playable, |ui| {
             if self.button(ui, "playlist-play", "Reproducir playlist", 220.0) {
                 let rows: Vec<_> = list
                     .entries
                     .iter()
-                    .filter(|media| self.media_visible(media) && playlist_track(media))
+                    .filter(|media| self.playable_media(media))
                     .cloned()
                     .collect();
                 self.model.as_mut().unwrap().start_context(rows, 0);
@@ -386,11 +391,8 @@ impl DoremiApp {
 
 fn playlist_track(media: &Media) -> bool {
     // A saved catalog collection is a reference, not a track to expand or play.
-    media.id.provider.as_str() != "musicbrainz"
-        || !matches!(
-            media.id.local().split_once(':'),
-            Some(("artist" | "release", _))
-        )
+    presentation::metadata_kind(&media.id)
+        .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
 }
 
 #[cfg(test)]

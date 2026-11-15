@@ -10,13 +10,13 @@ impl DoremiApp {
         let current = model
             .queue
             .current()
-            .filter(|entry| self.media_visible(&entry.media))
+            .filter(|entry| self.playable_media(&entry.media))
             .cloned();
         let caption = super::presentation::playback_caption(model);
         let entries = model
             .queue
             .upcoming()
-            .filter(|entry| self.media_visible(&entry.media))
+            .filter(|entry| self.playable_media(&entry.media))
             .cloned()
             .collect::<Vec<_>>();
         let manual = model

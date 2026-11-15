@@ -11,8 +11,21 @@ impl DoremiApp {
             model
                 .queue
                 .current()
-                .is_some_and(|entry| self.media_visible(&entry.media))
+                .is_some_and(|entry| self.playable_media(&entry.media))
         })
+    }
+
+    /// Navigable artist/album references are not individual audio queue entries.
+    pub(super) fn playable_media(&self, media: &Media) -> bool {
+        if media.id.provider.as_str() == "youtube-music" {
+            return self.media_visible(media)
+                && presentation::metadata_kind(&media.id)
+                    == Some(doremi_core::media::EntityKind::Recording);
+        }
+        self.media_visible(media)
+            && media.id.provider.as_str() != "musicbrainz"
+            && presentation::metadata_kind(&media.id)
+                .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
     }
 
     pub(super) fn collection_visible(&self, entries: &[Media]) -> bool {
@@ -213,6 +226,48 @@ mod tests {
                 .iter()
                 .any(|control| control.name == "demo-examples"),
             "QA tools are retained, not deleted"
+        );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+    fn collection_references_are_navigable_but_not_individual_audio_entries() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/product-capability-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for (provider, id, visible, playable) in [
+            ("youtube-music", "abcdefghijk", true, true),
+            ("youtube-music", "UC_fixture_artist", true, false),
+            ("youtube-music", "MPRE_fixture_album", true, false),
+            ("youtube-music", "VL_fixture_playlist", true, false),
+            ("youtube-music", "unrecognized-identity", true, false),
+            (
+                "local-files",
+                "00112233445566778899aabbccddeeff",
+                true,
+                true,
+            ),
+            ("musicbrainz", "recording:fixture", false, false),
+            ("demo", "dawn", false, false),
+            ("wikimedia-commons", "26896924", false, false),
+        ] {
+            let media = Media {
+                id: MediaId::new(ProviderId::new(provider).unwrap(), id).unwrap(),
+                title: "Fixture".into(),
+                duration_ms: None,
+            };
+            assert_eq!(app.media_visible(&media), visible, "{provider}:{id}");
+            assert_eq!(app.playable_media(&media), playable, "{provider}:{id}");
+        }
+        app.internal_ui = true;
+        assert!(
+            app.playable_media(&songs()[0]),
+            "Explicit QA retains the offline trace"
         );
         drop(app);
         DoremiApp::shutdown();

@@ -21,7 +21,7 @@ impl DoremiApp {
         let Some(current) = model.queue.current() else {
             return;
         };
-        if !self.media_visible(&current.media) {
+        if !self.playable_media(&current.media) {
             return;
         }
         let media = current.media.clone();

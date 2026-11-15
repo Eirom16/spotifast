@@ -646,7 +646,7 @@ impl DoremiApp {
         let current = model
             .queue
             .current()
-            .filter(|entry| self.media_visible(&entry.media));
+            .filter(|entry| self.playable_media(&entry.media));
         let id = current.map(|entry| entry.media.id.clone());
         let caption = if current.is_some() {
             playback_caption(model)
@@ -656,7 +656,7 @@ impl DoremiApp {
         let title = model
             .queue
             .current()
-            .filter(|entry| self.media_visible(&entry.media))
+            .filter(|entry| self.playable_media(&entry.media))
             .map(|entry| entry.media.title.as_str())
             .unwrap_or("Ninguna canción seleccionada")
             .to_owned();
@@ -881,7 +881,7 @@ impl DoremiApp {
             self.empty_player(ui);
             return;
         };
-        if !self.media_visible(&current.media) {
+        if !self.playable_media(&current.media) {
             self.empty_player(ui);
             return;
         }
@@ -1062,25 +1062,18 @@ impl DoremiApp {
             self.navigate(Page::Search);
             return;
         }
+        if !self.playable_media(media) {
+            return;
+        }
         let playable: Vec<_> = rows
             .iter()
-            .filter(|item| {
-                self.media_visible(item)
-                    && item.id.provider.as_str() != "musicbrainz"
-                    && metadata_kind(&item.id)
-                        .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
-            })
+            .filter(|item| self.playable_media(item))
             .cloned()
             .collect();
         if !playable.is_empty() {
             let index = rows[..index]
                 .iter()
-                .filter(|item| {
-                    self.media_visible(item)
-                        && item.id.provider.as_str() != "musicbrainz"
-                        && metadata_kind(&item.id)
-                            .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
-                })
+                .filter(|item| self.playable_media(item))
                 .count();
             self.model.as_mut().unwrap().start_context(playable, index);
             self.navigate(Page::Player);
@@ -1249,7 +1242,7 @@ impl DoremiApp {
                     self.record(&format!("playlist-row-more:{index}"), &more);
                 }
                 egui::Popup::menu(&more).show(|ui| {
-                    if media.id.provider.as_str() != "musicbrainz"
+                    if self.playable_media(media)
                         && self.button(
                             ui,
                             &format!("add:{}", media.id.local()),
