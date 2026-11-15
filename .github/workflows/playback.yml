@@ -1,0 +1,56 @@
+name: Doremi focused playback checks
+
+# Deliberately opt-in. This does not replace full CI, product UI or APK gates.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  playback:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            shell: bash
+          - os: windows-latest
+            shell: pwsh
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      CARGO_TARGET_DIR: target/playback
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_INCREMENTAL: "0"
+      PYTHONUTF8: "1"
+      RUSTUP_HOME: ${{ github.workspace }}/target/rustup
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup show active-toolchain
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: x64
+      - name: Linux audio build dependencies only
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libasound2-dev libpipewire-0.3-dev libclang-dev
+      - name: Offline statistics, no provider requests
+        run: python scripts/test-playback-latency.py
+      - name: Neutral queue regression
+        run: cargo test --locked -p doremi-core
+      - name: Resolver protocol and supervised process regression
+        run: cargo test --locked -p doremi-youtube --all-targets
+      - name: Decoder and callback contracts, not physical audio
+        run: cargo test --locked -p doremi-player --features native-output,ogg-vorbis,aac-mp4 --all-targets
+      - name: Resolver lint
+        run: cargo clippy --locked -p doremi-youtube --all-targets -- -D warnings
+      - name: Player lint
+        run: cargo clippy --locked -p doremi-player --features native-output,ogg-vorbis,aac-mp4 --all-targets -- -D warnings

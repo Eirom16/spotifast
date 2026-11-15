@@ -189,6 +189,20 @@ class CITests(unittest.TestCase):
         self.assertNotIn("cargo build --release", text)
         self.assertNotIn("self-hosted", text)
 
+    def test_focused_playback_is_opt_in_and_does_not_replace_product_or_legacy_gates(self):
+        text = (ROOT / ".github/workflows/playback.yml").read_text()
+        self.assertIn("workflow_dispatch:", text)
+        self.assertNotIn("  push:", text)
+        self.assertIn("ubuntu-24.04", text)
+        self.assertIn("windows-latest", text)
+        self.assertIn("cargo test --locked -p doremi-youtube --all-targets", text)
+        self.assertIn("python scripts/test-playback-latency.py", text)
+        self.assertNotIn("--workspace", text)
+        self.assertNotIn("continue-on-error", text)
+        full = (ROOT / ".github/workflows/ci.yml").read_text()
+        self.assertIn("cargo test --locked --workspace --all-targets", full)
+        self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux, android-apk]", full)
+
 
 if __name__ == "__main__":
     unittest.main()
