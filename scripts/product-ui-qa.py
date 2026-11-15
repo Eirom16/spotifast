@@ -49,14 +49,28 @@ def main():
         raise AssertionError("Expected product state not observed")
 
     def tap(name):
-        data = wait(lambda s: any(c["name"] == name for c in s["controls"]))
-        rect = next(c["rect"] for c in data["controls"] if c["name"] == name)
-        left, top, right, bottom = rect
-        assert 0 <= left < right <= args.size[0] and 0 <= top < bottom <= args.size[1], (name, rect)
-        assert int(xdo("getwindowfocus")) == int(window), "Own window lost focus; no input injected"
-        scale = data["pixels_per_point"]
-        xdo("mousemove", "--window", window, round((left + right) * scale / 2), round((top + bottom) * scale / 2), "click", 1)
-        time.sleep(.25)
+        wait(lambda s: any(c["name"] == name for c in s["controls"]))
+        for _ in range(40):
+            data = state()
+            control = next((c for c in data["controls"] if c["name"] == name), None)
+            if control is None:
+                time.sleep(.1)
+                continue
+            left, top, right, bottom = control["rect"]
+            assert int(xdo("getwindowfocus")) == int(window), "Own window lost focus; no input injected"
+            scale = data["pixels_per_point"]
+            fixed = name in {"home", "search", "library", "queue", "settings"}
+            page_left, page_top, page_right, page_bottom = data["page_rect"]
+            if not fixed and not (page_left <= left < right <= page_right and page_top <= top < bottom <= page_bottom):
+                xdo("mousemove", "--window", window, round((page_left + page_right) * scale / 2),
+                    round((page_top + page_bottom) * scale / 2), "click", 4 if top < page_top else 5)
+                time.sleep(.15)
+                continue
+            assert 0 <= left < right <= args.size[0] and 0 <= top < bottom <= args.size[1], (name, control["rect"])
+            xdo("mousemove", "--window", window, round((left + right) * scale / 2), round((top + bottom) * scale / 2), "click", 1)
+            time.sleep(.25)
+            return
+        raise AssertionError(f"Product control did not enter its visible page: {name}")
 
     def capture(name):
         subprocess.run(["import", "-window", window, str(output / f"{name}.png")], check=True)
