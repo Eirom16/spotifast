@@ -8,6 +8,7 @@ use doremi_core::{
     requests::Ticket,
 };
 use doremi_player::{DecodeError, Pcm};
+use doremi_youtube::latency::{Stage, Trace};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
@@ -70,6 +71,13 @@ pub(super) enum Job {
         generation: u64,
         request: RequestId,
         media: MediaId,
+        trace: Arc<Trace>,
+        prepared: Option<Box<doremi_youtube::stream::Stream>>,
+        context: egui::Context,
+    },
+    Prefetch {
+        generation: u64,
+        media: MediaId,
         context: egui::Context,
     },
 }
@@ -78,20 +86,30 @@ impl Job {
         match self {
             Self::Search { .. } => 0,
             Self::Source { .. } => 1,
+            Self::Prefetch { .. } => 2,
         }
     }
     fn generation(&self) -> u64 {
         match self {
-            Self::Search { generation, .. } | Self::Source { generation, .. } => *generation,
+            Self::Search { generation, .. }
+            | Self::Source { generation, .. }
+            | Self::Prefetch { generation, .. } => *generation,
         }
     }
 }
 struct Shared {
-    generation: [AtomicU64; 2],
+    generation: [AtomicU64; 3],
     closed: AtomicBool,
     events: Mutex<[Option<Completion>; 2]>,
     phase_generation: AtomicU64,
     phase: AtomicU8,
+    prefetch: Mutex<Option<Prefetched>>,
+}
+struct Prefetched {
+    generation: u64,
+    media: MediaId,
+    stream: Box<doremi_youtube::stream::Stream>,
+    prepared_at: Instant,
 }
 impl Shared {
     fn current(&self, lane: usize, generation: u64) -> bool {
@@ -124,11 +142,12 @@ impl Worker {
     ) -> Result<Self, ProviderError> {
         let (sender, receiver) = mpsc::channel(4);
         let shared = Arc::new(Shared {
-            generation: [AtomicU64::new(0), AtomicU64::new(0)],
+            generation: std::array::from_fn(|_| AtomicU64::new(0)),
             closed: AtomicBool::new(false),
             events: Mutex::new([None, None]),
             phase_generation: AtomicU64::new(0),
             phase: AtomicU8::new(0),
+            prefetch: Mutex::new(None),
         });
         let state = shared.clone();
         let thread = std::thread::Builder::new()
@@ -169,8 +188,20 @@ impl Worker {
     pub fn current(&self, lane: usize, generation: u64) -> bool {
         self.shared.current(lane, generation)
     }
-    pub fn send(&self, job: Job) -> bool {
-        self.sender.as_ref().unwrap().try_send(job).is_ok()
+    pub fn send(&self, job: Job) -> Result<(), Job> {
+        self.sender
+            .as_ref()
+            .unwrap()
+            .try_send(job)
+            .map_err(|error| error.into_inner())
+    }
+    pub fn take_prefetched(&self, media: &MediaId) -> Option<Box<doremi_youtube::stream::Stream>> {
+        let prepared = self.shared.prefetch.try_lock().ok()?.take()?;
+        (self.shared.current(2, prepared.generation)
+            && prepared.media == *media
+            && prepared.prepared_at.elapsed() < Duration::from_secs(45)
+            && prepared.stream.valid_for(Duration::from_secs(5)))
+        .then_some(prepared.stream)
     }
     pub fn poll(&self) -> [Option<Completion>; 2] {
         self.shared
@@ -234,6 +265,8 @@ fn fail_jobs(mut receiver: mpsc::Receiver<Job>, shared: Arc<Shared>) {
                 generation,
                 request,
                 media,
+                trace: _,
+                prepared: _,
                 context,
             } => shared.publish(
                 1,
@@ -246,6 +279,7 @@ fn fail_jobs(mut receiver: mpsc::Receiver<Job>, shared: Arc<Shared>) {
                 },
                 &context,
             ),
+            Job::Prefetch { .. } => {}
         }
     }
 }
@@ -260,11 +294,21 @@ async fn actor(
     client: Sources,
     origin: Instant,
 ) {
-    let mut tasks: [Task; 2] = [None, None];
+    let mut tasks: [Task; 3] = [None, None, None];
     let cache = Arc::new(Mutex::new(Vec::<(MediaId, Arc<Pcm>)>::new()));
     loop {
         if shared.closed.load(Ordering::Acquire) {
             break;
+        }
+        {
+            let mut slot = shared.prefetch.lock().unwrap();
+            if slot.as_ref().is_some_and(|prepared| {
+                !shared.current(2, prepared.generation)
+                    || prepared.prepared_at.elapsed() >= Duration::from_secs(45)
+                    || !prepared.stream.valid_for(Duration::from_secs(5))
+            }) {
+                slot.take();
+            }
         }
         for (lane, task) in tasks.iter_mut().enumerate() {
             if task.as_ref().is_some_and(|(generation, handle)| {
@@ -273,8 +317,11 @@ async fn actor(
                 stop(task).await;
             }
         }
-        let job = if tasks.iter().any(Option::is_some) {
-            tokio::select! { job=receiver.recv()=>job,_=tokio::time::sleep(Duration::from_millis(20))=>continue }
+        let busy = tasks.iter().any(Option::is_some);
+        let retained = shared.prefetch.lock().unwrap().is_some();
+        let job = if busy || retained {
+            let delay = Duration::from_millis(if busy { 20 } else { 250 });
+            tokio::select! { job=receiver.recv()=>job,_=tokio::time::sleep(delay)=>continue }
         } else {
             receiver.recv().await
         };
@@ -283,6 +330,10 @@ async fn actor(
         let generation = job.generation();
         if !shared.current(lane, generation) {
             continue;
+        }
+        if lane == 1 {
+            // A requested song never waits for speculative work to finish.
+            stop(&mut tasks[2]).await;
         }
         stop(&mut tasks[lane]).await;
         let state = shared.clone();
@@ -318,12 +369,33 @@ async fn actor(
                         generation,
                         request,
                         media,
+                        trace,
+                        prepared,
                         context,
                     } => {
-                        let result = source(
-                            transport, &media, generation, &state, &buffers, origin, &context,
-                        )
-                        .await;
+                        trace.mark(Stage::Worker);
+                        let result = if let Some(stream) = prepared {
+                            if stream.valid_for(Duration::from_secs(5)) {
+                                Ok(Prepared::YouTube(stream))
+                            } else {
+                                Err(Error::YouTube(ProviderError::AccessDenied))
+                            }
+                        } else {
+                            source(
+                                transport,
+                                &media,
+                                &buffers,
+                                Resolution {
+                                    generation,
+                                    state: &state,
+                                    origin,
+                                    ctx: &context,
+                                    trace: &trace,
+                                    speculative: false,
+                                },
+                            )
+                            .await
+                        };
                         state.publish(
                             1,
                             generation,
@@ -336,6 +408,42 @@ async fn actor(
                             &context,
                         );
                     }
+                    Job::Prefetch {
+                        generation,
+                        media,
+                        context,
+                    } => {
+                        let trace = Trace::default();
+                        let result = tokio::time::timeout(
+                            Duration::from_secs(15),
+                            source(
+                                transport,
+                                &media,
+                                &buffers,
+                                Resolution {
+                                    generation,
+                                    state: &state,
+                                    origin,
+                                    ctx: &context,
+                                    trace: &trace,
+                                    speculative: true,
+                                },
+                            ),
+                        )
+                        .await;
+                        if let Ok(Ok(Prepared::YouTube(stream))) = result
+                            && state.current(2, generation)
+                            && stream.valid_for(Duration::from_secs(5))
+                        {
+                            *state.prefetch.lock().unwrap() = Some(Prefetched {
+                                generation,
+                                media,
+                                stream,
+                                prepared_at: Instant::now(),
+                            });
+                            context.request_repaint();
+                        }
+                    }
                 }
             }),
         ));
@@ -344,35 +452,57 @@ async fn actor(
         stop(task).await;
     }
 }
+struct Resolution<'a> {
+    generation: u64,
+    state: &'a Shared,
+    origin: Instant,
+    ctx: &'a egui::Context,
+    trace: &'a Trace,
+    speculative: bool,
+}
 async fn source(
     client: Sources,
     media: &MediaId,
-    generation: u64,
-    state: &Shared,
     cache: &Mutex<Vec<(MediaId, Arc<Pcm>)>>,
-    origin: Instant,
-    ctx: &egui::Context,
+    resolution: Resolution<'_>,
 ) -> Result<Prepared, Error> {
+    let Resolution {
+        generation,
+        state,
+        origin,
+        ctx,
+        trace,
+        speculative,
+    } = resolution;
     if media.provider.as_str() == doremi_youtube::PROVIDER {
-        state.phase(generation, 1, ctx);
-        let result = match client
-            .youtube
-            .lock()
-            .await
-            .get_or_insert_with(doremi_youtube::Client::new)
-        {
-            Ok(client) => {
-                let result = client.resolve(media).await;
+        if !speculative {
+            state.phase(generation, 1, ctx);
+        }
+        trace.mark(Stage::Resolve);
+        trace.mark(Stage::ClientWait);
+        let fork = {
+            let mut shared = client.youtube.lock().await;
+            trace.mark(Stage::ClientAcquired);
+            match shared.get_or_insert_with(doremi_youtube::Client::new) {
+                Ok(client) => Ok(client.fork()),
+                Err(error) => Err(*error),
+            }
+        };
+        let result = match fork {
+            Ok(mut fork) => {
+                let result = fork.client.resolve_traced(media, trace).await;
                 if result.is_err() {
-                    let message =
-                        format!("YTM resolve failure stage={}", client.resolution_stage());
+                    let message = format!(
+                        "YTM resolve failure stage={}",
+                        fork.client.resolution_stage()
+                    );
                     #[cfg(target_os = "android")]
                     log::warn!("{message}");
                     #[cfg(not(target_os = "android"))]
                     eprintln!("{message}");
                 }
                 if result.is_err()
-                    && let Some(d) = client.player_diagnostic()
+                    && let Some(d) = fork.client.player_diagnostic()
                 {
                     let message = format!(
                         "YTM player failure http={} api={:?} status={} reason={} aac={} direct={} cipher={} drm={}",
@@ -390,9 +520,18 @@ async fn source(
                     #[cfg(not(target_os = "android"))]
                     eprintln!("{message}");
                 }
-                result
+                let mut shared = client.youtube.lock().await;
+                if shared
+                    .as_mut()
+                    .and_then(|client| client.as_mut().ok())
+                    .is_some_and(|client| client.complete(fork))
+                {
+                    result
+                } else {
+                    Err(ProviderError::Cancelled)
+                }
             }
-            Err(error) => Err(*error),
+            Err(error) => Err(error),
         };
         return result
             .map(|stream| Prepared::YouTube(Box::new(stream)))
@@ -457,11 +596,12 @@ mod tests {
     fn stale_queued_search_is_skipped_and_actor_joins_without_network() {
         runtime().block_on(async {
             let shared = Arc::new(Shared {
-                generation: [AtomicU64::new(2), AtomicU64::new(0)],
+                generation: [AtomicU64::new(2), AtomicU64::new(0), AtomicU64::new(0)],
                 closed: AtomicBool::new(false),
                 events: Mutex::new([None, None]),
                 phase_generation: AtomicU64::new(0),
                 phase: AtomicU8::new(0),
+                prefetch: Mutex::new(None),
             });
             let mut catalog = Catalog::new(
                 SessionId(8),

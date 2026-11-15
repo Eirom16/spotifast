@@ -196,16 +196,28 @@ impl Worker {
                         };
                         let result = async {
                             if let Request::YouTube(request) = &request {
-                                match youtube
-                                    .lock()
-                                    .await
-                                    .get_or_insert_with(doremi_youtube::Client::new)
-                                {
-                                    Ok(client) => client
-                                        .fetch(request)
-                                        .await
-                                        .map(|page| Arc::new(Results::from(page))),
-                                    Err(error) => Err(*error),
+                                let fork = {
+                                    let mut shared = youtube.lock().await;
+                                    match shared.get_or_insert_with(doremi_youtube::Client::new) {
+                                        Ok(client) => Ok(client.fork()),
+                                        Err(error) => Err(*error),
+                                    }
+                                };
+                                match fork {
+                                    Ok(mut fork) => {
+                                        let result = fork.client.fetch(request).await;
+                                        let mut shared = youtube.lock().await;
+                                        if shared
+                                            .as_mut()
+                                            .and_then(|client| client.as_mut().ok())
+                                            .is_some_and(|client| client.complete(fork))
+                                        {
+                                            result.map(|page| Arc::new(Results::from(page)))
+                                        } else {
+                                            Err(ProviderError::Cancelled)
+                                        }
+                                    }
+                                    Err(error) => Err(error),
                                 }
                             } else {
                                 match &mut client {

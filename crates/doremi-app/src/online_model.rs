@@ -17,10 +17,20 @@ struct LoadIntent {
     position: u64,
     deadline: Instant,
     sent: bool,
+    trace: Arc<doremi_youtube::latency::Trace>,
+    prepared: Option<Box<doremi_youtube::stream::Stream>>,
+}
+struct PrefetchIntent {
+    current: doremi_core::queue::EntryId,
+    media: MediaId,
+    revision: u64,
+    generation: u64,
+    sent: bool,
 }
 pub(super) struct State {
     pub selected: bool,
     pub origin: Instant,
+    pub intent_origin: Instant,
     session: u64,
     worker: Option<Worker>,
     debounce: Option<Instant>,
@@ -29,6 +39,9 @@ pub(super) struct State {
     phase_seen: &'static str,
     network: Option<(RequestId, Arc<doremi_commons::progressive::Metrics>)>,
     retired_network: Option<Arc<doremi_commons::progressive::Metrics>>,
+    trace: Option<(RequestId, Arc<doremi_youtube::latency::Trace>)>,
+    prefetch: Option<PrefetchIntent>,
+    prefetch_hit: bool,
 }
 impl State {
     pub fn failure_message(&self) -> Option<&'static str> {
@@ -40,6 +53,7 @@ impl State {
         Self {
             selected: false,
             origin: Instant::now(),
+            intent_origin: Instant::now(),
             session: 1,
             worker: None,
             debounce: None,
@@ -48,6 +62,9 @@ impl State {
             phase_seen: "idle",
             network: None,
             retired_network: None,
+            trace: None,
+            prefetch: None,
+            prefetch_hit: false,
         }
     }
     pub fn phase(&self) -> &'static str {
@@ -61,7 +78,14 @@ impl State {
             .unwrap_or("idle")
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":metrics.total_bytes.load(std::sync::atomic::Ordering::Acquire),"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
+        let latency = self.trace.as_ref().map(|(request, trace)| {
+            let mut value = serde_json::json!({"request":format!("{request:?}"),"requested_us":0,"origin":"host_queue_intent","acoustic_capture":false,"prefetched":self.prefetch_hit});
+            for (name, time) in doremi_youtube::latency::STAGES.iter().zip(trace.snapshot()) {
+                value[*name] = serde_json::json!(time);
+            }
+            value
+        });
+        serde_json::json!({"latency":latency,"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":metrics.total_bytes.load(std::sync::atomic::Ordering::Acquire),"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
     }
     pub fn feedback(&self, status: Status) -> Option<(bool, String)> {
         if !self.selected {
@@ -84,6 +108,7 @@ impl Model {
     // Keep the owner/worker across Android Activity recreation, but fence all
     // pending IO. The next foreground frame cannot accept retired completions.
     pub fn suspend_online(&mut self) {
+        self.cancel_prefetch();
         self.cancel_online_search();
         if self.catalog.search_status() == Status::Pending {
             self.catalog.cancel();
@@ -161,6 +186,23 @@ impl Model {
         }
         match self.online_worker().and_then(|worker| worker.next(1)) {
             Ok(generation) => {
+                let trace = Arc::new(doremi_youtube::latency::Trace::new(
+                    self.online.intent_origin,
+                ));
+                let prepared = self
+                    .online
+                    .prefetch
+                    .as_ref()
+                    .filter(|intent| {
+                        intent.revision == self.music.session.revision && !self.music.session.busy
+                    })
+                    .and_then(|_| self.online.worker.as_ref()?.take_prefetched(id));
+                self.online.prefetch_hit = prepared.is_some();
+                if prepared.is_some() {
+                    trace.mark(doremi_youtube::latency::Stage::Verified);
+                }
+                self.cancel_prefetch();
+                self.online.trace = Some((request, trace.clone()));
                 self.online.load = Some(LoadIntent {
                     generation,
                     request,
@@ -173,6 +215,8 @@ impl Model {
                             Duration::from_secs(12)
                         },
                     sent: false,
+                    trace,
+                    prepared,
                 });
                 self.notice = if id.provider.as_str() == doremi_youtube::PROVIDER {
                     "Preparando audio de YouTube Music…"
@@ -207,6 +251,65 @@ impl Model {
             if let Some(worker) = &self.online.worker {
                 let _ = worker.next(1);
             }
+        }
+    }
+    pub fn cancel_prefetch(&mut self) {
+        self.online.prefetch = None;
+        if let Some(worker) = &self.online.worker {
+            let _ = worker.next(2);
+        }
+    }
+    fn poll_prefetch(&mut self, ctx: &egui::Context) {
+        // Resolution only, once in the last 30 seconds. No speculative audio
+        // download, no periodic refresh and no work while paused/backgrounded.
+        let target = self.queue.current().and_then(|current| {
+            (self.queue.playback() == Playback::Playing
+                && self.online.load.is_none()
+                && !self.music.session.busy
+                && current.media.duration_ms.is_some_and(|duration| {
+                    duration.saturating_sub(self.queue.position_ms()) <= 30_000
+                }))
+            .then(|| self.queue.next_on_end())
+            .flatten()
+            .filter(|next| next.media.id.provider.as_str() == doremi_youtube::PROVIDER)
+            .map(|next| (current.id, next.media.id.clone()))
+        });
+        if self.online.prefetch.as_ref().is_some_and(|intent| {
+            target
+                .as_ref()
+                .is_none_or(|(current, media)| intent.current != *current || intent.media != *media)
+                || intent.revision != self.music.session.revision
+        }) {
+            self.cancel_prefetch();
+        }
+        let Some((current, media)) = target else {
+            return;
+        };
+        if self.online.prefetch.is_none()
+            && let Ok(generation) = self.online_worker().and_then(|worker| worker.next(2))
+        {
+            self.online.prefetch = Some(PrefetchIntent {
+                current,
+                media,
+                revision: self.music.session.revision,
+                generation,
+                sent: false,
+            });
+        }
+        if let Some(intent) = &mut self.online.prefetch
+            && !intent.sent
+        {
+            intent.sent = self
+                .online
+                .worker
+                .as_ref()
+                .unwrap()
+                .send(Job::Prefetch {
+                    generation: intent.generation,
+                    media: intent.media.clone(),
+                    context: ctx.clone(),
+                })
+                .is_ok();
         }
     }
     pub fn poll_online(&mut self, ctx: &egui::Context) {
@@ -262,7 +365,7 @@ impl Model {
                 request: intent.request.clone(),
                 context: ctx.clone(),
             };
-            if !self.online.worker.as_ref().unwrap().send(job) {
+            if self.online.worker.as_ref().unwrap().send(job).is_err() {
                 self.online.search = Some(intent);
                 ctx.request_repaint_after(Duration::from_millis(20));
             }
@@ -270,12 +373,20 @@ impl Model {
         if let Some(load) = &mut self.online.load
             && !load.sent
         {
-            load.sent = self.online.worker.as_ref().unwrap().send(Job::Source {
+            load.trace.mark(doremi_youtube::latency::Stage::Queued);
+            let result = self.online.worker.as_ref().unwrap().send(Job::Source {
                 generation: load.generation,
                 request: load.request,
                 media: load.media.clone(),
+                trace: load.trace.clone(),
+                prepared: load.prepared.take(),
                 context: ctx.clone(),
             });
+            match result {
+                Ok(()) => load.sent = true,
+                Err(Job::Source { prepared, .. }) => load.prepared = prepared,
+                Err(_) => unreachable!("source send returned another job"),
+            }
             ctx.request_repaint_after(Duration::from_millis(50));
         }
         let events = self
@@ -333,10 +444,13 @@ impl Model {
                     match result {
                         Ok(Prepared::YouTube(stream)) => {
                             let length = stream.length();
+                            let started = load.trace.origin();
+                            let trace = load.trace.clone();
                             let factory: doremi_player::StreamFactory = Box::new(move |cancel| {
                                 let reader = stream
                                     .reader(move || cancel.cancelled())
-                                    .map_err(|_| EngineError::Input)?;
+                                    .map_err(|_| EngineError::Input)?
+                                    .with_trace(trace);
                                 let source = doremi_player::ogg_stream::Vorbis::aac_from_read_seek(
                                     reader, length,
                                 )
@@ -348,7 +462,12 @@ impl Model {
                                 .as_mut()
                                 .ok_or(EngineError::Closed)
                                 .and_then(|engine| {
-                                    engine.load_stream(request, factory, load.position)
+                                    engine.load_stream_since(
+                                        request,
+                                        factory,
+                                        load.position,
+                                        started,
+                                    )
                                 })
                             {
                                 self.notice = format!(
@@ -460,12 +579,60 @@ impl Model {
                 _ => {}
             }
         }
+        self.poll_prefetch(ctx);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn speculative_resolution_is_single_bounded_and_fenced_by_pause_repeat_and_session() {
+        let mut model = Model::new(Preferences::default());
+        *model.music.session.client.try_lock().unwrap() = Some(Err(ProviderError::Transport));
+        model.start_context(
+            ["abcdefghijk", "bcdefghijkl", "cdefghijklm"]
+                .into_iter()
+                .map(|local| Media {
+                    id: doremi_youtube::id(local).unwrap(),
+                    title: "Synthetic selection".into(),
+                    duration_ms: Some(20_000),
+                })
+                .collect(),
+            0,
+        );
+        let request = model.online.load.take().unwrap().request;
+        model.event(Event::Ready(request));
+        let ctx = egui::Context::default();
+        model.poll_prefetch(&ctx);
+        let intent = model.online.prefetch.as_ref().unwrap();
+        assert_eq!(intent.media, doremi_youtube::id("bcdefghijkl").unwrap());
+        let generation = intent.generation;
+        model.poll_prefetch(&ctx);
+        assert_eq!(
+            model.online.prefetch.as_ref().unwrap().generation,
+            generation
+        );
+        model.command(Command::Pause);
+        model.poll_prefetch(&ctx);
+        assert!(model.online.prefetch.is_none());
+        assert!(!model.online.worker.as_ref().unwrap().current(2, generation));
+        model.command(Command::SetRepeat(doremi_core::queue::Repeat::Track));
+        model.command(Command::Play);
+        model.poll_prefetch(&ctx);
+        assert_eq!(
+            model.online.prefetch.as_ref().unwrap().media,
+            doremi_youtube::id("abcdefghijk").unwrap(),
+        );
+        let generation = model.online.prefetch.as_ref().unwrap().generation;
+        model.music.session.revision += 1;
+        model.poll_prefetch(&ctx);
+        assert!(!model.online.worker.as_ref().unwrap().current(2, generation));
+        model.suspend_online();
+        assert!(model.online.prefetch.is_none());
+        assert!(model.audio.is_none());
+    }
+
     #[test]
     fn cold_youtube_resolution_keeps_its_budget_and_can_still_be_cancelled() {
         let mut model = Model::new(Preferences::default());

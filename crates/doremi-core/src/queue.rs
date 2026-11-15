@@ -287,6 +287,28 @@ impl Queue {
             .chain(s.order[start..].iter().map(|index| &s.context[*index]))
     }
 
+    /// Predict natural EOF without changing queue intent, including repeat and
+    /// heard-history forward navigation. Hosts may prepare, never select, this entry.
+    pub fn next_on_end(&self) -> Option<&Entry> {
+        let s = &self.snapshot;
+        if s.repeat == Repeat::Track && self.current().is_some() {
+            return self.current();
+        }
+        if let Some(current) = s.forward.last() {
+            return Some(&current.entry);
+        }
+        if let Some(entry) = s.manual.first() {
+            return Some(entry);
+        }
+        let next = s.cursor.map_or(0, |cursor| cursor + 1);
+        let next = if next >= s.order.len() && s.repeat == Repeat::Context {
+            0
+        } else {
+            next
+        };
+        s.order.get(next).map(|index| &s.context[*index])
+    }
+
     pub fn playback(&self) -> Playback {
         self.playback
     }
@@ -706,6 +728,45 @@ mod tests {
             assert_eq!(a, b);
         }
         assert_eq!(a.snapshot.history.len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn prefetch_prediction_matches_eof_across_order_repeat_manual_and_forward_history() {
+        for order in [Order::Sequential, Order::Shuffled(vec![2, 0, 1])] {
+            for repeat in [Repeat::Off, Repeat::Context, Repeat::Track] {
+                let mut queue = Queue::default();
+                queue
+                    .command(Command::StartContext {
+                        media: vec![song(), song(), song()],
+                        start: 0,
+                        order: order.clone(),
+                    })
+                    .unwrap();
+                queue
+                    .command(Command::Append(vec![song(), song()]))
+                    .unwrap();
+                queue.command(Command::SetRepeat(repeat)).unwrap();
+                for step in 0..12 {
+                    if step == 4 {
+                        queue.command(Command::Previous).unwrap();
+                    }
+                    if step == 7 {
+                        queue.command(Command::ClearManual).unwrap();
+                    }
+                    let Some(request) = queue.request else { break };
+                    queue.event(Event::Ready(request)).unwrap();
+                    let before = queue.clone();
+                    let predicted = queue.next_on_end().cloned();
+                    assert_eq!(queue, before, "prediction mutated playback");
+                    queue.event(Event::Ended(request)).unwrap();
+                    assert_eq!(
+                        queue.current(),
+                        predicted.as_ref(),
+                        "{order:?} {repeat:?} {step}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

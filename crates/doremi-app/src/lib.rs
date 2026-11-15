@@ -322,6 +322,10 @@ impl Model {
         self.command_with_import_policy(command, true);
     }
     fn command_with_import_policy(&mut self, command: Command, cancel_import: bool) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        {
+            self.online.intent_origin = Instant::now();
+        }
         self.note_history();
         let cancelled = matches!(&command, Command::Cancel);
         if cancelled && cancel_import {
@@ -344,6 +348,8 @@ impl Model {
             }
             Err(error) => self.notice = format!("No se pudo cambiar la cola: {error:?}"),
         }
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        self.cancel_prefetch();
         self.revision += 1;
     }
     fn enable_audio(&mut self) {
@@ -375,6 +381,10 @@ impl Model {
         self.real_audio() && self.queue.playback() == Playback::Playing
     }
     fn event(&mut self, event: Event) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        {
+            self.online.intent_origin = Instant::now();
+        }
         match self.queue.event(event) {
             Ok(effects) => self.effects(effects),
             Err(error) => self.notice = format!("Audio: {error:?}"),
@@ -856,11 +866,13 @@ impl DoremiApp {
             );
             return;
         }
-        let audio_metrics = model.audio.as_ref().and_then(Engine::metrics).map(|m| serde_json::json!({
+        let audio_metrics = model.audio.as_ref().and_then(|engine| engine.metrics().map(|m| serde_json::json!({
+            "request":engine.current_request().map(|request| format!("{request:?}")),
             "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
             "streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
             "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
-        }));
+            "first_nonzero_callback_us":m.first_nonzero_callback_us,"device_start_us":m.device_start_us,"device_ready_us":m.device_ready_us,
+        })));
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         let music_catalog = {
             let mut value = model.music.snapshot();
