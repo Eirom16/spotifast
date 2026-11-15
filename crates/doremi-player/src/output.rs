@@ -54,6 +54,10 @@ pub struct Metrics {
     pub streaming: bool,
     pub first_pcm_us: Option<u64>,
     pub first_callback_us: Option<u64>,
+    /// First post-gain, converted non-silent sample at the callback, not audible sound.
+    pub first_nonzero_callback_us: Option<u64>,
+    pub device_start_us: Option<u64>,
+    pub device_ready_us: Option<u64>,
     /// CPAL notifications, not the hardware's raw cumulative xrun count.
     pub reported_xruns: u64,
     pub first_xrun_frame: Option<u64>,
@@ -69,6 +73,9 @@ struct Stats {
     bytes: AtomicU64,
     first_pcm: AtomicU64,
     first_callback: AtomicU64,
+    first_nonzero_callback: AtomicU64,
+    device_start: AtomicU64,
+    device_ready: AtomicU64,
     xruns: AtomicU64,
     first_xrun_frame: AtomicU64,
     last_xrun_frame: AtomicU64,
@@ -196,6 +203,16 @@ impl Engine {
     ) -> Result<(), EngineError> {
         self.enqueue(request, Source::Stream(factory), position)
     }
+    /// Use the host request's monotonic origin, including queue and resolution.
+    pub fn load_stream_since(
+        &mut self,
+        request: RequestId,
+        factory: StreamFactory,
+        position: u64,
+        started: Instant,
+    ) -> Result<(), EngineError> {
+        self.enqueue_since(request, Source::Stream(factory), position, started)
+    }
     /// The output actor opens the selected regular WAV file; a separate worker
     /// decodes/resamples into a fixed-capacity buffer. The caller performs no IO.
     pub fn load_wav(
@@ -244,6 +261,15 @@ impl Engine {
         source: Source,
         position: u64,
     ) -> Result<(), EngineError> {
+        self.enqueue_since(request, source, position, Instant::now())
+    }
+    fn enqueue_since(
+        &mut self,
+        request: RequestId,
+        source: Source,
+        position: u64,
+        started: Instant,
+    ) -> Result<(), EngineError> {
         self.control.playing.store(false, Ordering::Release);
         let epoch = self
             .control
@@ -263,7 +289,7 @@ impl Engine {
             source,
             position,
             stats,
-            started: Instant::now(),
+            started,
         };
         self.sender
             .as_ref()
@@ -328,6 +354,9 @@ impl Engine {
             streaming: s.streaming.load(Ordering::Acquire),
             first_pcm_us: optional(s.first_pcm.load(Ordering::Acquire)),
             first_callback_us: optional(s.first_callback.load(Ordering::Acquire)),
+            first_nonzero_callback_us: optional(s.first_nonzero_callback.load(Ordering::Acquire)),
+            device_start_us: optional(s.device_start.load(Ordering::Acquire)),
+            device_ready_us: optional(s.device_ready.load(Ordering::Acquire)),
             reported_xruns: xruns,
             first_xrun_frame: (xruns > 0).then(|| s.first_xrun_frame.load(Ordering::Acquire)),
             last_xrun_frame: (xruns > 0).then(|| s.last_xrun_frame.load(Ordering::Acquire)),
@@ -585,6 +614,10 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
             .capacity
             .store(pcm.frames() as u64, Ordering::Release);
     }
+    load.stats.device_start.store(
+        load.started.elapsed().as_micros().max(1) as u64,
+        Ordering::Release,
+    );
     let (device, supported) = device()?;
     let format = supported.sample_format();
     let config: cpal::StreamConfig = supported.into();
@@ -670,6 +703,10 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         cpal::SampleFormat::F64 => build!(f64),
         _ => return Err(EngineError::UnsupportedFormat),
     }?;
+    load.stats.device_ready.store(
+        load.started.elapsed().as_micros().max(1) as u64,
+        Ordering::Release,
+    );
     Ok(Active {
         stream,
         feed,
@@ -695,6 +732,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
     let channels = usize::from(config.channels);
     let errors = stats.clone();
     let mut first_callback = true;
+    let mut first_nonzero = true;
     device
         .build_output_stream(
             config,
@@ -735,6 +773,13 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                         }
                         frame => frame,
                     } {
+                        if first_callback {
+                            stats.first_callback.store(
+                                started.elapsed().as_micros().max(1) as u64,
+                                Ordering::Release,
+                            );
+                            first_callback = false;
+                        }
                         for (channel, out) in frame.iter_mut().enumerate() {
                             let value = if channels == 1 {
                                 (sample[0] + sample[1]) * 0.5
@@ -748,6 +793,13 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                             let sample = T::from_sample(value);
                             if sample != silence {
                                 nonzero += 1;
+                                if first_nonzero {
+                                    stats.first_nonzero_callback.store(
+                                        started.elapsed().as_micros().max(1) as u64,
+                                        Ordering::Release,
+                                    );
+                                    first_nonzero = false;
+                                }
                             }
                             *out = sample;
                         }
@@ -758,13 +810,6 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                 }
                 stats.nonzero.fetch_add(nonzero, Ordering::Relaxed);
                 stats.buffering.store(buffering, Ordering::Release);
-                if delivered > 0 && first_callback {
-                    stats.first_callback.store(
-                        started.elapsed().as_micros().max(1) as u64,
-                        Ordering::Release,
-                    );
-                    first_callback = false;
-                }
                 stats.frames.fetch_add(delivered, Ordering::Relaxed);
                 stats.callbacks.fetch_add(1, Ordering::Relaxed);
                 stats.position.store(input.position_ms(), Ordering::Release);

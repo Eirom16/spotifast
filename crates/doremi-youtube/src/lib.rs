@@ -10,6 +10,7 @@ pub mod credentials;
 pub mod embedded;
 #[cfg(any(target_os = "linux", target_os = "windows"))]
 mod extractor;
+pub mod latency;
 pub mod parser;
 mod player_config;
 mod player_program;
@@ -103,10 +104,18 @@ pub struct Account {
     pub name: String,
 }
 
+/// Worker-local mutable state over the same HTTP pool and immutable session.
+/// Completed work may only publish back into the session it started with.
+pub struct Fork {
+    pub client: Client,
+    identity: std::sync::Arc<()>,
+}
+
 pub struct Client {
     http: Http,
     // Deliberately no Debug/Serialize: this never enters catalog snapshots/logs.
-    session: Option<session::Session>,
+    session: Option<std::sync::Arc<session::Session>>,
+    session_identity: std::sync::Arc<()>,
     base: String,
     player_diagnostic: Option<stream::PlayerDiagnostic>,
     resolution_stage: &'static str,
@@ -114,6 +123,42 @@ pub struct Client {
     thumbnails: std::collections::VecDeque<(MediaId, String)>,
 }
 impl Client {
+    pub fn fork(&self) -> Fork {
+        Fork {
+            identity: self.session_identity.clone(),
+            client: Self {
+                http: self.http.clone(),
+                session: self.session.clone(),
+                session_identity: self.session_identity.clone(),
+                base: self.base.clone(),
+                player_diagnostic: None,
+                resolution_stage: "idle",
+                player_config: self.player_config.clone(),
+                thumbnails: std::collections::VecDeque::new(),
+            },
+        }
+    }
+
+    /// False means login/logout replaced this worker's session. Discard its result.
+    pub fn complete(&mut self, fork: Fork) -> bool {
+        if !std::sync::Arc::ptr_eq(&self.session_identity, &fork.identity) {
+            return false;
+        }
+        self.session = fork.client.session;
+        self.session_identity = fork.client.session_identity;
+        if let Some(config) = fork.client.player_config
+            && self.player_config.as_ref().is_none_or(|current| {
+                config.loaded > current.loaded || config.loaded == current.loaded && config.prepared
+            })
+        {
+            self.player_config = Some(config);
+        }
+        for (id, url) in fork.client.thumbnails {
+            self.remember_thumbnail(id, &url);
+        }
+        true
+    }
+
     pub fn new() -> Result<Self, Error> {
         let http = Http::builder()
             .user_agent(USER_AGENT)
@@ -125,6 +170,7 @@ impl Client {
         Ok(Self {
             http,
             session: None,
+            session_identity: std::sync::Arc::new(()),
             base: format!("{ORIGIN}/youtubei/v1/"),
             player_diagnostic: None,
             resolution_stage: "idle",
@@ -134,6 +180,7 @@ impl Client {
     }
     pub fn clear_session(&mut self) {
         self.session = None;
+        self.session_identity = std::sync::Arc::new(());
     }
     pub fn signed_in(&self) -> bool {
         self.session.is_some()
@@ -145,7 +192,8 @@ impl Client {
         self.resolution_stage
     }
     pub async fn sign_in(&mut self, cookie: String) -> Result<Account, Error> {
-        self.session = Some(session::Session::parse(&cookie)?);
+        self.session = Some(std::sync::Arc::new(session::Session::parse(&cookie)?));
+        self.session_identity = std::sync::Arc::new(());
         match self.account().await {
             Ok(account) => Ok(account),
             Err(error) => {
@@ -687,6 +735,37 @@ mod protocol_tests {
         assert!(!client.signed_in());
         task.await.unwrap();
     }
+    #[tokio::test]
+    async fn worker_forks_share_credentials_and_pool_but_cannot_commit_across_logout() {
+        let mut client = Client::new().unwrap();
+        client.session = Some(std::sync::Arc::new(
+            session::Session::parse("SAPISID=fixture-only").unwrap(),
+        ));
+        let mut fork = client.fork();
+        assert!(std::sync::Arc::ptr_eq(
+            client.session.as_ref().unwrap(),
+            fork.client.session.as_ref().unwrap(),
+        ));
+        let id = id("abcdefghijk").unwrap();
+        fork.client
+            .remember_thumbnail(id.clone(), "https://lh3.googleusercontent.com/fixture");
+        assert!(client.thumbnail(&id).is_none());
+        assert!(client.complete(fork));
+        assert!(client.thumbnail(&id).is_some());
+        let stale = client.fork();
+        client.clear_session();
+        assert!(!client.complete(stale));
+        assert!(!client.signed_in());
+        // Guest -> logout -> guest is also a new identity, not an ABA match.
+        let stale_guest = client.fork();
+        client.clear_session();
+        assert!(!client.complete(stale_guest));
+        let mut expired = client.fork();
+        expired.client.clear_session();
+        assert!(client.complete(expired));
+        assert!(!client.signed_in());
+    }
+
     #[tokio::test]
     async fn expired_session_is_cleared_without_guest_retry() {
         let (base, task) =

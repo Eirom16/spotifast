@@ -9,6 +9,7 @@ const ORIGIN: &str = "https://www.youtube.com";
 const IFRAME_LIMIT: usize = 64 * 1024;
 const CACHE_TTL: Duration = Duration::from_secs(6 * 3600);
 
+#[derive(Clone)]
 pub(crate) struct PlayerConfig {
     pub(crate) timestamp: u32,
     pub(crate) loaded: Instant,
@@ -191,7 +192,9 @@ mod tests {
         ])
         .await;
         let mut client = Client::new().unwrap();
-        client.session = Some(crate::session::Session::parse("SAPISID=fixture-only").unwrap());
+        client.session = Some(std::sync::Arc::new(
+            crate::session::Session::parse("SAPISID=fixture-only").unwrap(),
+        ));
         assert_eq!(
             load(&client.http, base.trim_end_matches('/'))
                 .await

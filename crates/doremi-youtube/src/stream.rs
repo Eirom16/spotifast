@@ -1,6 +1,7 @@
 //! Desktop yt-dlp resolution and bounded native HTTP range input.
 //! The original native resolver is retained for explicit diagnostics and Android,
 //! never as an automatic fallback after an extractor or media access refusal.
+use crate::latency::{Stage, Trace};
 use crate::{Client, Error, PROVIDER, id};
 use doremi_core::media::MediaId;
 use reqwest::{Url, redirect::Policy};
@@ -137,6 +138,11 @@ impl Stream {
     pub fn length(&self) -> u64 {
         self.length
     }
+    pub fn valid_for(&self, margin: Duration) -> bool {
+        Instant::now()
+            .checked_add(margin)
+            .is_some_and(|at| at < self.expires)
+    }
     pub fn reader(
         self,
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
@@ -163,6 +169,7 @@ impl Stream {
             cached_at: 0,
             bytes: Vec::new(),
             cancelled: Box::new(cancelled),
+            trace: None,
         })
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -207,6 +214,13 @@ impl Stream {
 }
 impl Client {
     pub async fn resolve(&mut self, media: &MediaId) -> Result<Stream, Error> {
+        self.resolve_traced(media, &Trace::default()).await
+    }
+    pub async fn resolve_traced(
+        &mut self,
+        media: &MediaId,
+        trace: &Trace,
+    ) -> Result<Stream, Error> {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         {
             self.player_diagnostic = None;
@@ -222,12 +236,21 @@ impl Client {
                 self.account().await?;
             }
             self.resolution_stage = "extractor";
-            let stream = crate::extractor::resolve(media, self.session.as_ref()).await?;
+            trace.mark(Stage::Extraction);
+            let stream = crate::extractor::resolve(media, self.session.as_deref()).await?;
+            trace.mark(Stage::Extracted);
+            trace.mark(Stage::Verified);
             self.resolution_stage = "ready";
             Ok(stream)
         }
         #[cfg(not(any(target_os = "linux", target_os = "windows")))]
-        self.resolve_native(media).await
+        {
+            trace.mark(Stage::Extraction);
+            let stream = self.resolve_native(media).await?;
+            trace.mark(Stage::Extracted);
+            trace.mark(Stage::Verified);
+            Ok(stream)
+        }
     }
     /// Preserved native experiment. It is not retried after a desktop failure.
     pub async fn resolve_native(&mut self, media: &MediaId) -> Result<Stream, Error> {
@@ -433,8 +456,13 @@ pub struct Reader {
     cached_at: u64,
     bytes: Vec<u8>,
     cancelled: Box<dyn Fn() -> bool + Send + Sync>,
+    trace: Option<std::sync::Arc<Trace>>,
 }
 impl Reader {
+    pub fn with_trace(mut self, trace: std::sync::Arc<Trace>) -> Self {
+        self.trace = Some(trace);
+        self
+    }
     fn check(&self) -> io::Result<()> {
         if (self.cancelled)() {
             return Err(io::ErrorKind::ConnectionAborted.into());
@@ -448,6 +476,9 @@ impl Reader {
         self.check()?;
         let start = self.position / CHUNK as u64 * CHUNK as u64;
         let end = (start + CHUNK as u64).min(self.grant.length) - 1;
+        if let Some(trace) = &self.trace {
+            trace.mark(Stage::Http);
+        }
         let mut response = self
             .http
             .get(range_url(&self.grant.url, start, end)?)
@@ -528,6 +559,10 @@ impl Reader {
             );
         }
         self.cached_at = start;
+        if let Some(trace) = &self.trace {
+            // Useful means a validated block, not an unvalidated socket byte.
+            trace.mark(Stage::FirstBytes);
+        }
         Ok(())
     }
 }
