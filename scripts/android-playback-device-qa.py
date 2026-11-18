@@ -17,8 +17,14 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.eirom.doremi.dev"
+# Byte-stable user data across a journey. The queue checkpoint is compared
+# by user content instead: the app re-persists it at every normal launch.
 NORMAL_FILES = ("library-v1.json", "playlists-v1.json", "history-v1.json",
-                "queue-v1.json", "preferences-v1.json", "youtube-session-v1.bin")
+                "preferences-v1.json", "youtube-session-v1.bin")
+QUEUE_FILE = "queue-v1.json"
+# Documented volatile checkpoint fields: playback progress and ID allocation
+# (crates/doremi-core/src/queue/checkpoint.rs). Everything else is user data.
+QUEUE_VOLATILE = ("position_ms", "next_entry", "request_watermark")
 
 
 def adb(*arguments, timeout=45):
@@ -29,6 +35,53 @@ def normal_hashes():
     command = "for f in " + " ".join("files/" + name for name in NORMAL_FILES)
     command += '; do if [ -f "$f" ]; then sha256sum "$f"; fi; done'
     return adb("shell", "run-as " + PACKAGE + " sh -c " + shlex.quote(command)).decode()
+
+
+def queue_checkpoint():
+    return json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/" + QUEUE_FILE))
+
+
+def digest_map(text):
+    result = {}
+    for line in text.splitlines():
+        digest, _, name = line.partition("  ")
+        if name:
+            result[name] = digest
+    return result
+
+
+def queue_projection(checkpoint):
+    if checkpoint is None:
+        return None
+    return {key: value for key, value in checkpoint.items() if key not in QUEUE_VOLATILE}
+
+
+def queue_delta(before, after):
+    if before is None or after is None:
+        return None
+    return {key: [before.get(key), after.get(key)]
+            for key in QUEUE_VOLATILE if before.get(key) != after.get(key)}
+
+
+def profile_preserved(before, after):
+    """Whether real user data survived the journey unchanged.
+
+    before/after are (sha256sum text, queue checkpoint or None). The five
+    NORMAL_FILES must be byte-identical; the queue must keep identical user
+    content, while its documented volatile fields may move.
+    """
+    map_before, map_after = digest_map(before[0]), digest_map(after[0])
+    for name in NORMAL_FILES:
+        path = "files/" + name
+        if map_before.get(path) != map_after.get(path):
+            return False, name + " changed"
+    if queue_projection(before[1]) != queue_projection(after[1]):
+        return False, QUEUE_FILE + " content changed"
+    if before[1] is not None and after[1] is not None:
+        for checkpoint in (before[1], after[1]):
+            if not set(QUEUE_VOLATILE) <= set(checkpoint):
+                return False, QUEUE_FILE + " lost checkpoint fields"
+    return True, ""
 
 
 class Journey:
@@ -275,8 +328,9 @@ def main():
     journey.report.update(apk_sha256=digest, device={
         key: adb("shell", "getprop", key).decode().strip()
         for key in ("ro.product.model", "ro.build.version.sdk", "ro.product.cpu.abilist")})
-    before = normal_hashes()
-    (args.output / "normal-before.sha256").write_text(before)
+    before_hashes = normal_hashes()
+    before_queue = queue_checkpoint()
+    (args.output / "normal-before.sha256").write_text(before_hashes)
     try:
         with verifier["qa_session"](args.profile):
             adb("shell", "am", "start", "-W", "-n", PACKAGE + "/dev.eirom.doremi.MainActivity",
@@ -291,11 +345,14 @@ def main():
         journey.report.update(result="failed", error=str(error))
         raise
     finally:
-        after = normal_hashes()
-        journey.report["normal_profile_preserved"] = before == after
-        (args.output / "normal-after.sha256").write_text(after)
+        after_hashes = normal_hashes()
+        after_queue = queue_checkpoint()
+        preserved, reason = profile_preserved((before_hashes, before_queue), (after_hashes, after_queue))
+        journey.report["normal_profile_preserved"] = preserved
+        journey.report["queue_checkpoint_delta"] = queue_delta(before_queue, after_queue)
+        (args.output / "normal-after.sha256").write_text(after_hashes)
         (args.output / "report.json").write_text(json.dumps(journey.report, indent=2) + "\n")
-        assert before == after, "Normal-profile data changed; inspect retained hashes"
+        assert preserved, "Normal-profile data changed: " + reason
     print(args.output)
 
 
