@@ -214,7 +214,7 @@ El callback sigue sin red, asignaciones pesadas, mutex ni joins.
 | --- | --- | --- |
 | Linux | Compilación de metadatos del host/resolvedor/player, Clippy, core, 43 tests YouTube, 19 player, checks Python | Sin dos canciones nuevas de 15 s, salida física, captura acústica, ni medición de latencia real. Tests del host compilados por Clippy, no ejecutados |
 | Windows | Inspección de cfg y workflow preparado; evidencia previa de CI del fix fuente | No compilación/ejecución del commit nuevo en Windows, ni dispositivo físico |
-| Android | Núcleo puro y contratos locales; `adb devices` ejecutado sin dispositivos | No APK de este commit, NDK local no instalado, sin lifecycle/ANR/memoria/audio físico de este cambio |
+| Android | Núcleo puro y contratos locales; sesión física 2026-11-15 con el APK base `4cdcce6` (sha256 verificado contra lo instalado) en SM-J701M/Android 9: viaje ADB `original-native` y `pause` superados, 0 xruns, PSS estable, y perfil normal estable salvo checkpoint de cola y re-sello de sesión (causa fundamentada en código, ver 7.1) | No APK del commit de integración (no compilado), sin dos pistas YouTube de 15 s, sin captura acústica ni latencia click-to-callback; parte del viaje ADB abortada por la aserción estricta de geometría del arnés |
 
 No se invocó el probe con una sesión real ni se eligió arbitrariamente una
 pareja YouTube fuera de un corpus autorizado en el repositorio. El corpus
@@ -223,6 +223,97 @@ acepta dos IDs seleccionados explícitamente por el operador y exige 15 s de
 PCM por pista y pausa/reanudación, pero no reemplaza la ruta de UI/prefetch.
 No se atribuye a estas modificaciones la reproducción física histórica de
 Commons ni los problemas de acceso YouTube documentados previamente.
+
+### 7.1 Sesión física Android (APK base `4cdcce6`, 2026-11-15)
+
+Evidencia fuera del árbol:
+`/home/eirom/.local/share/doremi/product-qa/2026-11-15/playback-android-4cdcce6/`
+(el guion del viaje queda copiado dentro de cada corrida como `qa-script.py`;
+la copia del repositorio es `scripts/android-playback-device-qa.py`).
+
+Dispositivo: Samsung SM-J701M, Android 9 (SDK 28), `armeabi-v7a`. El APK
+instalado se verificó por `pm path` + `sha256sum` contra el artefacto:
+`8ed178daec1ef8b52f76d882288a8b4b359c3ad912aa61ef7a9ad11317ef7f86`
+(`installed_apk_matches: true`). Es el APK del commit base de producto
+`4cdcce6`, **no** del commit de integración `23b1a5f`
+(`integration_apk_available: false`): la sesión valida el punto de partida y
+el arnés QA físico, no los cambios de esta rama.
+
+**Viaje ADB (`adb-playback/`):**
+
+- `original-native` (demo, 15 s por UI, camino Rust nativo): superado. Primer
+  PCM propio observado a 553.340 µs desde el comando ADB; primer callback a
+  665.608 µs. El alcance temporal es «comando ADB → primera instantánea no
+  silenciosa», no click-to-callback. 741 callbacks, 726.728 frames,
+  1.452.986 muestras no nulas, 0 xruns reportados, `buffering=false`,
+  salida 48 kHz.
+- `pause`: superado con `position_ms=17620`.
+- PSS total 57.422 → 53.440 KiB durante los 15 s (pid 12456); CPU
+  411 → 828 ticks.
+- El resto del viaje abortó con `Own QA surface geometry changed; no input
+  injected`: la aserción de geometría del arnés (superficie QA estable por
+  captura) falló con el editor de búsqueda enfocado (`input.focused: true`
+  en `failure-state.json`), coherente con el IME desplazando el contenido.
+  Es una propiedad de seguridad del arnés —no inyectar toques contra una
+  superficie desplazada—, no un defecto del producto. La aserción demostró
+  ser demasiado estricta para flujos con teclado; se relajará conservando la
+  validación de rect por tap y la comprobación de escala.
+
+**Corridas instrumentadas (`instrumentation-failed/`, `music-chopin/`):**
+
+- `instrumentation-failed/`: `FAIL: tap:row-more:dawn` — el control
+  `row-more:dawn` no estaba presente en la instantánea QA al tocar;
+  `qa-input-delivery.json` retiene la entrega del último toque y el destino
+  intentado.
+- `music-chopin/`: la búsqueda «Chopin» llegó a `search_status: "Ready"` con
+  resultado seleccionable (`select:26896924` y `save:26896924` visibles),
+  pero `saved_media` permaneció vacío: el guardado nunca se confirmó. Fallo
+  registrado: `AssertionError: Not observed: fresh Rust state; current=dawn
+  playback=Paused position_ms=0`.
+
+**Perfil normal (hashes de tres capturas; `normal-profile-before.sha256`,
+`adb-playback/normal-{before,after}.sha256`):**
+
+| Fichero | Inicio de sesión | Antes del viaje ADB | Tras el viaje ADB |
+| --- | --- | --- | --- |
+| `files/library-v1.json` | `b5d5ead5…` | `b5d5ead5…` | `b5d5ead5…` |
+| `files/playlists-v1.json` | `0312125d…` | `0312125d…` | `0312125d…` |
+| `files/history-v1.json` | `75a13620…` | `75a13620…` | `75a13620…` |
+| `files/preferences-v1.json` | `17fc71ed…` | `17fc71ed…` | `17fc71ed…` |
+| `files/queue-v1.json` | `18233f90…` | `eeceda87…` | `829b454d…` |
+| `files/youtube-session-v1.bin` | `40095817…` | `5e50f35d…` | `5e50f35d…` |
+
+El reporte marca `normal_profile_preserved: false` por exigir igualdad
+estricta de todos los ficheros. La lectura correcta, fundamentada en código:
+
+- Biblioteca, playlists, historial y preferencias quedaron **bit a bit
+  estables** en las tres capturas; la biblioteca conservada se corrobora en
+  `music-chopin/normal-library-preserved.json`.
+- `queue-v1.json` es el checkpoint de cola: el trabajador de persistencia
+  (`crates/doremi-library`) solo escribe cuando los bytes serializados
+  difieren, y el checkpoint lleva `request_watermark`, `position_ms` y
+  `next_entry` (`crates/doremi-core/src/queue/checkpoint.rs`). Un lanzamiento
+  que restaura la cola y una reproducción la avanzan: deltas esperados.
+- `youtube-session-v1.bin` es el almacén cifrado de la sesión
+  (`android/app/src/main/java/dev/eirom/doremi/YoutubeSessionStore.java`):
+  AES/GCM con `setRandomizedEncryptionRequired(true)`, es decir, un IV
+  aleatorio de 12 bytes nuevo por escritura, y el actor de sesión Rust
+  re-sella la cookie tras cada `sign_in` exitoso, incluida la restauración
+  por lanzamiento (`crates/doremi-app/src/youtube_session.rs`,
+  `credentials::store` después de validar; Android llama
+  `session.restore()` en cada creación de renderer,
+  `crates/doremi-app/src/android_native.rs`). Por diseño, texto claro
+  idéntico produce cifrado distinto en cada lanzamiento: el cambio de hash
+  entre lanzamientos no indica deriva de datos de sesión. No se descifró ni
+  volcó el fichero; la verificación de contenido se limita a este análisis de
+  código y a la estabilidad de los demás ficheros.
+
+**Qué valida y qué no esta sesión:** valida el arnés QA físico y la
+reproducción demo por camino Rust nativo con audio no silencioso, 0 xruns y
+pausa con posición persistida en el dispositivo objetivo, sin alterar los
+datos reales del usuario. No valida el commit de integración (su APK no
+existe), ni dos pistas YouTube de 15 s, ni captura acústica, ni latencia
+click-to-callback; el camino Python/Deno no aplica en Android por diseño.
 
 ## 8. Checks y CI
 
@@ -341,7 +432,10 @@ configuración global ni persistir una configuración nueva.
   candidato. Conservar todos los fallos. Ordenar costes por trazas reales.
 - Probar cancelación durante red/extracción y saltos rápidos, sin audio obsoleto.
 - Revisar/integrar los tres commits concurrentes de producto, sin reemplazar UI.
-- Prueba física Windows y APK Android del commit exacto cuando haya hardware.
+- Prueba física Windows y APK Android **del commit de integración** (la
+  sesión del 2026-11-15 cubrió el APK base `4cdcce6`; ver 7.1). Repetir el
+  viaje con la aserción de geometría relajada y confirmar el guardado de
+  resultados de búsqueda.
 
 ### P1: rendimiento y cobertura pendientes
 
