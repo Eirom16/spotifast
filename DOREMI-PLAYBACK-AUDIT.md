@@ -256,8 +256,15 @@ el arnés QA físico, no los cambios de esta rama.
   en `failure-state.json`), coherente con el IME desplazando el contenido.
   Es una propiedad de seguridad del arnés —no inyectar toques contra una
   superficie desplazada—, no un defecto del producto. La aserción demostró
-  ser demasiado estricta para flujos con teclado; se relajará conservando la
-  validación de rect por tap y la comprobación de escala.
+  ser demasiado estricta para flujos con teclado y se relajó en
+  `scripts/android-playback-device-qa.py`: los cambios de escala o anchura
+  abortan (invalidan el mapeo de coordenadas) y el cambio de altura del IME
+  se tolera y se registra como `geometry_events` en el reporte; la
+  validación de rect por tap contra el viewport vivo permanece, y
+  `control()` sigue exigiendo un rect asentado en dos lecturas. La lógica
+  tiene verificación offline (`scripts/test-android-device-qa-geometry.py`,
+  5 casos, sin dispositivo); el viaje completo con este arnés relajado está
+  pendiente de validación en el dispositivo.
 
 **Corridas instrumentadas (`instrumentation-failed/`, `music-chopin/`):**
 
@@ -434,8 +441,9 @@ configuración global ni persistir una configuración nueva.
 - Revisar/integrar los tres commits concurrentes de producto, sin reemplazar UI.
 - Prueba física Windows y APK Android **del commit de integración** (la
   sesión del 2026-11-15 cubrió el APK base `4cdcce6`; ver 7.1). Repetir el
-  viaje con la aserción de geometría relajada y confirmar el guardado de
-  resultados de búsqueda.
+  viaje con la aserción de geometría relajada —implementada y verificada
+  offline, pendiente en dispositivo— y confirmar el guardado de resultados
+  de búsqueda.
 
 ### P1: rendimiento y cobertura pendientes
 

@@ -35,6 +35,7 @@ class Journey:
     def __init__(self, args, geometry):
         self.args = args
         self.geometry = geometry
+        self.geometry_seen = geometry["viewport"]
         self.private = f"files/qa/{args.profile}/"
         self.report = dict(source_commit=args.commit, physical_device=True,
                            profile=args.profile, acoustic_capture=False,
@@ -43,8 +44,18 @@ class Journey:
 
     def state(self):
         value = json.loads(adb("shell", "run-as", PACKAGE, "cat", self.private + "qa-state.json"))
-        if value["viewport"] != self.geometry["viewport"] or value["pixels_per_point"] != self.geometry["pixels_per_point"]:
-            raise AssertionError("Own QA surface geometry changed; no input injected")
+        # Scale or width changes invalidate the coordinate mapping: no input.
+        # A height change is the IME overlay; taps stay safe because point()
+        # validates each rect against the live viewport and control() settles
+        # rects across two reads, so record it and continue.
+        if value["pixels_per_point"] != self.geometry["pixels_per_point"]:
+            raise AssertionError("Own QA surface scale changed; no input injected")
+        if value["viewport"][0] != self.geometry["viewport"][0]:
+            raise AssertionError("Own QA surface width changed; no input injected")
+        if value["viewport"] != self.geometry_seen:
+            self.geometry_seen = value["viewport"]
+            self.report.setdefault("geometry_events", []).append(
+                dict(viewport=value["viewport"], monotonic_s=time.monotonic()))
         return value
 
     def wait(self, predicate, seconds=35):
