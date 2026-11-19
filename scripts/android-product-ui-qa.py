@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import runpy
+import shlex
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,9 +43,10 @@ def main():
     assert adb("get-state").decode().strip() == "device"
     normal_before = normal_library_hash()
     private = f"files/qa/{args.profile}/"
-    exists = subprocess.run(["adb", "-d", "shell", "run-as", PACKAGE, "test", "-e", private],
+    exists = subprocess.run(["adb", "-d", "shell", "run-as", PACKAGE, "sh", "-c",
+                             shlex.quote(f"if [ -e {private} ]; then echo EXISTS; else echo MISSING; fi")],
                             capture_output=True, timeout=30)
-    assert exists.returncode == 1, "Use a fresh QA profile, never overwrite existing data"
+    assert exists.returncode == 0 and exists.stdout.strip() == b"MISSING", "Use a fresh QA profile, never overwrite existing data"
     adb("install", "-r", str(apk))
     installed = adb("shell", "pm", "path", PACKAGE).decode().strip()
     assert installed.startswith("package:") and "\n" not in installed

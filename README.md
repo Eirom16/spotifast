@@ -62,6 +62,8 @@ En pantallas estrechas, el mini-player usa una tarjeta flotante con progreso rea
 controles táctiles independientes y un resaltado discreto al pasar el puntero o enfocar.
 El reproductor móvil permite guardar o quitar la canción actual desde su cabecera,
 también en horizontal. Los controles de favoritos respetan la biblioteca de solo lectura.
+Ajustes agrupa tema y acento en una tarjeta adaptable y marca la selección actual;
+las opciones de cuenta permanecen disponibles por separado.
 
 El legado mantiene sus IDs persistidos, keyrings, rutas, protocolos, iconos y
 actualizador. El host Doremi usa identidad y datos propios. **El ejecutable legado conserva su actualizador dirigido al
