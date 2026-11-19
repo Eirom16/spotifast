@@ -1339,3 +1339,76 @@ mod read_ahead_tests {
         server.join().unwrap();
     }
 }
+
+#[cfg(test)]
+mod prefetch_contract_tests {
+    use super::*;
+    use std::{io::Write, net::TcpListener, sync::Arc};
+    #[test]
+    fn next_block_is_validated_while_decoder_consumes_current_and_refusal_is_terminal() {
+        for refused in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                for at in [0, CHUNK] {
+                    let (mut socket, _) = listener.accept().unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        let mut b = [0];
+                        socket.read_exact(&mut b).unwrap();
+                        request.push(b[0]);
+                    }
+                    if at == CHUNK && refused {
+                        write!(socket,"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                    } else {
+                        write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes {at}-{}/{}\r\nConnection: close\r\n\r\n",at+CHUNK-1,2*CHUNK).unwrap();
+                        socket.write_all(&vec![(at / CHUNK) as u8; CHUNK]).unwrap();
+                    }
+                }
+            });
+            let trace = Arc::new(Trace::default());
+            trace.enable_http();
+            let grant = Stream {
+                url: format!("http://{address}/fixture"),
+                user_agent: UA.into(),
+                length: (2 * CHUNK) as u64,
+                expires: Instant::now() + Duration::from_secs(10),
+                duration_ms: 60000,
+            };
+            let mut reader = grant
+                .reader(|| false)
+                .unwrap()
+                .with_trace(trace.clone())
+                .read_ahead()
+                .unwrap();
+            reader.read_exact(&mut [0; 1]).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while trace.http_snapshot().len() < 2 {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            // No consumer demand for block 2 has yet been made.
+            assert_eq!(trace.http_snapshot().len(), 2);
+            if refused {
+                reader.seek(SeekFrom::Start(CHUNK as u64)).unwrap();
+                assert_eq!(
+                    reader.read(&mut [0; 1]).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+                assert_eq!(trace.http_snapshot().len(), 2);
+            } else {
+                let mut rest = vec![7; 2 * CHUNK - 1];
+                reader.read_exact(&mut rest).unwrap();
+                assert!(rest[..CHUNK - 1].iter().all(|b| *b == 0));
+                assert!(rest[CHUNK - 1..].iter().all(|b| *b == 1));
+                assert_eq!(trace.http_snapshot().len(), 2);
+                assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
+            }
+            drop(reader);
+            server.join().unwrap();
+        }
+    }
+}
