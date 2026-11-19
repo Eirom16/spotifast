@@ -1,5 +1,10 @@
 # Auditoría de reproducción Doremi
 
+> Actualización pre-merge 2026-11-18: este documento conserva el corte histórico
+> y añade la sección 11 con las pruebas nuevas. Para el veredicto actual y sus
+> límites, consultar también `DOREMI-PREMERGE-REPORT.md`. No atribuir las
+> sesiones históricas a artefactos del nuevo head.
+
 Fecha de cierre de este corte: 2026-11-15. Rama local:
 `integration/doremi-playback-audit`.
 
@@ -470,8 +475,8 @@ reconstruyendo el host completo localmente.
 
 - `ci.yml` run `44251398160` y `android.yml` run `44251402256`, ambos
   **success** sobre `79538c3` (`integration/doremi-playback-audit`). Cubren
-  el código de esta rama hasta ese commit; el commit documental posterior no
-  altera código ni scripts.
+  el código de esta rama hasta ese commit; los commits posteriores solo
+  cambian scripts de QA y documentación, no el código del producto.
 - `playback.yml` no se pudo disparar: GitHub exige que el fichero del
   workflow exista en la rama por defecto y solo existe en esta rama (se
   añadió en `fede768`). Será dispatchable tras integrar en `main`; mientras
@@ -599,3 +604,227 @@ configuración global ni persistir una configuración nueva.
 La recomendación final sigue siendo **no integrar a `main` todavía**. Este
 corte entrega implementación y regresiones offline verificables, no una
 certificación de streaming rápido o de reproducción multiplataforma real.
+
+## 11. Misión pre-merge, 2026-11-18: evidencia acumulada
+
+Se leyó primero el informe local más reciente de
+`/home/eirom/.local/share/opencode/worktree/10a8af/doremi-playback-audit/`,
+incluida su modificación documental sin commit. Se respaldó antes de editar.
+La sección 7.2 ya contiene `playback-android-b4b9cc0-full2` y sus resultados
+50/33 underruns; se conserva completa. Ningún resultado anterior se retiró.
+
+El estado Git real era posterior al de la misión: integración `07924d5`,
+producto `cd8927f` y merge local `fa669b9` con ambos como padres. Este último
+incorpora los tres commits UI pendientes. La misión continúa en
+`integration/doremi-premerge-validation`, un worktree nuevo. La reconstrucción
+del merge con `git merge-tree` produce exactamente su árbol, sin pérdida de
+resolvedor, prefetch, instrumentación, control de cuenta o perfiles QA. `main`
+sigue en `cd40da0`. Los checkouts previos y sus cambios locales se preservan.
+
+El usuario autorizó expresamente `qQzdAsjWGPg` y `_d3SaQI_Ag4`, el login QA
+aislado y publicar únicamente la nueva rama y ejecutar CI. Se probó primero
+sin sesión: ambas fallaron en resolución, sin primer GET de audio ni PCM.
+El usuario completó después el inicio de sesión de Doremi en el Samsung,
+dentro de `files/qa/premerge-youtube-20261118/`. No se exportaron secretos,
+no se importó la sesión normal y no hubo fallback tras rechazos.
+
+**Viaje autenticado inicial, APK verificado `b4b9cc0`:**
+
+- Primera pista: fallo visible `Timeout` durante cuenta, confirmado con
+  categoría `stage=account` del mismo PID. No hay muestra de éxito.
+- Segunda pista: 750.637 frames a 48 kHz, 1.497.792 muestras no nulas,
+  510 underruns y 0 xruns reportados; más de 15 s de PCM. Primer PCM a
+  38.045.084 µs y primer callback no silencioso a 38.160.419 µs desde la
+  intención de cola del host. Extracción nativa: 17.314.579 µs; primer
+  GET→bloque validado: 230.267 µs; bloque→PCM: 20.447.535 µs.
+- Es una sola muestra exploratoria de Android autenticado, no un p50 de
+  población ni una mejora antes/después. Bloque→PCM incluye lecturas de red
+  y apertura/decodificación; no demuestra veinte segundos de CPU del decoder.
+  No hay todavía subdivisión cuenta/bootstrap/player/QuickJS.
+
+Evidencia:
+`~/.local/share/doremi/product-qa/2026-11-18/premerge-youtube-android-b4b9cc0-session2/`.
+El viaje anterior `...-session/` se detuvo por una aserción del arnés antes de
+reproducir: no se cuenta como fallo del producto ni como sesión validada.
+
+**Repetición Commons, mismo APK y un perfil QA nuevo:**
+
+`~/.local/share/doremi/product-qa/2026-11-18/premerge-commons-b4b9cc0/`.
+Completó dos pistas, pausa, seek, resume, background y reapertura. Los
+underruns fueron 296 y 215; xruns 0 y 1. Primer PCM 4.813.958/3.583.612 µs,
+callback no silencioso 5.336.209/3.631.564 µs. No mezclar ese origen de motor
+Commons con el de intención YouTube. El smoke local tuvo 0 underruns/0 xruns.
+
+La investigación de `output.rs` confirma que un underrun significa callback
+con PCM vacío y silencio insertado hasta el siguiente callback, no un frame
+perdido ni una transición de pausa esperada. Los nuevos snapshots acotados
+correlacionan aumentos del contador con frames y bytes HTTP inmóviles y
+`buffering=true`. No existe captura acústica; tampoco se puede llamar fluida
+a una reproducción solo porque llega finalmente a 15 s de PCM. El problema
+está **reproducido y sin resolver**. No se aumentaron buffers ni timeouts.
+
+**Corrección adicional del arnés:** la afirmación histórica de frescura en
+7.2 era insuficiente. Aunque añadía `sh -c`, ADB concatena argv y perdía el
+agrupamiento: el guard aún devolvía 1 para un perfil existente. Se reprodujo
+con dos directorios QA (existente/ausente: 1/1), frente al comando citado
+correctamente (0/1). `7c080ad` preserva ese quoting y añade una regresión que
+emula la shell ADB con un directorio temporal. No se interpreta la ausencia
+de esa validación histórica como evidencia positiva de perfiles frescos.
+
+El nuevo modo `--isolated-only` no lee cola, hashes o sesión del perfil normal
+y no lo relanza al limpiar. En estos viajes sus invariantes quedan
+`NOT_VERIFIED`, sin sustituir los resultados históricos. El chequeo histórico
+de magic/tamaño del sobre cifrado tampoco demuestra identidad del plaintext.
+Una sesión cifrada del mismo tamaño puede contener otros datos; no se leyó
+para intentar suplir esa limitación.
+
+El resumen ahora calcula media y duraciones por solicitud antes de obtener
+percentiles, manteniendo `null` cuando falta un extremo. Conserva errores y
+cancelaciones y separa plataformas/commits. Los tests de medición, geometría
+y perfil QA se ejecutan también en el job `quick` de CI principal.
+
+La corrección de `preview-linux` conserva todos los gates, usa instalación
+sin paquetes recomendados, un presupuesto de preparación de 12 min y job
+de 20 min justificado con los tiempos reales de apt de `44342784124`.
+No se ha convertido esa edición YAML en una aprobación CI. Los runs iniciales
+del candidato son `44430719185` (CI) y `44430723595` (Android), SHA `df2ef47`;
+no acreditan el guard `7c080ad` ni el cierre documental posterior.
+
+Ver tablas actualizadas, procedencia, límites de plataforma y pasos pendientes
+en `DOREMI-PREMERGE-REPORT.md`. Sigue sin demostrarse una reducción de los
+~10 s históricos; la nueva muestra real es significativamente lenta. El
+veredicto permanece **NOT_READY**, sin autorización ni recomendación de merge.
+
+### 11.1 Repeticiones y corrección de apertura bajo evaluación
+
+La serie autenticada `premerge-youtube-android-b4b9cc0-warm` añadió audio
+real de la primera pista (44.481.386 µs hasta callback no silencioso) y
+otra muestra de la segunda (30.116.026 µs). Los cuatro intentos válidos
+fueron error/error/éxito/éxito. El quinto se interrumpió por una expectativa
+incorrecta del runner sobre Previous tras >3 s: se conserva como prueba
+inválida, sin atribuir reproducción equivocada al núcleo.
+
+El host Linux `df2ef47`, bundle verificado, también entregó 15 s de PCM de
+ambas identidades: callback no silencioso 41.195.791/32.220.177 µs, sin
+underruns/xruns durante esa captura. La extracción tardó 15,517/15,412 s y
+el intervalo bloque→PCM 25,038/16,297 s. Evidencia:
+`~/.local/share/doremi/product-qa/2026-11-18/premerge-youtube-linux-df2ef47-sized/`.
+No se cuentan como pruebas de seek sus aserciones iniciales incompletas.
+
+Los commits `964e683` y `6984caa` evalúan una apertura incremental acotada
+a MP4 fast-start no fragmentado: evitar recorrer colas remotas al abrir y
+restaurar seek al terminar de leer cabeceras. Otros layouts mantienen su
+recorrido completo. Las 21 pruebas del player y Clippy con AAC/salida nativa
+aprobaron, incluyendo seek y cancelación; el beneficio real sigue pendiente
+del artefacto CI, sin convertir una prueba sintética en evidencia de latencia.
+
+La inspección real de un solo bloque por canción mostró `ftyp/moov/sidx/moof/mdat`.
+El guard conservador de `6984caa` no optimizaba ese layout. Tras verificar en
+Symphonia que los índices se construyen de forma lazy tanto al reproducir
+como al hacer seek, `dbc841e` permite también la apertura fragmentada. La
+regresión CC0 compara muestras con el recorrido completo y seek adelante a
+fragmentos no leídos, atrás y EOF: las 22 pruebas y Clippy pasan. El beneficio
+real sigue pendiente del APK CI nuevo. La serie base adicional
+`premerge-youtube-android-baseline-paired/` conserva seis errores; cinco ya
+habían obtenido un primer bloque válido sin llegar a PCM. No se ocultan ni
+se reintentan las negativas de transporte.
+
+### 11.2 Primera prueba física del candidato y CI gráfica
+
+El APK `dbc841e`, comprobado por manifiesto/checksums y hash instalado,
+se instaló con `adb install -r` conservando el login QA. La serie
+`premerge-youtube-android-dbc841e-controls/` tuvo cuatro errores antes de PCM:
+account, bootstrap, primer transporte sin bytes y lectura inicial incompleta
+(49.152 bytes). Los dos últimos resolvieron en 35,400/12,183 s, pero no
+completaron el primer bloque. El beneficio de apertura MP4 permanece
+`NOT_VERIFIED`. Pausa, seek y prefetch no se aprobaron sin audio. El intento
+de Stop del runner externo tenía una aserción inválida sobre el campo de
+capacidad `audio`: se conserva como prueba inválida, no fallo del producto.
+
+`ci.yml` en `6984caa`, run `44435616417`, sí terminó globalmente aprobado:
+preview (3m07s), navegación del host y gate de artefactos incluidos. Esto
+verifica la corrección del presupuesto gráfico para ese SHA, no acredita
+CI del cierre posterior. `android.yml` en `dbc841e` aprobó APK y Windows,
+pero agotó 35 min en host Linux después de 17m28s de apt. `5ac8778` reserva
+50 min con preparación acotada, según apt + 18m27s de tests y 1m02s gráfico
+medidos anteriormente; mantiene todos los gates y deadlines de reproducción.
+
+### 11.3 Audio del candidato y continuidad fallida
+
+La serie `premerge-youtube-android-dbc841e-paired/` conserva seis selecciones:
+cuatro errores de resolución y dos éxitos de 15 s. Primer callback no
+silencioso de las dos pistas: 21.722.790/9.122.112 µs; extracción
+21.212.557/8.928.407 µs; bloque→PCM 12.933/4.729 µs. Underruns 0/0 y xruns
+0/1 en esos snapshots de 15 s. No mezclarlos con los resultados históricos.
+
+La base emparejada de seis intentos tuvo seis errores, así que no aporta
+una latencia válida emparejada. Frente a los éxitos warm previos de cada
+identidad, las reducciones aritméticas observadas de arranque son 51,16% y
+69,71%, **n=1 por identidad/escenario, exploratorias y sin control estricto
+de red**. No son prueba estadística de un p50 ni cumplimiento de 3 s. El
+informe pre-merge conserva las medias, extremos, tasas y límites.
+
+La comprobación extendida hasta 80 s falló en ambas canciones, a posiciones
+40.286/52.453 ms: lecturas HTTP 200 sin datos en offsets 655360/851968 del
+mismo PID. No se reintentaron grants ni se alteraron timeouts. Estado de
+continuidad **FAIL**. La apertura corta observada no subsana ese fallo ni la
+subalimentación anterior; el veredicto sigue **NOT_READY**.
+
+### 11.4 Controles reales y cancelación acotada
+
+`premerge-youtube-android-dbc841e-controls2/`: primera pista falla en cuenta;
+la segunda alcanza 15 s de PCM a 26.239.672 µs de arranque, con 21 underruns
+y 1 xrun. Pausa/reanudación observadas; seek con nueva generación a ~99 s
+termina `Timeout` sin PCM. También hay un 403 en offset 1048576 del mismo
+PID, sin correlación RequestId para asignarlo a un GET concreto. No se
+sorteó esa negativa. Seek queda **FAIL** del candidato; regresión frente
+a base no demostrada. Beneficio de prefetch sigue `NOT_VERIFIED`.
+
+El segundo intento de Stop del runner también tenía expectativa inválida:
+el núcleo conserva la pista en `Paused` al cancelar. La prueba específica
+`premerge-youtube-android-dbc841e-cancel/` sí pasó: cancelación en resolución,
+PCM retirado y ocho segundos sin publicación tardía. No demuestra HTTP
+bloqueado ni liberación total de recursos. `android.yml` de `5ac8778`, run
+`44441447069`, aprobó globalmente APK, host Linux y host Windows.
+
+### 11.5 Candidato Linux verificado y comparación con la base
+
+El bundle `doremi-native-linux-5ac8778` del run `44441447069`
+(`artifact_id` 14491534025) se descargó por rangos con reanudación y se verificó
+contra `SHA256SUMS`, `manifest.json` y `SOURCE_COMMIT`
+(`5ac877839dba269d200b5a8da5e936bc0c2faafb`; `doremi` SHA256
+`aedbf781edc3226937251facada6713ec7cd9a70ee415905ebf391de785f0c68`).
+Mismo corpus autorizado, invitado, X11 y perfil aislado que la base `df2ef47`.
+
+Dos intentos iniciales del arnés fueron inválidos por geometría: KWin limitó
+la ventana a 1100x674 (pantalla 1366x768) y la comprobación exigía 1100x800,
+la altura de la serie base. Se adaptó para aceptar la geometría real solo si
+es estable entre dos snapshots, registrarla y seguir validando cada control
+dentro del viewport. No se cuentan como fallos del proveedor.
+
+Dos series `premerge-youtube-linux-candidate-5ac8778-latency/` y `...-latency2/`
+(sin controles), agregadas en `...-pooled/samples.jsonl` conservando la
+etiqueta `run`: **8 éxitos / 12 intentos**. Frío p50 11.785.000 µs (p95
+12.107.000); cambios p50 14.121.000 / p95 18.268.000 µs; extracción p50
+13.912.000 µs; bloque→PCM p50 1.000 / p95 2.000 µs. Underruns por éxito
+0/140/106/0/0/63/4/0 y xruns 0. Fallos del mismo PID: una resolución
+`stage=extractor`, una lectura HTTP 200 con 0 bytes en offset 131072 y dos 403
+`stage=refused` en offset 0, respetados sin reintento.
+
+Frente a la base Linux emparejada (6/6 éxitos): frío 56.730.466→11.785.000 µs
+(79,23%), cambio p50 47.007.009→14.121.000 µs (69,96%), p95
+63.210.222→18.268.000 µs (71,10%), bloque→PCM p50 22.867.555→1.000 µs
+(99,996%) y extracción p50 19.206.425→13.912.000 µs (27,56%). Son series
+exploratorias, en ventanas de red distintas y con un control sin descargas
+concurrentes; la tasa de éxito empeoró (6/6 → 8/12). No es un p50 de población
+ni acredita cumplir 3 s: el mejor arranque observado fue 11,785 s.
+
+La serie con controles `...-candidate-5ac8778-run3/` reprodujo la segunda pista
+(34.906.428 µs, 892 underruns) y el seek al 35% (~99.464 ms) terminó `Failed`
+con `stage=transport` (`http=0`, 0 bytes, offset 0), sin PCM. Para descartar
+una regresión se repitió la base `df2ef47` en la misma ventana
+(`premerge-youtube-linux-base-controls-now/`): **2/2 errores** antes de los
+controles (lectura sin datos en offset 720896 y resolución `stage=extractor`).
+El fallo de seek no se demuestra como regresión; la comparación de seek queda
+`NOT_VERIFIED` y el seek del candidato **FAIL**. La subalimentación persiste
+en Linux (4 de 8 éxitos con underruns, hasta 140) además de Android.

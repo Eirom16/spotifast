@@ -23,9 +23,9 @@ PACKAGE = "dev.eirom.doremi.dev"
 NORMAL_FILES = ("library-v1.json", "playlists-v1.json", "history-v1.json",
                 "preferences-v1.json")
 # The session is an AES-GCM envelope (MAGIC 'DYM',1 + 12-byte IV + sealed
-# cookie). A successful restore re-seals the same cookie with a fresh IV
+# cookie). Restore re-seals the session with a fresh IV
 # (crates/doremi-app/src/youtube_session.rs), so its bytes change by design:
-# require a valid envelope of unchanged size and record the re-seal.
+# check envelope shape/size only. This cannot prove unchanged plaintext.
 SESSION_FILE = "youtube-session-v1.bin"
 SESSION_MAGIC = "44 59 4d 01"
 DIGEST_FILES = NORMAL_FILES + (SESSION_FILE,)
@@ -122,7 +122,8 @@ def profile_preserved(before, after):
     envelope or None). The four NORMAL_FILES must be byte-identical; the queue
     must keep identical user content, while its documented volatile fields may
     move; the sealed session may be re-sealed but must keep its envelope shape
-    and size (same plaintext, fresh IV).
+    and size. This does not prove session plaintext identity; no credentials
+    are decrypted or exported by this check.
     """
     map_before, map_after = digest_map(before[0]), digest_map(after[0])
     for name in NORMAL_FILES:
