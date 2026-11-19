@@ -91,6 +91,7 @@ struct Stats {
     ended: AtomicBool,
     failed: AtomicBool,
     input_failed: AtomicBool,
+    input_denied: AtomicBool,
     streaming: AtomicBool,
     capacity: AtomicU64,
     underruns: AtomicU64,
@@ -104,6 +105,15 @@ struct Stats {
     max_starvation_frames: AtomicU64,
 
     nonzero: AtomicU64,
+}
+impl Stats {
+    fn input_error(&self) -> EngineError {
+        if self.input_denied.load(Ordering::Acquire) {
+            EngineError::Decode(DecodeError::AccessDenied)
+        } else {
+            EngineError::Input
+        }
+    }
 }
 struct Control {
     epoch: AtomicU64,
@@ -478,7 +488,7 @@ fn worker(
                 let epoch = current.epoch;
                 let request = current.request;
                 let error = if current.stats.input_failed.load(Ordering::Acquire) {
-                    EngineError::Input
+                    current.stats.input_error()
                 } else {
                     EngineError::Output
                 };
@@ -989,6 +999,63 @@ mod tests {
             stats: Arc::new(Stats::default()),
             epoch: 1,
             started: Instant::now(),
+        }
+    }
+    #[test]
+    fn input_refusal_stays_typed_before_and_after_prebuffer() {
+        struct Refuses {
+            remaining: usize,
+            error: DecodeError,
+        }
+        impl FrameReader for Refuses {
+            fn info(&self) -> crate::wav_stream::Info {
+                crate::wav_stream::Info {
+                    rate: 48000,
+                    channels: 2,
+                    frames: 480000,
+                }
+            }
+            fn seek_frame(&mut self, _: u64) -> Result<(), DecodeError> {
+                Ok(())
+            }
+            fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
+                if self.remaining == 0 {
+                    return Err(self.error);
+                }
+                self.remaining -= 1;
+                Ok(Some([0.1; 2]))
+            }
+        }
+        for error in [DecodeError::AccessDenied, DecodeError::Input] {
+            let expected = if error == DecodeError::AccessDenied {
+                EngineError::Decode(error)
+            } else {
+                EngineError::Input
+            };
+            for remaining in [64, 2 * feed::CAPACITY] {
+                let state = feed_state();
+                state.control.playing.store(true, Ordering::Release);
+                let result = feed::Feed::start(Refuses { remaining, error }, 48000, 0, &state);
+                if remaining == 64 {
+                    assert!(matches!(result, Err(actual) if actual == expected));
+                } else {
+                    let (feed, mut consumer) = result.unwrap();
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    let mut delivered = 0;
+                    loop {
+                        assert!(Instant::now() < deadline);
+                        match consumer.read() {
+                            buffer::Read::Frame(_) => delivered += 1,
+                            buffer::Read::Pending => std::thread::yield_now(),
+                            buffer::Read::Failed => break,
+                            buffer::Read::End => panic!("A refusal is not EOF"),
+                        }
+                    }
+                    assert!(delivered >= feed::CAPACITY / 2);
+                    drop(feed);
+                }
+                assert_eq!(state.stats.input_error(), expected);
+            }
         }
     }
     #[test]

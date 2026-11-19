@@ -57,7 +57,13 @@ impl Feed {
                             sender.finish();
                             return;
                         }
-                        Err(_) => {
+                        Err(error) => {
+                            // Preserve an explicit refusal across the PCM
+                            // channel, before publishing its terminal state.
+                            stats.input_denied.store(
+                                error == crate::DecodeError::AccessDenied,
+                                Ordering::Release,
+                            );
                             sender.fail();
                             return;
                         }
@@ -113,7 +119,7 @@ impl Feed {
             thread::sleep(Duration::from_millis(1));
         }
         if consumer.is_failed() {
-            return Err(EngineError::Input);
+            return Err(state.stats.input_error());
         }
         Ok((feed, consumer))
     }
