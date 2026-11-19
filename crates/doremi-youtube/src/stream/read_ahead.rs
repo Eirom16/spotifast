@@ -179,7 +179,13 @@ impl Seek for ReadAhead {
         if !(0..=i128::from(self.length)).contains(&position) {
             return Err(io::ErrorKind::InvalidInput.into());
         }
-        if position as u64 != self.position {
+        // Demuxers seek backwards over headers and skip forwards inside the
+        // current block. Its bytes and the following interval are unchanged:
+        // preserve their prefetch, including a seek exactly to that interval.
+        let cached = !self.block.bytes.is_empty()
+            && (self.block.at..=self.block.at + self.block.bytes.len() as u64)
+                .contains(&(position as u64));
+        if position as u64 != self.position && !cached {
             self.generation.fetch_add(1, Ordering::AcqRel);
             self.next = None;
             // Free the bounded reply queue, including a worker blocked on
@@ -335,5 +341,69 @@ mod window_tests {
         assert!(started.elapsed() < Duration::from_millis(500));
         server.join().unwrap();
         assert!(trace.http_snapshot().last().unwrap().cancelled);
+    }
+    #[test]
+    fn cached_demux_seeks_preserve_the_active_next_interval() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut input = reader(&listener, 2 * CHUNK, trace.clone());
+        let (ready, waiting) = mpsc::channel();
+        let (advance, resumed) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            reply(&listener, 0, 2 * CHUNK);
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            assert!(
+                String::from_utf8(request)
+                    .unwrap()
+                    .to_ascii_lowercase()
+                    .contains(&format!("\r\nrange: bytes={CHUNK}-{}\r\n", 2 * CHUNK - 1))
+            );
+            ready.send(()).unwrap();
+            resumed.recv_timeout(Duration::from_secs(2)).unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            // Header/index seeks within cached bytes must not close HTTP.
+            let error = socket.read(&mut [0; 1]).unwrap_err();
+            assert!(matches!(
+                error.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ));
+            write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes {CHUNK}-{}/{}\r\nConnection: close\r\n\r\n",2*CHUNK-1,2*CHUNK).unwrap();
+            socket.write_all(&vec![1; CHUNK]).unwrap();
+        });
+        input.read_exact(&mut [0; 16]).unwrap();
+        waiting.recv_timeout(Duration::from_secs(2)).unwrap();
+        for position in [0, 31, CHUNK as u64 - 1, CHUNK as u64] {
+            input.seek(SeekFrom::Start(position)).unwrap();
+        }
+        advance.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while trace.http_snapshot().len() < 2 {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // No demand for the next block yet: it completed in anticipation.
+        assert!(
+            trace
+                .http_snapshot()
+                .iter()
+                .all(|r| r.outcome == "validated")
+        );
+        let mut bytes = [0; 17];
+        input.read_exact(&mut bytes).unwrap();
+        assert_eq!(bytes, [1; 17]);
+        drop(input);
+        server.join().unwrap();
     }
 }

@@ -53,6 +53,9 @@ adicionales frente al anticipo de un bloque, sin otro thread ni cambios al
 buffer PCM de 8192 frames. No espera llenar la ventana para entregar el primer
 bloque. Las respuestas ya validadas siguen disponibles mientras HTTP espera
 otro intervalo; seek/Drop retiran también un sender bloqueado por backpressure.
+Un seek del demuxer dentro del bloque ya validado conserva su anticipo:
+el siguiente intervalo sigue siendo el mismo. Buscar fuera de ese bloque
+invalida la generación y retira la petición anterior.
 Ningún bloque incompleto se publica. Una negativa anticipada queda terminal.
 
 La ventana responde a una recuperación real observada de 15 s: un bloque de
