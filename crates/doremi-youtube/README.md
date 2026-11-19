@@ -33,8 +33,14 @@ Exige `206`, `Content-Range` exacto y longitud/cuerpo íntegros. Un `200`
 representa un rango ignorado y falla aunque tenga el tamaño solicitado.
 No existe fallback de protocolo, cliente o concesión tras un rechazo.
 
-Dos reintentos como máximo, sobre el mismo intervalo/concesión, recuperan
-timeout, interrupción o truncamiento; backoff de 50/100 ms cancelable.
+Dos reintentos como máximo, sobre la misma concesión, recuperan timeout,
+interrupción o truncamiento; backoff de 50/100 ms cancelable. Si un `206`
+identifica exactamente el intervalo, un prefijo incompleto queda privado y
+el siguiente intento solicita solo su cola faltante. Cada cola vuelve a
+validar rango y longitud. Solo el bloque íntegro llega al demuxer; agotar
+los tres intentos o recibir una negativa descarta el prefijo. Un cuerpo
+del tamaño completo sin terminación HTTP válida tampoco se acepta ni
+produce una petición vacía: se vuelve al prefijo del intento anterior.
 401/403, 429, rango inconsistente y desborde son definitivos. El presupuesto
 individual sigue siendo 6 s; la cancelación retira el future HTTP en intervalos
 de 20 ms. DNS del sistema queda sujeto al comportamiento del runtime.

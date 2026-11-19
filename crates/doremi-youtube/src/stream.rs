@@ -511,12 +511,20 @@ impl Reader {
         })
     }
     fn fill(&mut self) -> io::Result<()> {
-        // Retry only an interrupted operation on the SAME grant and interval.
-        // Never retry access refusal, inconsistent identity, overflow or 429.
+        // The grant identifies one fixed encoded object. Keep a proper prefix
+        // only after exact 206 headers; retry its missing tail on that SAME
+        // grant. Nothing becomes readable until the whole block is assembled.
+        let block_at = self.position / CHUNK as u64 * CHUNK as u64;
+        let end = (block_at + CHUNK as u64).min(self.grant.length) - 1;
+        let block_size = (end - block_at + 1) as usize;
+        self.bytes.clear();
         for attempt in 0..=2 {
-            self.check()?;
-            let start = self.position / CHUNK as u64 * CHUNK as u64;
-            let end = (start + CHUNK as u64).min(self.grant.length) - 1;
+            if let Err(error) = self.check() {
+                self.bytes.clear();
+                return Err(error);
+            }
+            let prefix = self.bytes.len();
+            let start = block_at + prefix as u64;
             self.sequence += 1;
             let origin = self
                 .trace
@@ -554,18 +562,34 @@ impl Reader {
                 return Err(io::ErrorKind::ConnectionAborted.into());
             }
             match result {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    if self.bytes.len() != block_size {
+                        self.bytes.clear();
+                        return Err(io::ErrorKind::InvalidData.into());
+                    }
+                    self.cached_at = block_at;
+                    return Ok(());
+                }
                 Err(error) => {
-                    self.bytes.clear();
                     if attempt == 2
                         || !matches!(record.outcome, "transport" | "timeout" | "incomplete")
                     {
+                        self.bytes.clear();
                         return Err(error);
+                    }
+                    // A complete-sized body without a valid ending might have
+                    // late overflow. Do not turn that timeout into success or
+                    // request an empty tail: keep only the earlier prefix.
+                    if self.bytes.len() == block_size {
+                        self.bytes.truncate(prefix);
                     }
                     // 50/100 ms backoff, checked every 10 ms; no new request
                     // after cancellation or lease expiration.
                     for _ in 0..5 * (attempt + 1) {
-                        self.check()?;
+                        if let Err(error) = self.check() {
+                            self.bytes.clear();
+                            return Err(error);
+                        }
                         std::thread::sleep(Duration::from_millis(10));
                     }
                 }
@@ -636,9 +660,9 @@ impl Reader {
             };
             return Err(io::ErrorKind::ConnectionReset.into());
         }
-        self.bytes.clear();
-        if self.bytes.capacity() < size + 1 {
-            self.bytes.reserve_exact(size + 1 - self.bytes.len());
+        let block_size = self.bytes.len() + size;
+        if self.bytes.capacity() < block_size + 1 {
+            self.bytes.reserve_exact(block_size + 1 - self.bytes.len());
         }
         loop {
             let chunk = self.wait_http(response.chunk()).inspect_err(|error| {
@@ -658,17 +682,14 @@ impl Reader {
                 record.first_data_us = Some(origin.elapsed().as_micros() as u64);
             }
             self.check()?;
-            if chunk.len() > (size + 1).saturating_sub(self.bytes.len()) {
+            if record.received > size as u64 {
                 record.outcome = "overflow";
                 return Err(io::ErrorKind::ConnectionReset.into());
             }
             self.bytes.extend_from_slice(&chunk);
-            if self.bytes.len() > size {
-                break;
-            }
         }
-        if self.bytes.len() != size {
-            record.incomplete = self.bytes.len() < size;
+        if record.received != size as u64 {
+            record.incomplete = record.received < size as u64;
             record.outcome = if record.incomplete {
                 "incomplete"
             } else {
@@ -677,7 +698,6 @@ impl Reader {
             return Err(io::ErrorKind::ConnectionReset.into());
         }
         self.check()?;
-        self.cached_at = start;
         record.outcome = "validated";
         record.eof = end + 1 == self.grant.length;
         if let Some(trace) = &self.trace {
@@ -1149,14 +1169,14 @@ mod reliability_tests {
         }
     }
     #[test]
-    fn interrupted_block_retries_same_offset_and_never_duplicates_bytes() {
+    fn interrupted_block_resumes_exact_tail_and_never_duplicates_bytes() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let server = std::thread::spawn(move || {
-            for (start, sent) in [(0, 17), (0, CHUNK), (CHUNK, 71)] {
+            for (start, sent) in [(0, 17), (17, CHUNK - 17), (CHUNK, 71)] {
                 let (mut socket, _) = listener.accept().unwrap();
                 let req = request(&mut socket);
-                let end = if start == 0 { CHUNK - 1 } else { CHUNK + 70 };
+                let end = if start < CHUNK { CHUNK - 1 } else { CHUNK + 70 };
                 assert!(
                     req.starts_with("GET /fixture HTTP/1.1")
                         && req
@@ -1165,7 +1185,11 @@ mod reliability_tests {
                 );
                 write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",end-start+1,CHUNK+71).unwrap();
                 socket
-                    .write_all(&vec![if start == 0 { 1 } else { 2 }; sent])
+                    .write_all(
+                        &(start..start + sent)
+                            .map(|i| (i % 251) as u8)
+                            .collect::<Vec<_>>(),
+                    )
                     .unwrap();
             }
         });
@@ -1177,19 +1201,172 @@ mod reliability_tests {
             .with_trace(trace.clone());
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).unwrap();
-        assert_eq!(&bytes[..CHUNK], vec![1; CHUNK]);
-        assert_eq!(&bytes[CHUNK..], vec![2; 71]);
+        assert_eq!(
+            bytes,
+            (0..CHUNK + 71).map(|i| (i % 251) as u8).collect::<Vec<_>>()
+        );
         assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
         let records = trace.http_snapshot();
         assert_eq!(records.len(), 3);
         assert_eq!(
             records.iter().map(|r| r.offset).collect::<Vec<_>>(),
-            [0, 0, CHUNK as u64]
+            [0, 17, CHUNK as u64]
         );
         assert!(records[0].incomplete);
         assert_eq!(records[0].received, 17);
+        assert_eq!(records[1].requested, (CHUNK - 17) as u64);
         assert_eq!(records[1].outcome, "validated");
         assert!(records[2].eof);
+        server.join().unwrap();
+    }
+    #[test]
+    fn partial_timeouts_resume_without_publishing_or_redownloading_the_prefix() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for (start, sent) in [
+                (0, CHUNK / 2),
+                (CHUNK / 2, CHUNK / 4),
+                (3 * CHUNK / 4, CHUNK / 4),
+            ] {
+                let (mut socket, _) = listener.accept().unwrap();
+                assert!(
+                    request(&mut socket)
+                        .to_ascii_lowercase()
+                        .contains(&format!("\r\nrange: bytes={start}-{}\r\n", CHUNK - 1))
+                );
+                write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{}/{CHUNK}\r\nConnection: close\r\n\r\n",CHUNK-start,CHUNK-1).unwrap();
+                socket
+                    .write_all(
+                        &(start..start + sent)
+                            .map(|i| (i % 251) as u8)
+                            .collect::<Vec<_>>(),
+                    )
+                    .unwrap();
+                if start + sent < CHUNK {
+                    // A real body timeout, not an early EOF. The reader must
+                    // close this operation before requesting its missing tail.
+                    assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+                }
+            }
+        });
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut reader = grant(address, CHUNK as u64)
+            .reader(|| false)
+            .unwrap()
+            .with_trace(trace.clone());
+        reader.http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let mut first = [255];
+        reader.read_exact(&mut first).unwrap();
+        let records = trace.http_snapshot();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|r| r.offset).collect::<Vec<_>>(),
+            [0, CHUNK as u64 / 2, 3 * CHUNK as u64 / 4]
+        );
+        assert!(
+            records[..2]
+                .iter()
+                .all(|r| r.timeout && r.incomplete && !r.eof)
+        );
+        assert_eq!(records[2].outcome, "validated");
+        assert!(records[2].eof);
+        let mut bytes = first.to_vec();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(
+            bytes,
+            (0..CHUNK).map(|i| (i % 251) as u8).collect::<Vec<_>>()
+        );
+        assert!(reader.bytes.capacity() <= CHUNK + 1);
+        server.join().unwrap();
+    }
+    #[test]
+    fn refusal_or_wrong_range_on_resume_discards_the_private_prefix() {
+        for status in [200, 206, 403] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                request(&mut socket);
+                write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes 0-{}/{CHUNK}\r\nConnection: close\r\n\r\n",CHUNK-1).unwrap();
+                socket.write_all(&[7; 17]).unwrap();
+                drop(socket);
+                let (mut socket, _) = listener.accept().unwrap();
+                assert!(
+                    request(&mut socket)
+                        .to_ascii_lowercase()
+                        .contains(&format!("\r\nrange: bytes=17-{}\r\n", CHUNK - 1))
+                );
+                // 206 deliberately identifies the old interval, not this tail.
+                write!(socket,"HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nContent-Range: bytes 0-{}/{CHUNK}\r\nConnection: close\r\n\r\n",CHUNK-1).unwrap();
+            });
+            let trace = Arc::new(Trace::default());
+            trace.enable_http();
+            let mut reader = grant(address, CHUNK as u64)
+                .reader(|| false)
+                .unwrap()
+                .with_trace(trace.clone());
+            let error = reader.read(&mut [0; 1]).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                if status == 403 {
+                    io::ErrorKind::PermissionDenied
+                } else {
+                    io::ErrorKind::Other
+                }
+            );
+            assert!(reader.bytes.is_empty());
+            assert_eq!(reader.position, 0);
+            let records = trace.http_snapshot();
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[1].offset, 17);
+            assert_ne!(records[1].outcome, "validated");
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn full_sized_chunked_body_without_ending_never_becomes_an_empty_tail_or_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            request(&mut socket);
+            write!(socket,"HTTP/1.1 206 OK\r\nTransfer-Encoding: chunked\r\nContent-Range: bytes 0-{}/{CHUNK}\r\nConnection: close\r\n\r\n{CHUNK:x}\r\n",CHUNK-1).unwrap();
+            socket.write_all(&vec![7; CHUNK]).unwrap();
+            write!(socket, "\r\n").unwrap();
+            assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+            let (mut socket, _) = listener.accept().unwrap();
+            assert!(
+                request(&mut socket)
+                    .to_ascii_lowercase()
+                    .contains(&format!("\r\nrange: bytes=0-{}\r\n", CHUNK - 1))
+            );
+            write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes 0-{}/{CHUNK}\r\nConnection: close\r\n\r\n",CHUNK-1).unwrap();
+            socket.write_all(&vec![9; CHUNK]).unwrap();
+        });
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut reader = grant(address, CHUNK as u64)
+            .reader(|| false)
+            .unwrap()
+            .with_trace(trace.clone());
+        reader.http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .unwrap();
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(bytes, vec![9; CHUNK]);
+        let records = trace.http_snapshot();
+        assert_eq!(records.len(), 2);
+        assert!(records[0].timeout && !records[0].eof);
+        assert_eq!(records[0].received, CHUNK as u64);
+        assert_eq!(records[1].offset, 0);
+        assert!(records[1].eof);
         server.join().unwrap();
     }
     #[test]
