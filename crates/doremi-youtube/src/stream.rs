@@ -593,14 +593,13 @@ impl Reader {
                     .send()
                     .await
             })
-            .map_err(|error| {
+            .inspect_err(|error| {
                 record.timeout = error.kind() == io::ErrorKind::TimedOut;
                 record.outcome = if record.timeout {
                     "timeout"
                 } else {
                     "transport"
                 };
-                error
             })?;
         self.check()?;
         record.status = response.status().as_u16();
@@ -642,7 +641,7 @@ impl Reader {
             self.bytes.reserve_exact(size + 1 - self.bytes.len());
         }
         loop {
-            let chunk = self.wait_http(response.chunk()).map_err(|error| {
+            let chunk = self.wait_http(response.chunk()).inspect_err(|error| {
                 record.timeout = error.kind() == io::ErrorKind::TimedOut;
                 record.incomplete = true;
                 record.outcome = if record.timeout {
@@ -650,7 +649,6 @@ impl Reader {
                 } else {
                     "incomplete"
                 };
-                error
             })?;
             let Some(chunk) = chunk else {
                 break;
