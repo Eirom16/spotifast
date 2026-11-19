@@ -88,14 +88,18 @@ jobs:
     # independently rejects every Rust input difference before packaging.
     if: ${{ !inputs.native_run }}
     runs-on: ubuntu-24.04
-    # The prior run spent its entire 20-minute budget downloading native libraries.
-    timeout-minutes: 35
+    # Run 44436685168 spent 17m28s in apt; the successful 44430723595
+    # needed another 18m27s for host tests plus 1m02s for real X11 QA.
+    # 35m cannot cover that observed combination. Reserve 25m preparation,
+    # 21m tests, 2m graphical QA and 2m artifacts; preserve every gate.
+    timeout-minutes: 50
     env:
       CARGO_TARGET_DIR: target/native-cargo
     steps:
       - uses: actions/checkout@v7
       - run: rustup show active-toolchain
       - name: Native UI libraries and isolated graphical QA
+        timeout-minutes: 25
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libgl1-mesa-dev libx11-dev libasound2-dev libpipewire-0.3-dev libclang-dev libwebkit2gtk-4.1-dev xvfb xauth xdotool imagemagick zenity
