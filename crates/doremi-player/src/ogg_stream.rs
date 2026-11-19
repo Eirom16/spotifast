@@ -8,7 +8,7 @@ use crate::{
 use std::io::{Read, Seek, SeekFrom};
 use std::sync::{
     Arc,
-    atomic::{AtomicU8, Ordering},
+    atomic::{AtomicBool, AtomicU8, Ordering},
 };
 use symphonia::core::{
     audio::SampleBuffer,
@@ -55,14 +55,45 @@ impl Vorbis {
         length: u64,
         expected: Info,
     ) -> Result<Self, DecodeError> {
-        Self::open(Box::new(Seekable { input, length }), expected)
+        Self::open(
+            Box::new(Seekable {
+                input,
+                length,
+                seekable: None,
+            }),
+            expected,
+        )
     }
     #[cfg(feature = "aac-mp4")]
     pub fn aac_from_read_seek<R: Read + Seek + Send + Sync + 'static>(
-        input: R,
+        mut input: R,
         length: u64,
     ) -> Result<Self, DecodeError> {
-        Self::open_format(Box::new(Seekable { input, length }), None, CODEC_TYPE_AAC)
+        // Symphonia scans every top-level MP4 atom when opening a seekable
+        // source, including remote media-data tails. A verified fast-start
+        // layout can be opened progressively instead. Enable random access
+        // again immediately after header parsing, before any PCM/seek work.
+        // Other layouts retain the complete seekable scan, not a fallback
+        // after an access refusal or malformed decoder response.
+        let progressive = fast_start_mp4(&mut input, length).map_err(|error| {
+            input_or_format(
+                FormatError::IoError(error),
+                DecodeError::InvalidMp4,
+                &AtomicU8::new(0),
+            )
+        })?;
+        let seekable = Arc::new(AtomicBool::new(!progressive));
+        let result = Self::open_format(
+            Box::new(Seekable {
+                input,
+                length,
+                seekable: Some(seekable.clone()),
+            }),
+            None,
+            CODEC_TYPE_AAC,
+        );
+        seekable.store(true, Ordering::Release);
+        result
     }
     pub fn open(input: Box<dyn MediaSource>, expected: Info) -> Result<Self, DecodeError> {
         Self::open_format(input, Some(expected), CODEC_TYPE_VORBIS)
@@ -283,6 +314,7 @@ impl MediaSource for ObservedInput {
 struct Seekable<R> {
     input: R,
     length: u64,
+    seekable: Option<Arc<AtomicBool>>,
 }
 impl<R: Read> Read for Seekable<R> {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
@@ -296,11 +328,57 @@ impl<R: Seek> Seek for Seekable<R> {
 }
 impl<R: Read + Seek + Send + Sync> MediaSource for Seekable<R> {
     fn is_seekable(&self) -> bool {
-        true
+        self.seekable
+            .as_ref()
+            .is_none_or(|ready| ready.load(Ordering::Acquire))
     }
     fn byte_len(&self) -> Option<u64> {
         Some(self.length)
     }
+}
+
+/// Inspect bounded top-level headers only, then rewind. Do not read/discard
+/// media payloads to discover whether the file is suitable for progressive
+/// opening. Symphonia still owns all actual container and codec validation.
+#[cfg(feature = "aac-mp4")]
+fn fast_start_mp4(input: &mut (impl Read + Seek), length: u64) -> std::io::Result<bool> {
+    let result = (|| {
+        let mut position = 0_u64;
+        let mut file_type = false;
+        let mut movie = false;
+        for _ in 0..16 {
+            if length.saturating_sub(position) < 8 {
+                return Ok(false);
+            }
+            input.seek(SeekFrom::Start(position))?;
+            let mut header = [0; 8];
+            input.read_exact(&mut header)?;
+            let mut size = u64::from(u32::from_be_bytes(header[..4].try_into().unwrap()));
+            let mut header_len = 8;
+            if size == 1 {
+                let mut extended = [0; 8];
+                input.read_exact(&mut extended)?;
+                size = u64::from_be_bytes(extended);
+                header_len = 16;
+            } else if size == 0 {
+                size = length - position;
+            }
+            if size < header_len || size > length - position {
+                return Ok(false);
+            }
+            match &header[4..] {
+                b"ftyp" => file_type = true,
+                b"moov" => movie = true,
+                b"mdat" | b"moof" => return Ok(file_type && movie),
+                _ => {}
+            }
+            position += size;
+        }
+        Ok(false)
+    })();
+    // Preserve errors such as cancellation/refusal, including on rewind.
+    let rewind = input.seek(SeekFrom::Start(0));
+    result.and_then(|found| rewind.map(|_| found))
 }
 impl FrameReader for Vorbis {
     fn info(&self) -> Info {
@@ -480,6 +558,75 @@ mod aac_tests {
             for channel in 0..2 {
                 assert!((actual[channel] - expected[channel]).abs() < 0.001);
             }
+        }
+    }
+
+    #[test]
+    fn fast_start_aac_opens_without_scanning_media_tail_and_keeps_seek() {
+        use std::sync::atomic::AtomicU64;
+        struct Counted {
+            input: std::io::Cursor<Vec<u8>>,
+            last_read: Arc<AtomicU64>,
+        }
+        impl Read for Counted {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let count = self.input.read(bytes)?;
+                self.last_read
+                    .fetch_max(self.input.position(), Ordering::Relaxed);
+                Ok(count)
+            }
+        }
+        impl Seek for Counted {
+            fn seek(&mut self, from: SeekFrom) -> std::io::Result<u64> {
+                self.input.seek(from)
+            }
+        }
+        let original = include_bytes!("../tests/fixtures/scale.m4a");
+        let mut bytes = original.to_vec();
+        // A legal, unused trailing atom. Opening must not fetch its payload
+        // before first PCM; the old seekable scan consumed its tail buffer.
+        bytes.extend_from_slice(&(4_u32 * 1024 * 1024).to_be_bytes());
+        bytes.extend_from_slice(b"free");
+        bytes.resize(bytes.len() + 4 * 1024 * 1024 - 8, 0);
+        let length = bytes.len() as u64;
+        let last_read = Arc::new(AtomicU64::new(0));
+        let mut source = Vorbis::aac_from_read_seek(
+            Counted {
+                input: std::io::Cursor::new(bytes),
+                last_read: last_read.clone(),
+            },
+            length,
+        )
+        .unwrap();
+        assert!(source.read_frame().unwrap().is_some());
+        assert!(last_read.load(Ordering::Relaxed) <= original.len() as u64);
+        let info = source.info();
+        source.seek_frame(u64::from(info.rate) * 4).unwrap();
+        assert!(source.read_frame().unwrap().is_some());
+        source.seek_frame(info.frames).unwrap();
+        assert!(source.read_frame().unwrap().is_none());
+        source.seek_frame(0).unwrap();
+        assert!(source.read_frame().unwrap().is_some());
+    }
+
+    #[test]
+    fn progressive_open_requires_headers_before_media_and_rewinds() {
+        fn atom(kind: &[u8; 4]) -> Vec<u8> {
+            let mut bytes = 8_u32.to_be_bytes().to_vec();
+            bytes.extend_from_slice(kind);
+            bytes
+        }
+        for (kinds, expected) in [
+            (vec![b"ftyp", b"moov", b"mdat"], true),
+            (vec![b"ftyp", b"mdat", b"moov"], false),
+            (vec![b"moov", b"mdat"], false),
+            (vec![b"ftyp", b"free"], false),
+        ] {
+            let bytes = kinds.into_iter().flat_map(atom).collect::<Vec<_>>();
+            let mut input = std::io::Cursor::new(bytes);
+            let length = input.get_ref().len() as u64;
+            assert_eq!(fast_start_mp4(&mut input, length).unwrap(), expected);
+            assert_eq!(input.position(), 0);
         }
     }
 }
