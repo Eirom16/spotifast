@@ -33,6 +33,18 @@ Referencias verificadas con Git y `git ls-remote origin` antes de editar:
 | Fix de resolvedor, remoto | `cc8a755f40a76b950dd3d2c233f9603610ffb718` |
 | Merge local ya existente | `fa669b9124bb93347947f65f95b9f167242d7f55` |
 
+Estado final publicado (consultado con `git ls-remote origin`):
+
+| Referencia final | SHA completo | CI |
+| --- | --- | --- |
+| `main`, sin cambios | `cd40da022edd35d6017b3093421b8b83071722a6` | no ejecutada por esta misión |
+| Código propuesto, `integration/doremi-premerge-validation` | `5ac877839dba269d200b5a8da5e936bc0c2faafb` | `ci.yml` `44465708503`, `android.yml` `44441447069`: success |
+| Cierre documental publicado | `34af8ab3bdd9f50da0a5a50aec41b4d21f9f9de0` | `ci.yml` `44470862089`, `android.yml` `44470866179`: success (este último tras relanzar apt) |
+
+Los commits posteriores a `34af8ab` solo añaden Markdown; su SHA se obtiene
+con `git log -1 --format=%H -- DOREMI-PREMERGE-REPORT.md` y su diff con
+`git diff 34af8ab..HEAD --stat`.
+
 Se creó un worktree independiente desde `fa669b9` mediante Orca:
 `/home/eirom/orca/workspaces/spotifast/doremi-premerge-validation`.
 El checkout principal tiene cambios ajenos en reglas, lockfile y archivos
@@ -626,6 +638,8 @@ sobre el código que se propone integrar.
 | `android.yml`, `dbc841e` | [44436685168: APK/Windows success, host Linux cancelled a 35 min](https://github.com/Eirom16/spotifast/actions/runs/44436685168) |
 | `android.yml`, `5ac8778` | [44441447069: success global, APK/host Linux/host Windows](https://github.com/Eirom16/spotifast/actions/runs/44441447069) |
 | `ci.yml`, `5ac8778` | [44465708503: success global, preview y gate de artefactos](https://github.com/Eirom16/spotifast/actions/runs/44465708503) |
+| `ci.yml`, `34af8ab` | [44470862089: success global del cierre documental](https://github.com/Eirom16/spotifast/actions/runs/44470862089) |
+| `android.yml`, `34af8ab` | [44470866179: success tras relanzar apt del runner](https://github.com/Eirom16/spotifast/actions/runs/44470866179) |
 
 El host Linux de `44436685168` agotó 35 min después de 17m28s de apt.
 El run verde anterior requería 18m27s de tests y 1m02s de QA gráfica, más
@@ -634,12 +648,25 @@ reserva 50 min (25 preparación, 21 tests, 2 gráfico, 2 artefactos), con
 preparación acotada a 25 min y todos los gates intactos. No altera deadlines
 de reproducción. Ese run cancelado no es aprobación global.
 
+**Incidente de aprovisionamiento en el cierre documental.** Al publicar
+`34af8ab` (solo Markdown y un comentario de script), `ci.yml` `44470862089`
+volvió a aprobar todos sus jobs. `android.yml` `44470866179` falló en su
+primer intento por infraestructura, no por código: `android-apk` terminó con
+`E: Unable to locate package libclang-dev` tras índices apt incompletos, y
+`native-host` agotó sus 25 min de preparación durante `apt` (seguía
+descargando paquetes); `windows-host` aprobó. El mismo código había aprobado
+`android.yml` `44441447069` en `5ac8778`. Se relanzaron los dos jobs fallidos
+con `gh run rerun 44470866179 --failed`: **ambos terminaron `success`**, así
+que `34af8ab` queda con `ci.yml` y `android.yml` verdes. No se amplió ningún
+presupuesto ni se ocultó el fallo: la preparación gráfica depende del espejo
+apt del runner y el margen de 25 min es ajustado; el primer intento se
+conserva como evidencia de esa fragilidad.
+
 La consulta final por SHA y sus reportes Actions fuera del árbol son la
 fuente de verdad. Las ejecuciones sobre `df2ef47` no cubren el guard posterior
-`7c080ad`. Las de `5ac8778` sí cubren el código propuesto; los commits
-posteriores solo añaden Markdown, así que su diff se verifica con
-`git diff 5ac8778..HEAD --stat` y no se les atribuye una nueva compilación
-salvo que se ejecute explícitamente.
+`7c080ad`. `5ac8778` y `34af8ab` tienen `ci.yml` y `android.yml` verdes. Los
+commits posteriores solo añaden Markdown y enlaces: se verifican con
+`git diff 34af8ab..HEAD --stat` y no se les atribuye una compilación nueva.
 
 ## 8. Matriz de requisitos y riesgos
 
@@ -661,13 +688,19 @@ salvo que se ejecute explícitamente.
 | Perfil normal en esta sesión | NOT_VERIFIED | Se evitó su acceso; preservación histórica separada |
 | Windows físico | BLOCKED | Sin entorno Windows conectado para reproducir |
 | CI completa del head de código | PASS | `ci.yml` `44465708503` y `android.yml` `44441447069` verdes en `5ac8778`; el commit documental posterior solo añade Markdown y un comentario |
+| CI del cierre documental `34af8ab` | PASS tras reintento | `ci.yml` `44470862089` verde; `android.yml` `44470866179` falló primero por apt del runner y aprobó al relanzar los jobs |
 
 El riesgo dominante para la futura fusión es presentar reproducción principal
 como estable con errores y grandes pausas medidos. También siguen abiertos el
 retiro de HTTP bloqueante, refresh/expiración/cambio de cuenta durante carga,
 pausa background frente a destrucción del renderer, herramientas externas
-desktop y coste de lectura hasta abrir AAC/MP4. No se propone una descarga
-completa, extractor persistente ni ampliación especulativa de buffers.
+desktop y coste de lectura hasta abrir AAC/MP4. A ello se suma la fragilidad
+del gate Android: en el cierre documental un intento no encontró
+`libclang-dev` y otro agotó 25 min de `apt`; ambos aprobaron al relanzar, pero
+el margen de preparación es estrecho y el merge debe exigir reintento, no
+interpretar el primer fallo como código roto ni como aprobación. No se propone
+una descarga completa, extractor persistente ni ampliación especulativa de
+buffers.
 
 ## 9. Pasos para una futura integración, no ejecutarlos todavía
 
