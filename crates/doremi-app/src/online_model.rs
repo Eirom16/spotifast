@@ -79,7 +79,8 @@ impl State {
     }
     pub fn snapshot(&self) -> serde_json::Value {
         let latency = self.trace.as_ref().map(|(request, trace)| {
-            let mut value = serde_json::json!({"request":format!("{request:?}"),"requested_us":0,"origin":"host_queue_intent","acoustic_capture":false,"prefetched":self.prefetch_hit});
+            trace.enable_http();
+            let mut value = serde_json::json!({"http_reads":trace.http_snapshot(),"request":format!("{request:?}"),"requested_us":0,"origin":"host_queue_intent","acoustic_capture":false,"prefetched":self.prefetch_hit});
             for (name, time) in doremi_youtube::latency::STAGES.iter().zip(trace.snapshot()) {
                 value[*name] = serde_json::json!(time);
             }
@@ -450,7 +451,9 @@ impl Model {
                                 let reader = stream
                                     .reader(move || cancel.cancelled())
                                     .map_err(|_| EngineError::Input)?
-                                    .with_trace(trace);
+                                    .with_trace(trace)
+                                    .read_ahead()
+                                    .map_err(|_| doremi_player::EngineError::Input)?;
                                 let source = doremi_player::ogg_stream::Vorbis::aac_from_read_seek(
                                     reader, length,
                                 )

@@ -27,12 +27,25 @@ fn wait(engine: &Engine, predicate: impl Fn(doremi_player::Metrics) -> bool) -> 
 
 fn run() -> Result<(), String> {
     let mut args: Vec<_> = std::env::args().skip(1).collect();
+    let full = args.first().is_some_and(|arg| arg == "--full");
+    if full {
+        args.remove(0);
+    }
     let session = args.first().is_some_and(|arg| arg == "--session");
     if session {
         args.remove(0);
     }
     if args.len() != 2 || args[0] == args[1] {
-        return Err("Usage: stream_probe [--session] FIRST_VIDEO_ID SECOND_VIDEO_ID".into());
+        return Err(
+            "Usage: stream_probe [--full] [--session] FIRST_VIDEO_ID SECOND_VIDEO_ID".into(),
+        );
+    }
+    if full
+        && !args
+            .iter()
+            .all(|id| matches!(id.as_str(), "qQzdAsjWGPg" | "_d3SaQI_Ag4"))
+    {
+        return Err("full QA is limited to the two authorized identities".into());
     }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -55,17 +68,31 @@ fn run() -> Result<(), String> {
     let mut engine = Engine::new().map_err(|error| format!("output: {error:?}"))?;
     engine.set_volume(0.08);
     let mut queue = Queue::new(SessionId(1));
-    for (index, local) in args.iter().enumerate() {
+    let mut failed = false;
+    for (index, local) in args
+        .iter()
+        .cycle()
+        .take(if full { 6 } else { 2 })
+        .enumerate()
+    {
+        let origin = Instant::now();
+        let trace = std::sync::Arc::new(doremi_youtube::latency::Trace::new(origin));
+        trace.enable_http();
         let media = MediaId::new(ProviderId::new(doremi_youtube::PROVIDER).unwrap(), local)
             .map_err(|_| "invalid media identity")?;
-        let stream = runtime.block_on(client.resolve(&media)).map_err(|error| {
-            // These diagnostics contain only fixed categories and counters.
-            eprintln!("resolution stage={}", client.resolution_stage());
-            if let Some(report) = client.player_diagnostic() {
-                eprintln!("player: {report:?}");
+        let stream = match runtime.block_on(client.resolve(&media)) {
+            Ok(stream) => stream,
+            Err(error) => {
+                println!(
+                    "{}",
+                    serde_json::json!({"attempt":index+1,"track":local,"stage":"resolve","result":"FAIL","error":format!("{error:?}"),"elapsed_ms":origin.elapsed().as_millis()})
+                );
+                failed = true;
+                continue;
             }
-            format!("resolution: {error:?}")
-        })?;
+        };
+        let duration_ms = stream.duration_ms;
+        let worker_trace = trace.clone();
         let length = stream.length();
         let request = queue
             .command(Command::StartContext {
@@ -85,20 +112,65 @@ fn run() -> Result<(), String> {
             })
             .ok_or("queue did not request audio")?;
         engine
-            .load_stream(
+            .load_stream_since(
                 request,
                 Box::new(move |cancel| {
                     let reader = stream
                         .reader(move || cancel.cancelled())
+                        .map_err(|_| doremi_player::EngineError::Input)?
+                        .with_trace(worker_trace)
+                        .read_ahead()
                         .map_err(|_| doremi_player::EngineError::Input)?;
                     let source = Vorbis::aac_from_read_seek(reader, length)
                         .map_err(doremi_player::EngineError::Decode)?;
                     Ok(Box::new(source))
                 }),
                 0,
+                origin,
             )
             .map_err(|error| format!("load: {error:?}"))?;
         engine.set_playing(true);
+        if full {
+            let deadline =
+                Instant::now() + Duration::from_millis(duration_ms) + Duration::from_secs(150);
+            let mut last = Instant::now();
+            let mut ended = false;
+            while Instant::now() < deadline {
+                if let Some(event) = engine.poll() {
+                    match event {
+                        EngineEvent::Ended(_) => {
+                            ended = true;
+                            break;
+                        }
+                        EngineEvent::Failed(_, error) => {
+                            println!(
+                                "{}",
+                                serde_json::json!({"attempt":index+1,"track":local,"result":"FAIL","error":format!("{error:?}")})
+                            );
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                if last.elapsed() >= Duration::from_secs(1) {
+                    if let Some(m) = engine.metrics() {
+                        println!(
+                            "{}",
+                            serde_json::json!({"attempt":index+1,"track":local,"position_ms":m.position_ms,"frames":m.frames,"callbacks":m.callbacks,"underruns":m.buffer_underruns,"episodes":m.starvation_episodes,"silence_frames":m.starvation_silence_frames,"rate":m.output_rate,"buffered_frames":m.buffered_frames,"producer_gap_us":m.producer_max_gap_us,"callback_gap_us":m.max_callback_gap_us,"xruns":m.reported_xruns,"first_pcm_us":m.first_pcm_us,"first_nonzero_us":m.first_nonzero_callback_us})
+                        );
+                    }
+                    last = Instant::now();
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            println!(
+                "{}",
+                serde_json::json!({"attempt":index+1,"track":local,"stage":"end","result":if ended {"EOF_REACHED"}else{"FAIL"},"duration_ms":duration_ms,"http_reads":trace.http_snapshot()})
+            );
+            failed |= !ended;
+            engine.cancel();
+            continue;
+        }
         wait(&engine, |m| {
             m.output_rate > 0
                 && m.frames >= u64::from(m.output_rate) * 7
@@ -130,6 +202,9 @@ fn run() -> Result<(), String> {
     }
     engine.cancel();
     println!("native_output=true track_change=true acoustic_capture=false");
+    if failed {
+        return Err("full playback failed; preserve per-attempt evidence".into());
+    }
     Ok(())
 }
 

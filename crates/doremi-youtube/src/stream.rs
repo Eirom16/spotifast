@@ -10,6 +10,8 @@ use std::{
     io::{self, Read, Seek, SeekFrom},
     time::{Duration, Instant},
 };
+mod read_ahead;
+pub use read_ahead::ReadAhead;
 const PLAYER: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 const CHUNK: usize = 64 * 1024;
@@ -147,7 +149,12 @@ impl Stream {
         self,
         cancelled: impl Fn() -> bool + Send + Sync + 'static,
     ) -> Result<Reader, Error> {
-        let http = reqwest::blocking::Client::builder()
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|_| Error::Transport)?;
+        let http = reqwest::Client::builder()
+            .no_gzip()
             .redirect(Policy::custom(|attempt| {
                 // CDN routing is part of the same media grant. Never follow
                 // consent pages, third-party hosts, downgrade or redirect loops.
@@ -164,12 +171,14 @@ impl Stream {
             .map_err(|_| Error::Transport)?;
         Ok(Reader {
             http,
+            runtime,
             grant: self,
             position: 0,
             cached_at: 0,
             bytes: Vec::new(),
             cancelled: Box::new(cancelled),
             trace: None,
+            sequence: 0,
         })
     }
     #[cfg(any(target_os = "linux", target_os = "windows"))]
@@ -450,13 +459,15 @@ fn parse_with_url(media: &MediaId, value: &Value, resolved: Option<Url>) -> Resu
 }
 /// Owned by the decoder worker; neither the UI nor audio callback reads HTTP.
 pub struct Reader {
-    http: reqwest::blocking::Client,
+    http: reqwest::Client,
+    runtime: tokio::runtime::Runtime,
     grant: Stream,
     position: u64,
     cached_at: u64,
     bytes: Vec<u8>,
     cancelled: Box<dyn Fn() -> bool + Send + Sync>,
     trace: Option<std::sync::Arc<Trace>>,
+    sequence: u64,
 }
 impl Reader {
     pub fn with_trace(mut self, trace: std::sync::Arc<Trace>) -> Self {
@@ -472,108 +483,206 @@ impl Reader {
         }
         Ok(())
     }
+    // Retain each future while polling the cancellation fence. Dropping it
+    // closes an active body/request; cancellation need not await the 6 s IO budget.
+    fn wait_http<T>(
+        &self,
+        future: impl std::future::Future<Output = Result<T, reqwest::Error>>,
+    ) -> io::Result<T> {
+        self.runtime.block_on(async {
+            let mut future = std::pin::pin!(future);
+            loop {
+                self.check()?;
+                if let Ok(result) =
+                    tokio::time::timeout(Duration::from_millis(20), future.as_mut()).await
+                {
+                    self.check()?;
+                    return result.map_err(|error| {
+                        io::Error::new(
+                            if error.is_timeout() {
+                                io::ErrorKind::TimedOut
+                            } else {
+                                io::ErrorKind::ConnectionReset
+                            },
+                            "YouTube audio transport failed",
+                        )
+                    });
+                }
+            }
+        })
+    }
     fn fill(&mut self) -> io::Result<()> {
-        self.check()?;
-        let start = self.position / CHUNK as u64 * CHUNK as u64;
-        let end = (start + CHUNK as u64).min(self.grant.length) - 1;
+        // Retry only an interrupted operation on the SAME grant and interval.
+        // Never retry access refusal, inconsistent identity, overflow or 429.
+        for attempt in 0..=2 {
+            self.check()?;
+            let start = self.position / CHUNK as u64 * CHUNK as u64;
+            let end = (start + CHUNK as u64).min(self.grant.length) - 1;
+            self.sequence += 1;
+            let origin = self
+                .trace
+                .as_ref()
+                .map_or_else(Instant::now, |t| t.origin());
+            let mut record = crate::latency::HttpRead {
+                sequence: self.sequence,
+                offset: start,
+                requested: end - start + 1,
+                started_us: origin.elapsed().as_micros() as u64,
+                ended_us: 0,
+                status: 0,
+                received: 0,
+                content_length: None,
+                length_valid: None,
+                range_valid: None,
+                first_data_us: None,
+                outcome: "transport",
+                cancelled: false,
+                timeout: false,
+                eof: false,
+                incomplete: false,
+            };
+            let result = self.fetch(start, end, origin, &mut record);
+            record.ended_us = origin.elapsed().as_micros() as u64;
+            record.cancelled = (self.cancelled)();
+            if record.cancelled {
+                record.outcome = "cancelled";
+            }
+            if let Some(trace) = &self.trace {
+                trace.record_http(record.clone());
+            }
+            if record.cancelled {
+                self.bytes.clear();
+                return Err(io::ErrorKind::ConnectionAborted.into());
+            }
+            match result {
+                Ok(()) => return Ok(()),
+                Err(error) => {
+                    self.bytes.clear();
+                    if attempt == 2
+                        || !matches!(record.outcome, "transport" | "timeout" | "incomplete")
+                    {
+                        return Err(error);
+                    }
+                    // 50/100 ms backoff, checked every 10 ms; no new request
+                    // after cancellation or lease expiration.
+                    for _ in 0..5 * (attempt + 1) {
+                        self.check()?;
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                }
+            }
+        }
+        unreachable!()
+    }
+    fn fetch(
+        &mut self,
+        start: u64,
+        end: u64,
+        origin: Instant,
+        record: &mut crate::latency::HttpRead,
+    ) -> io::Result<()> {
         if let Some(trace) = &self.trace {
             trace.mark(Stage::Http);
         }
         let mut response = self
-            .http
-            .get(range_url(&self.grant.url, start, end)?)
-            .header("Accept-Encoding", "identity")
-            .send()
-            .map_err(|_| {
-                range_event(0, "transport", 0, start);
-                io::Error::other("YouTube audio transport failed")
+            .wait_http(
+                self.http
+                    .get(range_url(&self.grant.url, start, end)?)
+                    .header("Accept-Encoding", "identity")
+                    .send(),
+            )
+            .map_err(|error| {
+                record.timeout = error.kind() == io::ErrorKind::TimedOut;
+                record.outcome = if record.timeout {
+                    "timeout"
+                } else {
+                    "transport"
+                };
+                error
             })?;
         self.check()?;
-        let status = response.status().as_u16();
-        match response.status().as_u16() {
+        record.status = response.status().as_u16();
+        record.outcome = "status";
+        match record.status {
             200 | 206 => {}
             401 | 403 => {
-                range_event(status, "refused", 0, start);
+                record.outcome = "refused";
                 return Err(io::ErrorKind::PermissionDenied.into());
             }
-            _ => {
-                range_event(status, "range_status", 0, start);
-                return Err(io::Error::other("YouTube audio range unavailable"));
-            }
+            _ => return Err(io::Error::other("YouTube audio range unavailable")),
         }
         let expected = format!("bytes {start}-{end}/{}", self.grant.length);
-        // Query-range replies can be 200 without Content-Range. When the
-        // server supplies that header, it must still identify the exact bytes.
-        // A 206 without it is not a valid partial-content response.
-        let content_range = response.headers().get("content-range");
-        if content_range.is_some_and(|value| value.to_str().ok() != Some(expected.as_str()))
-            || (status == 206 && content_range.is_none())
-        {
-            range_event(status, "content_range", 0, start);
+        let range = response.headers().get("content-range");
+        record.range_valid = range.map(|v| v.to_str().ok() == Some(expected.as_str()));
+        if record.range_valid == Some(false) || (record.status == 206 && range.is_none()) {
+            record.outcome = "content_range";
             return Err(io::Error::other("YouTube audio range changed"));
         }
         let size = (end - start + 1) as usize;
-        self.bytes.clear();
-        self.bytes.reserve_exact(size + 1);
-        let result = (|| {
-            // Never accept an ignored range as a complete-track download.
-            // Read one extra byte to detect overflow, checking cancellation
-            // between blocks as well as at the request's bounded deadline.
-            let mut block = [0; 16 * 1024];
-            while self.bytes.len() <= size {
-                self.check()?;
-                let limit = block.len().min(size + 1 - self.bytes.len());
-                let read = response.read(&mut block[..limit]).map_err(|_| {
-                    range_event(status, "read", self.bytes.len(), start);
-                    io::Error::other("YouTube audio read failed")
-                })?;
-                self.check()?;
-                if read == 0 {
-                    break;
-                }
-                self.bytes.extend_from_slice(&block[..read]);
-            }
-            Ok(())
-        })();
-        if let Err(error) = result {
-            // A failed fill must not leave partial bytes eligible as a cache
-            // hit on the next read.
-            self.bytes.clear();
-            return Err(error);
-        }
-        if self.bytes.len() != size {
-            range_event(status, "truncated", self.bytes.len(), start);
-            self.bytes.clear();
+        let length = response.headers().get("content-length");
+        record.content_length = length.and_then(|v| v.to_str().ok()?.parse().ok());
+        record.length_valid = length.map(|_| record.content_length == Some(size as u64));
+        if record.length_valid == Some(false) {
+            record.incomplete = record.content_length.is_some_and(|n| n < size as u64);
+            record.outcome = if record.incomplete {
+                "incomplete"
+            } else {
+                "content_length"
+            };
             return Err(io::ErrorKind::ConnectionReset.into());
         }
-        if start == 0 {
-            range_event(
-                status,
-                if self.bytes.get(4..8) == Some(b"ftyp") {
-                    "mp4"
-                } else {
-                    "other_container"
-                },
-                self.bytes.len(),
-                start,
-            );
+        self.bytes.clear();
+        if self.bytes.capacity() < size + 1 {
+            self.bytes.reserve_exact(size + 1 - self.bytes.len());
         }
+        loop {
+            let chunk = self.wait_http(response.chunk()).map_err(|error| {
+                record.timeout = error.kind() == io::ErrorKind::TimedOut;
+                record.incomplete = true;
+                record.outcome = if record.timeout {
+                    "timeout"
+                } else {
+                    "incomplete"
+                };
+                error
+            })?;
+            let Some(chunk) = chunk else {
+                break;
+            };
+            record.received += chunk.len() as u64;
+            if !chunk.is_empty() && record.first_data_us.is_none() {
+                record.first_data_us = Some(origin.elapsed().as_micros() as u64);
+            }
+            self.check()?;
+            if chunk.len() > (size + 1).saturating_sub(self.bytes.len()) {
+                record.outcome = "overflow";
+                return Err(io::ErrorKind::ConnectionReset.into());
+            }
+            self.bytes.extend_from_slice(&chunk);
+            if self.bytes.len() > size {
+                break;
+            }
+        }
+        if self.bytes.len() != size {
+            record.incomplete = self.bytes.len() < size;
+            record.outcome = if record.incomplete {
+                "incomplete"
+            } else {
+                "overflow"
+            };
+            return Err(io::ErrorKind::ConnectionReset.into());
+        }
+        self.check()?;
         self.cached_at = start;
+        record.outcome = "validated";
+        record.eof = end + 1 == self.grant.length;
         if let Some(trace) = &self.trace {
-            // Useful means a validated block, not an unvalidated socket byte.
             trace.mark(Stage::FirstBytes);
         }
         Ok(())
     }
 }
-fn range_event(http: u16, stage: &'static str, bytes: usize, offset: u64) {
-    // Fixed categories and counts only. Never inspect/log URL query, response
-    // headers, body text, player identifiers or credentials.
-    #[cfg(target_os = "android")]
-    log::info!("YTM range http={http} stage={stage} bytes={bytes} offset={offset}");
-    #[cfg(not(target_os = "android"))]
-    eprintln!("YTM range http={http} stage={stage} bytes={bytes} offset={offset}");
-}
+
 impl Read for Reader {
     fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
         self.check()?;
@@ -885,7 +994,7 @@ mod range_tests {
     fn ignored_ranges_and_partial_read_errors_never_publish_cached_bytes() {
         for (sent, declared, expected) in [
             (CHUNK + 1, CHUNK + 1, io::ErrorKind::ConnectionReset),
-            (CHUNK - 1, CHUNK, io::ErrorKind::Other),
+            (CHUNK - 1, CHUNK, io::ErrorKind::ConnectionReset),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -920,7 +1029,7 @@ mod range_tests {
             assert_eq!(reader.read(&mut [0; 1]).unwrap_err().kind(), expected);
             assert_eq!(reader.position, 0);
             assert!(reader.bytes.is_empty());
-            assert_eq!(reader.bytes.capacity(), CHUNK + 1);
+            assert!(reader.bytes.capacity() <= CHUNK + 1);
             thread.join().unwrap();
         }
     }
@@ -1003,5 +1112,225 @@ mod range_tests {
             reader.seek(SeekFrom::Start(0)).unwrap_err().kind(),
             io::ErrorKind::ConnectionAborted
         );
+    }
+}
+
+#[cfg(test)]
+mod reliability_tests {
+    use super::*;
+    use std::{
+        io::Write,
+        net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+            mpsc,
+        },
+    };
+    fn request(socket: &mut std::net::TcpStream) -> String {
+        socket
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut bytes = Vec::new();
+        while !bytes.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            socket.read_exact(&mut byte).unwrap();
+            bytes.push(byte[0]);
+            assert!(bytes.len() < 8192);
+        }
+        String::from_utf8(bytes).unwrap()
+    }
+    fn grant(address: std::net::SocketAddr, length: u64) -> Stream {
+        Stream {
+            url: format!("http://{address}/fixture"),
+            user_agent: UA.into(),
+            length,
+            expires: Instant::now() + Duration::from_secs(30),
+            duration_ms: 60000,
+        }
+    }
+    #[test]
+    fn interrupted_block_retries_same_offset_and_never_duplicates_bytes() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            for (start, sent) in [(0, 17), (0, CHUNK), (CHUNK, 71)] {
+                let (mut socket, _) = listener.accept().unwrap();
+                let req = request(&mut socket);
+                let end = if start == 0 { CHUNK - 1 } else { CHUNK + 70 };
+                assert!(req.starts_with(&format!("GET /fixture?range={start}-{end} HTTP/1.1")));
+                write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",end-start+1,CHUNK+71).unwrap();
+                socket
+                    .write_all(&vec![if start == 0 { 1 } else { 2 }; sent])
+                    .unwrap();
+            }
+        });
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut reader = grant(address, (CHUNK + 71) as u64)
+            .reader(|| false)
+            .unwrap()
+            .with_trace(trace.clone());
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes).unwrap();
+        assert_eq!(&bytes[..CHUNK], vec![1; CHUNK]);
+        assert_eq!(&bytes[CHUNK..], vec![2; 71]);
+        assert_eq!(reader.read(&mut [0; 1]).unwrap(), 0);
+        let records = trace.http_snapshot();
+        assert_eq!(records.len(), 3);
+        assert_eq!(
+            records.iter().map(|r| r.offset).collect::<Vec<_>>(),
+            [0, 0, CHUNK as u64]
+        );
+        assert!(records[0].incomplete);
+        assert_eq!(records[0].received, 17);
+        assert_eq!(records[1].outcome, "validated");
+        assert!(records[2].eof);
+        server.join().unwrap();
+    }
+    #[test]
+    fn cancellation_retires_blocked_headers_and_bodies_before_deadline() {
+        for headers in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let (ready_tx, ready_rx) = mpsc::channel();
+            let (release_tx, release_rx) = mpsc::channel();
+            let server = std::thread::spawn(move || {
+                let (mut socket, _) = listener.accept().unwrap();
+                request(&mut socket);
+                if headers {
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {CHUNK}\r\n\r\n").unwrap();
+                    socket.write_all(&[7; 16]).unwrap();
+                }
+                ready_tx.send(()).unwrap();
+                release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                // A late response must not turn a cancelled read into success.
+                let _ = socket.write_all(&vec![9; CHUNK]);
+            });
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let fence = cancelled.clone();
+            let trace = Arc::new(Trace::default());
+            trace.enable_http();
+            let exported = trace.clone();
+            let worker = std::thread::spawn(move || {
+                let mut reader = grant(address, CHUNK as u64)
+                    .reader(move || fence.load(Ordering::Acquire))
+                    .unwrap()
+                    .with_trace(trace);
+                let result = reader.read(&mut [0; 1]);
+                assert!(reader.bytes.is_empty());
+                result
+            });
+            ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            let start = Instant::now();
+            cancelled.store(true, Ordering::Release);
+            assert_eq!(
+                worker.join().unwrap().unwrap_err().kind(),
+                io::ErrorKind::ConnectionAborted
+            );
+            assert!(start.elapsed() < Duration::from_millis(250));
+            let record = exported.http_snapshot().pop().unwrap();
+            assert!(record.cancelled);
+            release_tx.send(()).unwrap();
+            server.join().unwrap();
+        }
+    }
+    #[test]
+    fn timeout_has_a_finite_retry_budget_and_no_false_eof() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let mut sockets = Vec::new();
+            for _ in 0..3 {
+                let (mut socket, _) = listener.accept().unwrap();
+                request(&mut socket);
+                sockets.push(socket);
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        });
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut reader = grant(address, CHUNK as u64)
+            .reader(|| false)
+            .unwrap()
+            .with_trace(trace.clone());
+        reader.http = reqwest::Client::builder()
+            .timeout(Duration::from_millis(60))
+            .build()
+            .unwrap();
+        assert_eq!(
+            reader.read(&mut [0; 1]).unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+        let records = trace.http_snapshot();
+        assert_eq!(records.len(), 3);
+        assert!(records.iter().all(|r| r.timeout && !r.eof));
+        assert_eq!(reader.position, 0);
+        assert!(reader.bytes.is_empty());
+        server.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod read_ahead_tests {
+    use super::*;
+    use std::{io::Write, net::TcpListener, sync::mpsc};
+    #[test]
+    fn seek_cancels_active_prefetch_and_uses_only_requested_interval() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (ready, wait) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for (index, at) in [0, CHUNK, 3 * CHUNK, 0].into_iter().enumerate() {
+                let (mut socket, _) = listener.accept().unwrap();
+                socket
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    let mut b = [0];
+                    socket.read_exact(&mut b).unwrap();
+                    request.push(b[0]);
+                }
+                assert!(String::from_utf8(request).unwrap().starts_with(&format!(
+                    "GET /fixture?range={at}-{} HTTP/1.1",
+                    at + CHUNK - 1
+                )));
+                if index == 1 {
+                    ready.send(()).unwrap();
+                    // The active request must close before another seek can run.
+                    assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+                } else {
+                    write!(
+                        socket,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {CHUNK}\r\nConnection: close\r\n\r\n"
+                    )
+                    .unwrap();
+                    socket.write_all(&vec![(at / CHUNK) as u8; CHUNK]).unwrap();
+                }
+            }
+        });
+        let grant = Stream {
+            url: format!("http://{address}/fixture"),
+            user_agent: UA.into(),
+            length: (4 * CHUNK) as u64,
+            expires: Instant::now() + Duration::from_secs(10),
+            duration_ms: 60000,
+        };
+        let mut reader = grant.reader(|| false).unwrap().read_ahead().unwrap();
+        let mut output = [7; 16];
+        reader.read_exact(&mut output).unwrap();
+        assert_eq!(output, [0; 16]);
+        wait.recv_timeout(Duration::from_secs(2)).unwrap();
+        let start = Instant::now();
+        reader.seek(SeekFrom::Start((3 * CHUNK) as u64)).unwrap();
+        reader.read_exact(&mut output).unwrap();
+        assert_eq!(output, [3; 16]);
+        assert!(start.elapsed() < Duration::from_millis(500));
+        reader.seek(SeekFrom::Start(0)).unwrap();
+        reader.read_exact(&mut output).unwrap();
+        assert_eq!(output, [0; 16]);
+        drop(reader);
+        server.join().unwrap();
     }
 }
