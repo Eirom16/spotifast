@@ -203,6 +203,20 @@ class CITests(unittest.TestCase):
         self.assertIn("cargo test --locked --workspace --all-targets", full)
         self.assertIn("needs: [quick, full-tests, clippy, desktop-build, android-core, preview-linux, android-apk]", full)
 
+    def test_graphical_setup_has_a_separate_budget_and_preserves_execution(self):
+        text = (ROOT / ".github/workflows/ci.yml").read_text()
+        preview = text.split("  preview-linux:\n", 1)[1].split("  android-apk:\n", 1)[0]
+        self.assertIn("timeout-minutes: 20", preview)
+        self.assertIn("timeout-minutes: 12", preview)
+        self.assertIn("--no-install-recommends", preview)
+        for script in ("preview-qa.py", "native-qa.py", "product-ui-qa.py"):
+            self.assertIn(script, preview)
+        self.assertNotIn("continue-on-error", preview)
+        self.assertNotIn("cargo build", preview)
+        for script in ("test-playback-latency.py", "test-android-device-qa-geometry.py",
+                       "test-android-device-qa-profile.py"):
+            self.assertIn(script, text.split("  full-tests:\n", 1)[0])
+
 
 if __name__ == "__main__":
     unittest.main()

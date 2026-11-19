@@ -57,6 +57,11 @@ jobs:
         env:
           PROVIDER_BENCH_OUTPUT_DIR: target/ci-reports/provider-fixtures
         run: python3 scripts/ci-report.py run provider-harness -- python3 scripts/test-provider-harness.py
+      - name: Offline playback measurement and Android QA contracts
+        run: |
+          python3 scripts/ci-report.py run playback-latency -- python3 scripts/test-playback-latency.py
+          python3 scripts/ci-report.py run device-qa-geometry -- python3 scripts/test-android-device-qa-geometry.py
+          python3 scripts/ci-report.py run device-qa-profile -- python3 scripts/test-android-device-qa-profile.py
       - name: New settings still require explicit approval
         if: github.event_name == 'pull_request'
         env:
@@ -383,7 +388,11 @@ jobs:
   preview-linux:
     needs: full-tests
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Run 44342784124 spent 9m21s downloading 37.7 MB of runtime packages;
+    # another attempt completed all visual checks before the 10m job cutoff.
+    # Bound setup separately (12m), reserve 5m for the measured ~3m checks
+    # and 3m for artifact/report handling. No playback deadline is changed.
+    timeout-minutes: 20
     env:
       LIBGL_ALWAYS_SOFTWARE: "1"
       WINIT_UNIX_BACKEND: x11
@@ -398,9 +407,10 @@ jobs:
           name: native-binary-${{ github.sha }}
           path: target/native-binary
       - name: Graphical runtime only, no second Rust dependency build or cache
+        timeout-minutes: 12
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb xauth xdotool imagemagick libasound2t64 libpipewire-0.3-0 \
+          sudo apt-get install -y --no-install-recommends xvfb xauth xdotool imagemagick libasound2t64 libpipewire-0.3-0 \
             libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libgl1 libegl1 libx11-6
           chmod +x target/preview-binary/doremi-preview
       - name: Package tested Preview with original assets, version, SHA and checksums
