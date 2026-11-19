@@ -39,10 +39,21 @@ timeout, interrupción o truncamiento; backoff de 50/100 ms cancelable.
 individual sigue siendo 6 s; la cancelación retira el future HTTP en intervalos
 de 20 ms. DNS del sistema queda sujeto al comportamiento del runtime.
 
-Un worker anticipa como máximo el siguiente bloque comprimido; la generación
-de seek invalida el trabajo anterior. Se retienen dos bloques de 64 KiB
-(más el byte de comprobación), sin aumentar el buffer PCM de 8192 frames.
+Un worker anticipa como máximo cinco bloques comprimidos; la generación
+de seek invalida el trabajo anterior. Cuatro respuestas en cola y una pendiente
+de entrega retienen, junto al bloque del consumidor, como máximo 384 KiB
+(más seis bytes de comprobación y los buffers del cliente HTTP). Son 256 KiB
+adicionales frente al anticipo de un bloque, sin otro thread ni cambios al
+buffer PCM de 8192 frames. No espera llenar la ventana para entregar el primer
+bloque. Las respuestas ya validadas siguen disponibles mientras HTTP espera
+otro intervalo; seek/Drop retiran también un sender bloqueado por backpressure.
 Ningún bloque incompleto se publica. Una negativa anticipada queda terminal.
+
+La ventana responde a una recuperación real observada de 15 s: un bloque de
+AAC a 128 kb/s cubre unos 4 s; cinco cubren el presupuesto existente de
+3 × 6 s + 150 ms. No garantiza continuidad cuando la red queda por debajo
+del bitrate durante más tiempo. Medir memoria, seek y starvation por separado;
+el límite calculado no sustituye una medición de PSS en ARMv7.
 
 No hay logs detallados permanentes de HTTP. El snapshot QA activa una traza
 circular de 256 operaciones en memoria y la exporta explícitamente como

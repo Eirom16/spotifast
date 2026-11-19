@@ -1391,9 +1391,18 @@ mod prefetch_contract_tests {
             // No consumer demand for block 2 has yet been made.
             assert_eq!(trace.http_snapshot().len(), 2);
             if refused {
-                reader.seek(SeekFrom::Start(CHUNK as u64)).unwrap();
+                // The HTTP trace can precede publication of the terminal flag.
+                // Seek may observe it already; reading the refused block must.
+                if let Err(error) = reader.seek(SeekFrom::Start(CHUNK as u64)) {
+                    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+                }
                 assert_eq!(
                     reader.read(&mut [0; 1]).unwrap_err().kind(),
+                    io::ErrorKind::PermissionDenied
+                );
+                // Once observed, cached earlier bytes must not mask refusal.
+                assert_eq!(
+                    reader.seek(SeekFrom::Start(0)).unwrap_err().kind(),
                     io::ErrorKind::PermissionDenied
                 );
                 assert_eq!(trace.http_snapshot().len(), 2);
