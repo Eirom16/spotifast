@@ -189,6 +189,13 @@ impl Vorbis {
             if packet.track_id() != self.track {
                 return Err(DecodeError::UnsupportedFormat);
             }
+            // This frame reader promises a contiguous sample clock. AAC
+            // timestamps cannot silently skip/duplicate decoded frames. A
+            // nonuniform MP4 timeline needs explicit gap/edit handling, not
+            // relabelling later PCM or extending the final sample at EOF.
+            if self.aac && packet.ts() != self.position {
+                return Err(DecodeError::UnsupportedFormat);
+            }
             let decoded = self.decoder.decode(&packet).map_err(|_| self.invalid)?;
             if decoded.spec().rate != self.info.rate
                 || decoded.spec().channels.count() != self.info.channels
@@ -481,5 +488,36 @@ mod aac_tests {
                 assert!((actual[channel] - expected[channel]).abs() < 0.001);
             }
         }
+    }
+
+    #[test]
+    fn fragmented_aac_timestamp_gaps_do_not_silently_relabel_pcm() {
+        let mut bytes = include_bytes!("../tests/fixtures/scale-fragmented.m4a").to_vec();
+        // Double the default sample duration of the second fragment without
+        // changing its AAC packets (1024 decoded frames each).
+        let offset = bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, kind)| *kind == b"tfhd")
+            .nth(1)
+            .unwrap()
+            .0;
+        assert_eq!(&bytes[offset + 4..offset + 8], &[0, 2, 0, 0x38]);
+        let at = offset + 12;
+        assert_eq!(
+            u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()),
+            1024
+        );
+        bytes[at..at + 4].copy_from_slice(&2048u32.to_be_bytes());
+        let length = bytes.len() as u64;
+        let mut source = Vorbis::aac_from_read_seek(std::io::Cursor::new(bytes), length).unwrap();
+        let error = loop {
+            match source.read_frame() {
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("timestamp gap accepted as normal EOF"),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error, DecodeError::UnsupportedFormat);
     }
 }
