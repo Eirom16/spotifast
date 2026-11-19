@@ -27,17 +27,29 @@ no está implementada**. No afirmar paridad móvil por compilar la APK.
 ## Transporte y diagnósticos
 
 El lector comparte código entre Linux, Android y Windows. Solicita bloques
-de 64 KiB mediante `range=inicio-fin` en la query de la concesión de
-googlevideo, como el transporte de Tubefast. Acepta `200` sin
-`Content-Range` y `206` con el rango correcto. Nunca acepta más bytes que
-los solicitados ni convierte una denegación en un reintento con otro cliente.
-La caché conserva como máximo un bloque más un byte para detectar desbordes.
-Un bloque incompleto o cancelado no se publica en la caché.
+de 64 KiB con `Range: bytes=inicio-fin` desde la primera petición, retirando
+cualquier query `range` heredada sin recodificar los octetos firmados.
+Exige `206`, `Content-Range` exacto y longitud/cuerpo íntegros. Un `200`
+representa un rango ignorado y falla aunque tenga el tamaño solicitado.
+No existe fallback de protocolo, cliente o concesión tras un rechazo.
 
-`YTM range` solo muestra estado HTTP, categoría fija, número de bytes y offset.
-`stage=read` identifica un fallo leyendo HTTP, no un rechazo del códec.
-`stage=mp4` identifica la cabecera del primer bloque, no prueba que se haya
-decodificado ni reproducido audio.
+Dos reintentos como máximo, sobre el mismo intervalo/concesión, recuperan
+timeout, interrupción o truncamiento; backoff de 50/100 ms cancelable.
+401/403, 429, rango inconsistente y desborde son definitivos. El presupuesto
+individual sigue siendo 6 s; la cancelación retira el future HTTP en intervalos
+de 20 ms. DNS del sistema queda sujeto al comportamiento del runtime.
+
+Un worker anticipa como máximo el siguiente bloque comprimido; la generación
+de seek invalida el trabajo anterior. Se retienen dos bloques de 64 KiB
+(más el byte de comprobación), sin aumentar el buffer PCM de 8192 frames.
+Ningún bloque incompleto se publica. Una negativa anticipada queda terminal.
+
+No hay logs detallados permanentes de HTTP. El snapshot QA activa una traza
+circular de 256 operaciones en memoria y la exporta explícitamente como
+`online.latency.http_reads`, vinculada al RequestId del mismo objeto.
+Incluye secuencia, offset, longitud, tiempos monotónicos, estado HTTP,
+bytes recibidos, validez de longitud/rango y categorías fijas de resultado.
+No conserva URLs, cookies, encabezados privados ni texto de errores externos.
 
 El supervisor conserva el presupuesto de resolución existente de 120 s.
 Cancelar o cambiar de pista retira el future y el proceso sin esperar ese plazo.
@@ -136,3 +148,10 @@ Los escenarios `next` y `prefetched` deben usar el mismo par ordenado. Resume
 no tiene un reloj propio todavía y queda `NOT_VERIFIED`. El probe separado
 no demuestra la cola ni prefetch del host. No usar el llavero personal para
 suplir una sesión de QA no autorizada.
+
+Para la misión de continuidad, `stream_probe --full qQzdAsjWGPg _d3SaQI_Ag4`
+realiza tres intentos por pista hasta `EngineEvent::Ended` o fallo, sin leer
+credenciales. `EOF_REACHED` describe solo finalización; no acredita seek,
+ausencia de underruns ni audio acústico. El JSON por segundo informa posición,
+frames de silencio, episodios, underruns y xruns por separado. Los controles
+y las pruebas físicas Android se validan desde el host con perfil QA aislado.

@@ -347,11 +347,11 @@ fn with_nonce(url: &mut Url, nonce: &str) {
         .extend_pairs(pairs)
         .append_pair("cpn", nonce);
 }
-fn range_url(value: &str, start: u64, end: u64) -> io::Result<Url> {
+fn resource_url(value: &str) -> io::Result<Url> {
     let mut url = Url::parse(value).map_err(|_| io::ErrorKind::InvalidInput)?;
-    // googlevideo uses a query range (Tubefast's download protocol), not an
-    // HTTP Range header. Preserve the signed query byte-for-byte, replacing
-    // only an existing range so a seek cannot reuse the resolver's old range.
+    // Strip a resolver-supplied query range without re-encoding signed octets.
+    // A standard Range header is the only interval selector. Never fall back
+    // to query ranges after a refusal or an ignored Range.
     let query = url
         .query()
         .unwrap_or_default()
@@ -360,10 +360,9 @@ fn range_url(value: &str, start: u64, end: u64) -> io::Result<Url> {
         .collect::<Vec<_>>()
         .join("&");
     url.set_query(if query.is_empty() { None } else { Some(&query) });
-    url.query_pairs_mut()
-        .append_pair("range", &format!("{start}-{end}"));
     Ok(url)
 }
+
 fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
     parse_with_url(media, value, None)
 }
@@ -584,13 +583,16 @@ impl Reader {
         if let Some(trace) = &self.trace {
             trace.mark(Stage::Http);
         }
+        let url = resource_url(&self.grant.url)?;
         let mut response = self
-            .wait_http(
+            .wait_http(async {
                 self.http
-                    .get(range_url(&self.grant.url, start, end)?)
+                    .get(url)
+                    .header("Range", format!("bytes={start}-{end}"))
                     .header("Accept-Encoding", "identity")
-                    .send(),
-            )
+                    .send()
+                    .await
+            })
             .map_err(|error| {
                 record.timeout = error.kind() == io::ErrorKind::TimedOut;
                 record.outcome = if record.timeout {
@@ -604,7 +606,11 @@ impl Reader {
         record.status = response.status().as_u16();
         record.outcome = "status";
         match record.status {
-            200 | 206 => {}
+            206 => {}
+            200 => {
+                record.outcome = "ignored_range";
+                return Err(io::Error::other("YouTube audio range ignored"));
+            }
             401 | 403 => {
                 record.outcome = "refused";
                 return Err(io::ErrorKind::PermissionDenied.into());
@@ -913,23 +919,18 @@ mod range_tests {
         atomic::{AtomicBool, Ordering},
     };
     #[test]
-    fn query_ranges_preserve_signed_octets_and_replace_previous_ranges() {
-        let url = range_url(
+    fn resource_url_preserves_signed_octets_and_removes_previous_ranges() {
+        let url = resource_url(
             "https://rr.googlevideo.com/videoplayback?sig=fixture%2f%3D&n=a%20b&range=0-9&cpn=fixture&range=2-4",
-            65536,
-            99999,
         )
         .unwrap();
-        assert_eq!(
-            url.query(),
-            Some("sig=fixture%2f%3D&n=a%20b&cpn=fixture&range=65536-99999")
-        );
+        assert_eq!(url.query(), Some("sig=fixture%2f%3D&n=a%20b&cpn=fixture"));
     }
     #[test]
     fn refusals_and_broken_ranges_fail_once_without_reading_a_full_file() {
         for (status, range, body, expected) in [
             (403, "", b"".as_slice(), io::ErrorKind::PermissionDenied),
-            (200, "", b"".as_slice(), io::ErrorKind::ConnectionReset),
+            (200, "", b"".as_slice(), io::ErrorKind::Other),
             (206, "", b"".as_slice(), io::ErrorKind::Other),
             (
                 206,
@@ -993,8 +994,9 @@ mod range_tests {
     #[test]
     fn ignored_ranges_and_partial_read_errors_never_publish_cached_bytes() {
         for (sent, declared, expected) in [
-            (CHUNK + 1, CHUNK + 1, io::ErrorKind::ConnectionReset),
-            (CHUNK - 1, CHUNK, io::ErrorKind::ConnectionReset),
+            (CHUNK, CHUNK, io::ErrorKind::Other),
+            (CHUNK + 1, CHUNK + 1, io::ErrorKind::Other),
+            (CHUNK - 1, CHUNK, io::ErrorKind::Other),
         ] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
@@ -1035,9 +1037,7 @@ mod range_tests {
     }
     #[test]
     fn ranges_start_playback_without_downloading_the_whole_track_and_seek_is_cancelable() {
-        for status in [200, 206] {
-            query_range_round_trip(status);
-        }
+        query_range_round_trip(206);
     }
     fn query_range_round_trip(status: u16) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1059,9 +1059,10 @@ mod range_tests {
                 }
                 let headers = String::from_utf8(request).unwrap().to_ascii_lowercase();
                 assert!(
-                    headers.starts_with(&format!("get /fixture?range={start}-{end} http/1.1\r\n"))
+                    headers.starts_with("get /fixture http/1.1\r\n")
+                        && headers.contains(&format!("\r\nrange: bytes={start}-{end}\r\n"))
                 );
-                assert!(!headers.contains("\r\nrange:"));
+
                 assert!(headers.contains(&format!(
                     "user-agent: {}",
                     crate::USER_AGENT.to_ascii_lowercase()
@@ -1158,7 +1159,12 @@ mod reliability_tests {
                 let (mut socket, _) = listener.accept().unwrap();
                 let req = request(&mut socket);
                 let end = if start == 0 { CHUNK - 1 } else { CHUNK + 70 };
-                assert!(req.starts_with(&format!("GET /fixture?range={start}-{end} HTTP/1.1")));
+                assert!(
+                    req.starts_with("GET /fixture HTTP/1.1")
+                        && req
+                            .to_ascii_lowercase()
+                            .contains(&format!("\r\nrange: bytes={start}-{end}\r\n"))
+                );
                 write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {}\r\nContent-Range: bytes {start}-{end}/{}\r\nConnection: close\r\n\r\n",end-start+1,CHUNK+71).unwrap();
                 socket
                     .write_all(&vec![if start == 0 { 1 } else { 2 }; sent])
@@ -1199,7 +1205,7 @@ mod reliability_tests {
                 let (mut socket, _) = listener.accept().unwrap();
                 request(&mut socket);
                 if headers {
-                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Length: {CHUNK}\r\n\r\n").unwrap();
+                    write!(socket, "HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes 0-65535/65536\r\n\r\n").unwrap();
                     socket.write_all(&[7; 16]).unwrap();
                 }
                 ready_tx.send(()).unwrap();
@@ -1292,10 +1298,9 @@ mod read_ahead_tests {
                     socket.read_exact(&mut b).unwrap();
                     request.push(b[0]);
                 }
-                assert!(String::from_utf8(request).unwrap().starts_with(&format!(
-                    "GET /fixture?range={at}-{} HTTP/1.1",
-                    at + CHUNK - 1
-                )));
+                let request = String::from_utf8(request).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /fixture http/1.1"));
+                assert!(request.contains(&format!("\r\nrange: bytes={at}-{}\r\n", at + CHUNK - 1)));
                 if index == 1 {
                     ready.send(()).unwrap();
                     // The active request must close before another seek can run.
@@ -1303,7 +1308,7 @@ mod read_ahead_tests {
                 } else {
                     write!(
                         socket,
-                        "HTTP/1.1 200 OK\r\nContent-Length: {CHUNK}\r\nConnection: close\r\n\r\n"
+                        "HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes {at}-{}/{}\r\nConnection: close\r\n\r\n",at+CHUNK-1,4*CHUNK
                     )
                     .unwrap();
                     socket.write_all(&vec![(at / CHUNK) as u8; CHUNK]).unwrap();
