@@ -56,6 +56,17 @@ def normal_snapshot(isolated_only):
     return normal_hashes(), queue_checkpoint(), session_envelope()
 
 
+def private_profile_exists(profile):
+    assert re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", profile)
+    # adb joins shell arguments with spaces. Passing `sh -c`, then an unquoted
+    # argv string makes `test` execute without its operands (always false).
+    command = "run-as " + PACKAGE + " sh -c " + shlex.quote("test -e files/qa/" + profile + "/")
+    result = subprocess.run(["adb", "-d", "shell", command], capture_output=True, timeout=30)
+    if result.returncode not in (0, 1):
+        raise AssertionError("Cannot determine private profile freshness")
+    return result.returncode == 0
+
+
 def adb(*arguments, timeout=45):
     return subprocess.check_output(["adb", "-d", *map(str, arguments)], timeout=timeout)
 
@@ -401,9 +412,7 @@ def main():
     digest = hashlib.file_digest(apk.open("rb"), "sha256").hexdigest()
     assert adb("shell", "sha256sum", installed).decode().split()[0] == digest
     private = f"files/qa/{args.profile}/"
-    exists = subprocess.run(["adb", "-d", "shell", "run-as", PACKAGE, "sh", "-c",
-                             "test -e " + private], capture_output=True, timeout=30)
-    assert exists.returncode == 1, "Use a fresh private profile"
+    assert not private_profile_exists(args.profile), "Use a fresh private profile"
     geometry = json.loads(args.geometry.read_text())
     assert len(geometry["qa_surface_origin"]) == 2
     journey = Journey(args, geometry)

@@ -9,6 +9,9 @@ device; the device fetches are separate functions.
 """
 import importlib.util
 from pathlib import Path
+import subprocess
+import tempfile
+import types
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -67,6 +70,32 @@ def test_isolated_only_never_reads_or_relaunches_normal_profile_even_after_failu
         assert [call.args for call in mocked.call_args_list] == [
             ("shell", "am", "force-stop", device_qa.PACKAGE),
             ("shell", "am", "force-stop", device_qa.PACKAGE)]
+
+
+def test_adb_shell_join_preserves_test_operands_and_refuses_existing_profile():
+    # Emulate adb's space-joined remote shell on a temporary synthetic profile.
+    # The old separate argv `sh -c`, `test -e ...` fails this existing-path case.
+    run = subprocess.run
+    with tempfile.TemporaryDirectory() as directory:
+        (Path(directory) / "files/qa/existing").mkdir(parents=True)
+
+        def remote(arguments, **kwargs):
+            assert arguments[:3] == ["adb", "-d", "shell"]
+            command = " ".join(arguments[3:])
+            prefix = "run-as " + device_qa.PACKAGE + " "
+            assert command.startswith(prefix)
+            return run(command.removeprefix(prefix), shell=True, cwd=directory, **kwargs)
+
+        with patch.object(device_qa.subprocess, "run", side_effect=remote):
+            assert device_qa.private_profile_exists("existing")
+            assert not device_qa.private_profile_exists("missing")
+        with patch.object(device_qa.subprocess, "run", return_value=types.SimpleNamespace(returncode=127)):
+            try:
+                device_qa.private_profile_exists("existing")
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError("unknown shell failure must abort freshness check")
 
 
 def test_session_reseal_is_preserved():
