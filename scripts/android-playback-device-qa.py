@@ -62,7 +62,7 @@ def private_profile_exists(profile):
     # argv string makes `test` execute without its operands (always false).
     command = "run-as " + PACKAGE + " sh -c " + shlex.quote("test -e files/qa/" + profile + "/")
     result = subprocess.run(["adb", "-d", "shell", command], capture_output=True, timeout=30)
-    if result.returncode not in (0, 1):
+    if result.returncode not in (0, 1) or result.stdout or result.stderr:
         raise AssertionError("Cannot determine private profile freshness")
     return result.returncode == 0
 

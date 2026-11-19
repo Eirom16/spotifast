@@ -89,13 +89,16 @@ def test_adb_shell_join_preserves_test_operands_and_refuses_existing_profile():
         with patch.object(device_qa.subprocess, "run", side_effect=remote):
             assert device_qa.private_profile_exists("existing")
             assert not device_qa.private_profile_exists("missing")
-        with patch.object(device_qa.subprocess, "run", return_value=types.SimpleNamespace(returncode=127)):
-            try:
-                device_qa.private_profile_exists("existing")
-            except AssertionError:
-                pass
-            else:
-                raise AssertionError("unknown shell failure must abort freshness check")
+        for failure in (types.SimpleNamespace(returncode=127),
+                        types.SimpleNamespace(returncode=1, stdout=b"", stderr=b"Permission denied"),
+                        types.SimpleNamespace(returncode=1, stdout=b"run-as failed", stderr=b"")):
+            with patch.object(device_qa.subprocess, "run", return_value=failure):
+                try:
+                    device_qa.private_profile_exists("existing")
+                except AssertionError:
+                    pass
+                else:
+                    raise AssertionError("shell failure must abort freshness check")
 
 
 def test_session_reseal_is_preserved():
