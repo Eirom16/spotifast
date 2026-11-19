@@ -68,3 +68,20 @@ YouTube Music progressive decoder. Generated with local FFmpeg:
 ```sh
 ffmpeg -nostdin -v error -i assets/audio/scale.wav -map_metadata -1 -c:a aac -b:a 128k -movflags +faststart crates/doremi-player/tests/fixtures/scale.m4a
 ```
+
+### Fragmented MP4 regression
+
+`scale-fragmented.m4a` remuxes the same original CC0 AAC packets into
+`moov`/`moof`/`mdat` fragments. No third-party recording or dependency source
+is included. It exercises progressive opening with lazy fragment discovery,
+forward/backward seek, EOF and sample agreement with the full-scan path.
+
+```sh
+ffmpeg -nostdin -v error -n -i crates/doremi-player/tests/fixtures/scale.m4a -map_metadata -1 -c:a copy -movflags +frag_keyframe+empty_moov+default_base_moof -frag_duration 1000000 scale-fragmented-generated.m4a
+```
+
+The generated empty `mdhd` duration (version 0) is set to the source
+`scale.m4a` duration, 385024 samples at 48000 Hz, so the initialization
+metadata declares the complete stream as the authorized YouTube fixtures do.
+Only those four metadata bytes change; encoded packets remain original CC0.
+This is a parser regression fixture, not latency evidence.

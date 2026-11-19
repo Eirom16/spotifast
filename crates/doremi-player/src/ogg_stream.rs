@@ -369,10 +369,9 @@ fn fast_start_mp4(input: &mut (impl Read + Seek), length: u64) -> std::io::Resul
             match &header[4..] {
                 b"ftyp" => file_type = true,
                 b"moov" => movie = true,
-                b"mdat" => return Ok(file_type && movie),
-                // Fragment indexes may be spread through the file: keep the
-                // existing complete scan so later seeks retain those indexes.
-                b"moof" => return Ok(false),
+                // Symphonia builds fragment indexes lazily in next_packet/seek;
+                // its eager opening scan does not retain those indexes.
+                b"mdat" | b"moof" => return Ok(file_type && movie),
                 _ => {}
             }
             position += size;
@@ -613,6 +612,46 @@ mod aac_tests {
     }
 
     #[test]
+    fn fragmented_progressive_pcm_and_forward_backward_seeks_match_full_scan() {
+        let bytes = include_bytes!("../tests/fixtures/scale-fragmented.m4a");
+        let mut full_scan = Vorbis::open_format(
+            Box::new(std::io::Cursor::new(bytes.to_vec())),
+            None,
+            CODEC_TYPE_AAC,
+        )
+        .unwrap();
+        let info = full_scan.info();
+        let mut expected = Vec::new();
+        while let Some(frame) = full_scan.read_frame().unwrap() {
+            expected.push(frame);
+        }
+        assert_eq!(expected.len() as u64, info.frames);
+        let mut progressive =
+            Vorbis::aac_from_read_seek(std::io::Cursor::new(bytes.to_vec()), bytes.len() as u64)
+                .unwrap();
+        assert_eq!(progressive.info(), info);
+        // Seek forward before those fragments have ever been decoded, then
+        // backward across fragments, and beyond the last sample back to zero.
+        for frame in [
+            0,
+            u64::from(info.rate) * 7,
+            u64::from(info.rate) * 2,
+            info.frames,
+            0,
+        ] {
+            progressive.seek_frame(frame).unwrap();
+            if frame == info.frames {
+                assert!(progressive.read_frame().unwrap().is_none());
+            } else {
+                let actual = progressive.read_frame().unwrap().unwrap();
+                for (a, b) in actual.iter().zip(&expected[frame as usize]) {
+                    assert!((a - b).abs() < 1e-5);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn progressive_open_requires_headers_before_media_and_rewinds() {
         fn atom(kind: &[u8; 4]) -> Vec<u8> {
             let mut bytes = 8_u32.to_be_bytes().to_vec();
@@ -623,7 +662,7 @@ mod aac_tests {
             (vec![b"ftyp", b"moov", b"mdat"], true),
             (vec![b"ftyp", b"mdat", b"moov"], false),
             (vec![b"moov", b"mdat"], false),
-            (vec![b"ftyp", b"moov", b"moof", b"mdat"], false),
+            (vec![b"ftyp", b"moov", b"moof", b"mdat"], true),
             (vec![b"ftyp", b"free"], false),
         ] {
             let bytes = kinds.into_iter().flat_map(atom).collect::<Vec<_>>();
