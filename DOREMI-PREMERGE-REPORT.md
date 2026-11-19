@@ -608,7 +608,11 @@ preview/native QA y el gate `verified-artifacts`. No se tocó ningún timeout
 de reproducción para ocultar latencia. La corrección del presupuesto gráfico está
 **demostrada en `6984caa`**: el run completo `44435616417` terminó
 `success`, preview incluido (3m07s), sus tres circuitos gráficos y gate de
-artefactos. Sigue siendo necesaria una ejecución completa del cierre exacto.
+artefactos. `ci.yml` `44465708503` repite ese resultado en el head de código
+`5ac8778` (`quick`, `clippy`, `full-tests`, `android-core`, `android-apk`,
+macOS, Windows, `preview-linux` y `verified-artifacts`, todos success), junto
+con `android.yml` `44441447069` en el mismo SHA. Ambos workflows quedan verdes
+sobre el código que se propone integrar.
 
 | Workflow / SHA | Evidencia |
 | --- | --- |
@@ -621,6 +625,7 @@ artefactos. Sigue siendo necesaria una ejecución completa del cierre exacto.
 | `ci.yml`, `6984caa` | [44435616417: success global, preview y artefactos aprobados](https://github.com/Eirom16/spotifast/actions/runs/44435616417) |
 | `android.yml`, `dbc841e` | [44436685168: APK/Windows success, host Linux cancelled a 35 min](https://github.com/Eirom16/spotifast/actions/runs/44436685168) |
 | `android.yml`, `5ac8778` | [44441447069: success global, APK/host Linux/host Windows](https://github.com/Eirom16/spotifast/actions/runs/44441447069) |
+| `ci.yml`, `5ac8778` | [44465708503: success global, preview y gate de artefactos](https://github.com/Eirom16/spotifast/actions/runs/44465708503) |
 
 El host Linux de `44436685168` agotó 35 min después de 17m28s de apt.
 El run verde anterior requería 18m27s de tests y 1m02s de QA gráfica, más
@@ -630,8 +635,11 @@ preparación acotada a 25 min y todos los gates intactos. No altera deadlines
 de reproducción. Ese run cancelado no es aprobación global.
 
 La consulta final por SHA y sus reportes Actions fuera del árbol son la
-fuente de verdad. Estas ejecuciones sobre `df2ef47` no cubren el guard posterior
-`7c080ad` ni el commit documental final. **No atribuirles CI del head exacto.**
+fuente de verdad. Las ejecuciones sobre `df2ef47` no cubren el guard posterior
+`7c080ad`. Las de `5ac8778` sí cubren el código propuesto; los commits
+posteriores solo añaden Markdown, así que su diff se verifica con
+`git diff 5ac8778..HEAD --stat` y no se les atribuye una nueva compilación
+salvo que se ejecute explícitamente.
 
 ## 8. Matriz de requisitos y riesgos
 
@@ -652,7 +660,7 @@ fuente de verdad. Estas ejecuciones sobre `df2ef47` no cubren el guard posterior
 | Cancelación de resolución | PASS acotado | 8 s sin PCM tardío; HTTP bloqueado y reaping NOT_VERIFIED |
 | Perfil normal en esta sesión | NOT_VERIFIED | Se evitó su acceso; preservación histórica separada |
 | Windows físico | BLOCKED | Sin entorno Windows conectado para reproducir |
-| CI completa del head exacto | NOT_VERIFIED | Exige ambas ejecuciones completas y globalmente aprobadas |
+| CI completa del head de código | PASS | `ci.yml` `44465708503` y `android.yml` `44441447069` verdes en `5ac8778`; el commit documental posterior solo añade Markdown y un comentario |
 
 El riesgo dominante para la futura fusión es presentar reproducción principal
 como estable con errores y grandes pausas medidos. También siguen abiertos el
