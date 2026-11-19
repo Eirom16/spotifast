@@ -9,6 +9,7 @@ device; the device fetches are separate functions.
 """
 import importlib.util
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("device_qa", ROOT / "scripts/android-playback-device-qa.py")
@@ -50,6 +51,22 @@ def compare(before_queue, after_queue, before_hashes=HASHES, after_hashes=HASHES
 def test_identical_profile_is_preserved():
     preserved, reason = compare(checkpoint(), checkpoint())
     assert preserved and reason == "", reason
+
+
+def test_isolated_only_never_reads_or_relaunches_normal_profile_even_after_failure():
+    with patch.object(device_qa, "normal_hashes", side_effect=AssertionError("normal read")), \
+            patch.object(device_qa, "queue_checkpoint", side_effect=AssertionError("queue read")), \
+            patch.object(device_qa, "session_envelope", side_effect=AssertionError("session read")), \
+            patch.object(device_qa, "adb") as mocked:
+        assert device_qa.normal_snapshot(True) is None
+        try:
+            with device_qa.playback_session({}, "offline", True):
+                raise RuntimeError("synthetic failure")
+        except RuntimeError:
+            pass
+        assert [call.args for call in mocked.call_args_list] == [
+            ("shell", "am", "force-stop", device_qa.PACKAGE),
+            ("shell", "am", "force-stop", device_qa.PACKAGE)]
 
 
 def test_session_reseal_is_preserved():

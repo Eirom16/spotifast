@@ -115,3 +115,24 @@ Este colector es explícito, no añade telemetría ni acceso automático a sesio
 
 La comparación cuantitativa y los gates pendientes están en
 [`DOREMI-PLAYBACK-AUDIT.md`](../../DOREMI-PLAYBACK-AUDIT.md).
+
+El resumen incluye media, p50/p95 y límites de cada timestamp y de intervalos
+calculados por solicitud (`intervals_us`); nunca resta percentiles de etapas
+distintas. Un intervalo sin ambos extremos se conserva desconocido. La tasa
+de no-éxito incluye errores y cancelaciones, con contadores separados. Los
+intervalos pueden solaparse: descubrimiento de dispositivo/prebuffer incluye
+trabajo del decoder; no sumarlos como costes exclusivos. Python, yt-dlp,
+Deno, cuenta y QuickJS aún requieren subdivisión adicional antes de atribuir
+el coste interno del extractor. No inferir sus tiempos del arranque de un
+proceso vacío ni de fixtures sintéticos.
+
+Protocolo pendiente de autorización: fijar dos IDs aprobados y una sesión
+de QA aislada, verificar manifiesto/SHA256 del artefacto, anotar red y orden
+del corpus fuera del árbol, y capturar una instantánea final por intento
+(incluidos fallos). Alternar base/candidato bajo las mismas condiciones,
+20 intentos por escenario y versión. Separar primera carga del proceso,
+restauración/login, siguiente sin reiniciar, pista repetida, prefetch y seek.
+Los escenarios `next` y `prefetched` deben usar el mismo par ordenado. Resume
+no tiene un reloj propio todavía y queda `NOT_VERIFIED`. El probe separado
+no demuestra la cola ni prefetch del host. No usar el llavero personal para
+suplir una sesión de QA no autorizada.

@@ -25,9 +25,27 @@ class PlaybackLatencyTests(unittest.TestCase):
         self.assertAlmostEqual(group["failure_rate"], 2 / 22)
         self.assertTrue(group["sufficient_samples"])
         self.assertEqual(group["timestamps_us"]["first_nonzero_callback_us"],
-                         dict(n=20, min=1, max=20, p50=10, p95=19))
+                         dict(n=20, min=1, max=20, mean=10.5, p50=10, p95=19))
+        self.assertEqual(group["n_error"], 1)
+        self.assertEqual(group["intervals_us"]["intent_to_non_silent"]["mean"], 10.5)
         self.assertFalse(MODULE["summarize"](rows[:2])["groups"][0]["sufficient_samples"])
         self.assertIsNone(MODULE["summarize"]([rows[-1]])["groups"][0]["timestamps_us"]["first_pcm_us"]["p50"])
+
+    def test_intervals_use_paired_requests_and_missing_boundaries_stay_unknown(self):
+        rows = [self.row(1), self.row(2)]
+        rows[0]["times"].update(extraction_us=10, extracted_us=110)
+        rows[1]["times"].update(extraction_us=100, extracted_us=101)
+        summary = MODULE["summarize"](rows)["groups"][0]["intervals_us"]
+        self.assertEqual(summary["extraction"],
+                         dict(n=2, min=1, max=100, mean=50.5, p50=1, p95=100))
+        self.assertEqual(summary["first_http_block"]["n"], 0)
+        self.assertIsNone(summary["first_http_block"]["mean"])
+        for times in (dict(requested_us=1), dict(first_bytes_us=200, first_pcm_us=100),
+                      dict(device_start_us=200, device_ready_us=100)):
+            row = self.row(300)
+            row["times"].update(times)
+            with self.assertRaises(ValueError):
+                MODULE["validate"](row)
 
     def test_duplicates_secrets_missing_pcm_and_clock_errors_are_rejected(self):
         with self.assertRaises(ValueError):

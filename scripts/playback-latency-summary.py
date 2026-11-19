@@ -5,6 +5,7 @@ import json
 import math
 from pathlib import Path
 import re
+import statistics
 
 SCENARIOS = ("cold", "warm", "first-after-login", "next", "previously-played",
              "prefetched", "seek")
@@ -14,6 +15,22 @@ STAGES = ("requested_us", "queued_us", "worker_us", "resolve_us", "client_wait_u
           "first_nonzero_callback_us", "device_start_us", "device_ready_us")
 FIELDS = {"schema", "sample_kind", "source_commit", "platform", "scenario",
           "run", "request", "outcome", "times", "acoustic_capture"}
+# Differences are computed per request before aggregating. Subtracting two
+# percentiles would not measure the distribution of the intervening work.
+# These are observed intervals, not exclusive CPU costs (device setup overlaps
+# decoding). A missing boundary, including on a prefetch hit, stays unknown.
+INTERVALS = {
+    "intent_to_worker": ("requested_us", "worker_us"),
+    "queue_wait": ("queued_us", "worker_us"),
+    "client_wait": ("client_wait_us", "client_acquired_us"),
+    "extraction": ("extraction_us", "extracted_us"),
+    "first_http_block": ("http_us", "first_bytes_us"),
+    "first_block_to_pcm": ("first_bytes_us", "first_pcm_us"),
+    "device_setup_including_prebuffer": ("device_start_us", "device_ready_us"),
+    "pcm_to_callback": ("first_pcm_us", "first_callback_us"),
+    "callback_to_non_silent": ("first_callback_us", "first_nonzero_callback_us"),
+    "intent_to_non_silent": ("requested_us", "first_nonzero_callback_us"),
+}
 
 
 def validate(row):
@@ -38,10 +55,9 @@ def validate(row):
             raise ValueError("Invalid monotonic timestamp")
     if row["outcome"] == "ok" and not row["times"]["first_nonzero_callback_us"]:
         raise ValueError("Success requires a measured non-silent callback")
-    for start, end in (("queued_us", "worker_us"), ("client_wait_us", "client_acquired_us"),
-                       ("extraction_us", "extracted_us"), ("http_us", "first_bytes_us"),
-                       ("first_pcm_us", "first_callback_us"),
-                       ("first_callback_us", "first_nonzero_callback_us")):
+    if row["times"]["requested_us"] != 0:
+        raise ValueError("Expected the host intent monotonic origin")
+    for start, end in INTERVALS.values():
         a, b = row["times"][start], row["times"][end]
         if a is not None and b is not None and b < a:
             raise ValueError("Inconsistent monotonic timing")
@@ -65,6 +81,15 @@ def capture(snapshot, commit, platform, scenario, run, outcome):
                          outcome=outcome, times=times, acoustic_capture=False))
 
 
+def distribution(values):
+    values = sorted(values)
+    return dict(n=len(values), min=min(values) if values else None,
+                max=max(values) if values else None,
+                mean=statistics.mean(values) if values else None,
+                p50=values[math.ceil(len(values) * .50) - 1] if values else None,
+                p95=values[math.ceil(len(values) * .95) - 1] if values else None)
+
+
 def summarize(rows):
     groups, seen = {}, set()
     for row in rows:
@@ -80,16 +105,21 @@ def summarize(rows):
         successful = [row for row in samples if row["outcome"] == "ok"]
         stages = {}
         for name in STAGES:
-            values = sorted(row["times"][name] for row in successful if row["times"][name] is not None)
-            stages[name] = dict(n=len(values), min=min(values) if values else None,
-                                max=max(values) if values else None,
-                                p50=values[math.ceil(len(values) * .50) - 1] if values else None,
-                                p95=values[math.ceil(len(values) * .95) - 1] if values else None)
+            stages[name] = distribution(row["times"][name] for row in successful
+                                        if row["times"][name] is not None)
+        intervals = {
+            name: distribution(row["times"][end] - row["times"][start]
+                               for row in successful
+                               if row["times"][start] is not None and row["times"][end] is not None)
+            for name, (start, end) in INTERVALS.items()
+        }
         result.append(dict(sample_kind=key[0], source_commit=key[1], platform=key[2], scenario=key[3],
                            n=len(samples), n_ok=len(successful),
                            n_cancelled=sum(row["outcome"] == "cancelled" for row in samples),
+                           n_error=sum(row["outcome"] == "error" for row in samples),
                            failure_rate=1 - len(successful) / len(samples),
-                           sufficient_samples=len(successful) >= 20, timestamps_us=stages))
+                           sufficient_samples=len(successful) >= 20, timestamps_us=stages,
+                           intervals_us=intervals))
     return dict(schema=1, groups=result,
                 warning="Callback delivery is not acoustic latency. n < 20 is exploratory, not a performance gate.")
 

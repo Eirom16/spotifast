@@ -6,6 +6,7 @@ Selection-to-observation includes ADB and snapshot polling; it is not acoustic
 latency or the new correlated YouTube request clock.
 """
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
 from pathlib import Path
@@ -32,6 +33,27 @@ QUEUE_FILE = "queue-v1.json"
 # Documented volatile checkpoint fields: playback progress and ID allocation
 # (crates/doremi-core/src/queue/checkpoint.rs). Everything else is user data.
 QUEUE_VOLATILE = ("position_ms", "next_entry", "request_watermark")
+
+
+@contextmanager
+def playback_session(verifier, profile, isolated_only):
+    """An isolated-only journey never relaunches the ordinary account."""
+    if not isolated_only:
+        with verifier["qa_session"](profile):
+            yield
+        return
+    adb("shell", "am", "force-stop", PACKAGE)
+    try:
+        yield
+    finally:
+        adb("shell", "am", "force-stop", PACKAGE)
+
+
+def normal_snapshot(isolated_only):
+    # Do not even inspect the normal queue or sealed session in this mode.
+    if isolated_only:
+        return None
+    return normal_hashes(), queue_checkpoint(), session_envelope()
 
 
 def adb(*arguments, timeout=45):
@@ -248,8 +270,28 @@ class Journey:
         first = self.playing(local)
         self.save(label + "-first-pcm", first)
         self.resources(label + "-start")
-        end = self.wait(lambda s: s["current"] == local and s["playback"] == "Playing"
-                        and s["audio_metrics"]["frames"] >= s["audio_metrics"]["output_rate"] * 15, 30)
+        observed = time.monotonic()
+        timeline = []
+        self.report.setdefault("buffer_observations", {})[label] = timeline
+
+        def complete(s):
+            metrics = s.get("audio_metrics") or {}
+            if len(timeline) < 256:
+                timeline.append(dict(
+                    # Host polling time since this observation window began,
+                    # never interpreted as a device request/underrun timestamp.
+                    observed_ms=round((time.monotonic() - observed) * 1000, 3),
+                    playback=s["playback"],
+                    metrics={key: metrics.get(key) for key in (
+                        "request", "frames", "callbacks", "buffering", "buffer_underruns",
+                        "reported_xruns", "nonzero_samples", "output_rate")},
+                    network={key: (s["online"].get("network") or {}).get(key)
+                             for key in ("received_bytes", "requests")}))
+            return (s["current"] == local and s["playback"] == "Playing"
+                    and metrics.get("output_rate", 0) > 0
+                    and metrics.get("frames", 0) >= metrics["output_rate"] * 15)
+
+        end = self.wait(complete, 30)
         assert end["audio_metrics"]["nonzero_samples"] > first["audio_metrics"]["nonzero_samples"]
         self.save(label + "-15s", end)
         self.resources(label + "-15s")
@@ -344,6 +386,8 @@ def main():
     parser.add_argument("--profile", required=True)
     parser.add_argument("--geometry", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--isolated-only", action="store_true",
+                        help="Never read or relaunch the normal profile; its invariants stay NOT_VERIFIED")
     args = parser.parse_args()
     assert re.fullmatch(r"[a-z0-9][a-z0-9-]{0,47}", args.profile)
     args.output = args.output.resolve()
@@ -366,12 +410,11 @@ def main():
     journey.report.update(apk_sha256=digest, device={
         key: adb("shell", "getprop", key).decode().strip()
         for key in ("ro.product.model", "ro.build.version.sdk", "ro.product.cpu.abilist")})
-    before_hashes = normal_hashes()
-    before_queue = queue_checkpoint()
-    before_session = session_envelope()
-    (args.output / "normal-before.sha256").write_text(before_hashes)
+    before = normal_snapshot(args.isolated_only)
+    if before is not None:
+        (args.output / "normal-before.sha256").write_text(before[0])
     try:
-        with verifier["qa_session"](args.profile):
+        with playback_session(verifier, args.profile, args.isolated_only):
             adb("shell", "am", "start", "-W", "-n", PACKAGE + "/dev.eirom.doremi.MainActivity",
                 "--es", "dev.eirom.doremi.qa.profile", args.profile)
             time.sleep(1)
@@ -384,22 +427,20 @@ def main():
         journey.report.update(result="failed", error=str(error))
         raise
     finally:
-        after_hashes = normal_hashes()
-        after_queue = queue_checkpoint()
-        after_session = session_envelope()
-        preserved, reason = profile_preserved(
-            (before_hashes, before_queue, before_session),
-            (after_hashes, after_queue, after_session))
-        before_session_hash = digest_map(before_hashes).get("files/" + SESSION_FILE)
-        after_session_hash = digest_map(after_hashes).get("files/" + SESSION_FILE)
+        preserved, reason = None, ""
+        after = normal_snapshot(args.isolated_only)
+        if before is not None:
+            preserved, reason = profile_preserved(before, after)
+            journey.report["queue_checkpoint_delta"] = queue_delta(before[1], after[1])
+            journey.report["session_resealed"] = (
+                before[2] is not None and after[2] is not None
+                and digest_map(before[0]).get("files/" + SESSION_FILE)
+                != digest_map(after[0]).get("files/" + SESSION_FILE))
+            (args.output / "normal-after.sha256").write_text(after[0])
         journey.report["normal_profile_preserved"] = preserved
-        journey.report["queue_checkpoint_delta"] = queue_delta(before_queue, after_queue)
-        journey.report["session_resealed"] = (before_session is not None
-                                              and after_session is not None
-                                              and before_session_hash != after_session_hash)
-        (args.output / "normal-after.sha256").write_text(after_hashes)
+        journey.report["normal_profile_check"] = "NOT_VERIFIED" if args.isolated_only else "executed"
         (args.output / "report.json").write_text(json.dumps(journey.report, indent=2) + "\n")
-        assert preserved, "Normal-profile data changed: " + reason
+        assert preserved is not False, "Normal-profile data changed: " + reason
     print(args.output)
 
 
