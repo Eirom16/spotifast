@@ -20,7 +20,14 @@ PACKAGE = "dev.eirom.doremi.dev"
 # Byte-stable user data across a journey. The queue checkpoint is compared
 # by user content instead: the app re-persists it at every normal launch.
 NORMAL_FILES = ("library-v1.json", "playlists-v1.json", "history-v1.json",
-                "preferences-v1.json", "youtube-session-v1.bin")
+                "preferences-v1.json")
+# The session is an AES-GCM envelope (MAGIC 'DYM',1 + 12-byte IV + sealed
+# cookie). A successful restore re-seals the same cookie with a fresh IV
+# (crates/doremi-app/src/youtube_session.rs), so its bytes change by design:
+# require a valid envelope of unchanged size and record the re-seal.
+SESSION_FILE = "youtube-session-v1.bin"
+SESSION_MAGIC = "44 59 4d 01"
+DIGEST_FILES = NORMAL_FILES + (SESSION_FILE,)
 QUEUE_FILE = "queue-v1.json"
 # Documented volatile checkpoint fields: playback progress and ID allocation
 # (crates/doremi-core/src/queue/checkpoint.rs). Everything else is user data.
@@ -32,13 +39,25 @@ def adb(*arguments, timeout=45):
 
 
 def normal_hashes():
-    command = "for f in " + " ".join("files/" + name for name in NORMAL_FILES)
+    command = "for f in " + " ".join("files/" + name for name in DIGEST_FILES)
     command += '; do if [ -f "$f" ]; then sha256sum "$f"; fi; done'
     return adb("shell", "run-as " + PACKAGE + " sh -c " + shlex.quote(command)).decode()
 
 
 def queue_checkpoint():
     return json.loads(adb("shell", "run-as", PACKAGE, "cat", "files/" + QUEUE_FILE))
+
+
+def session_envelope():
+    """Size and leading magic of the sealed session, without decrypting it."""
+    command = ("f=files/" + SESSION_FILE +
+               '; if [ -f "$f" ]; then wc -c < "$f"; head -c 4 "$f" | od -An -tx1; fi')
+    lines = [line.strip() for line in
+             adb("shell", "run-as " + PACKAGE + " sh -c " + shlex.quote(command)).decode().splitlines()
+             if line.strip()]
+    if not lines:
+        return None
+    return {"size": int(lines[0]), "magic": " ".join(lines[1].split())}
 
 
 def digest_map(text):
@@ -66,9 +85,11 @@ def queue_delta(before, after):
 def profile_preserved(before, after):
     """Whether real user data survived the journey unchanged.
 
-    before/after are (sha256sum text, queue checkpoint or None). The five
-    NORMAL_FILES must be byte-identical; the queue must keep identical user
-    content, while its documented volatile fields may move.
+    before/after are (sha256sum text, queue checkpoint or None, session
+    envelope or None). The four NORMAL_FILES must be byte-identical; the queue
+    must keep identical user content, while its documented volatile fields may
+    move; the sealed session may be re-sealed but must keep its envelope shape
+    and size (same plaintext, fresh IV).
     """
     map_before, map_after = digest_map(before[0]), digest_map(after[0])
     for name in NORMAL_FILES:
@@ -81,6 +102,18 @@ def profile_preserved(before, after):
         for checkpoint in (before[1], after[1]):
             if not set(QUEUE_VOLATILE) <= set(checkpoint):
                 return False, QUEUE_FILE + " lost checkpoint fields"
+    session_before, session_after = before[2], after[2]
+    if session_before is None or session_after is None:
+        if session_before != session_after:
+            return False, SESSION_FILE + " disappeared"
+        return True, ""
+    if (session_before["magic"] != SESSION_MAGIC
+            or session_after["magic"] != SESSION_MAGIC):
+        return False, SESSION_FILE + " is not a sealed envelope"
+    if session_before["size"] < 32 or session_after["size"] < 32:
+        return False, SESSION_FILE + " is truncated"
+    if session_before["size"] != session_after["size"]:
+        return False, SESSION_FILE + " size changed"
     return True, ""
 
 
@@ -278,12 +311,17 @@ class Journey:
 
     def lifecycle(self, local):
         before = self.state()
+        assert before["playback"] == "Playing", "Background test needs active playback"
         adb("shell", "input", "keyevent", 3)
-        self.wait(lambda s: s["playback"] == "Paused" and not s["focus"])
+        # The app stops drawing in the background, so qa-state.json freezes at
+        # the last frame; its pause decision is only observable after refocus.
+        time.sleep(1.5)
         adb("shell", "am", "start", "-W", "-n", PACKAGE + "/dev.eirom.doremi.MainActivity",
             "--es", "dev.eirom.doremi.qa.profile", self.args.profile)
-        self.wait(lambda s: s["playback"] == "Paused" and s["current"] == local)
-        self.save("foreground-paused")
+        resumed = self.wait(lambda s: s["playback"] == "Paused" and s["current"] == local)
+        assert resumed["pid"] == before["pid"], "Background pause restarted the process"
+        assert resumed["position_ms"] >= before["position_ms"], "Background pause restarted the track"
+        self.save("foreground-paused", resumed)
         self.tap("play")
         self.playing(local)
         adb("shell", "am", "force-stop", PACKAGE)
@@ -319,8 +357,8 @@ def main():
     digest = hashlib.file_digest(apk.open("rb"), "sha256").hexdigest()
     assert adb("shell", "sha256sum", installed).decode().split()[0] == digest
     private = f"files/qa/{args.profile}/"
-    exists = subprocess.run(["adb", "-d", "shell", "run-as", PACKAGE, "test", "-e", private],
-                            capture_output=True, timeout=30)
+    exists = subprocess.run(["adb", "-d", "shell", "run-as", PACKAGE, "sh", "-c",
+                             "test -e " + private], capture_output=True, timeout=30)
     assert exists.returncode == 1, "Use a fresh private profile"
     geometry = json.loads(args.geometry.read_text())
     assert len(geometry["qa_surface_origin"]) == 2
@@ -330,6 +368,7 @@ def main():
         for key in ("ro.product.model", "ro.build.version.sdk", "ro.product.cpu.abilist")})
     before_hashes = normal_hashes()
     before_queue = queue_checkpoint()
+    before_session = session_envelope()
     (args.output / "normal-before.sha256").write_text(before_hashes)
     try:
         with verifier["qa_session"](args.profile):
@@ -347,9 +386,17 @@ def main():
     finally:
         after_hashes = normal_hashes()
         after_queue = queue_checkpoint()
-        preserved, reason = profile_preserved((before_hashes, before_queue), (after_hashes, after_queue))
+        after_session = session_envelope()
+        preserved, reason = profile_preserved(
+            (before_hashes, before_queue, before_session),
+            (after_hashes, after_queue, after_session))
+        before_session_hash = digest_map(before_hashes).get("files/" + SESSION_FILE)
+        after_session_hash = digest_map(after_hashes).get("files/" + SESSION_FILE)
         journey.report["normal_profile_preserved"] = preserved
         journey.report["queue_checkpoint_delta"] = queue_delta(before_queue, after_queue)
+        journey.report["session_resealed"] = (before_session is not None
+                                              and after_session is not None
+                                              and before_session_hash != after_session_hash)
         (args.output / "normal-after.sha256").write_text(after_hashes)
         (args.output / "report.json").write_text(json.dumps(journey.report, indent=2) + "\n")
         assert preserved, "Normal-profile data changed: " + reason

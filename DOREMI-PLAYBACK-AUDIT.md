@@ -214,7 +214,7 @@ El callback sigue sin red, asignaciones pesadas, mutex ni joins.
 | --- | --- | --- |
 | Linux | Compilación de metadatos del host/resolvedor/player, Clippy, core, 43 tests YouTube, 19 player, checks Python | Sin dos canciones nuevas de 15 s, salida física, captura acústica, ni medición de latencia real. Tests del host compilados por Clippy, no ejecutados |
 | Windows | Inspección de cfg y workflow preparado; evidencia previa de CI del fix fuente | No compilación/ejecución del commit nuevo en Windows, ni dispositivo físico |
-| Android | Núcleo puro y contratos locales; sesión física 2026-11-15 con el APK base `4cdcce6` (sha256 verificado contra lo instalado) en SM-J701M/Android 9: viaje ADB `original-native` y `pause` superados, 0 xruns, PSS estable, y perfil normal estable salvo checkpoint de cola y re-sello de sesión (causa fundamentada en código, ver 7.1); segunda pasada 2026-11-18 con el arnés relajado: smoke completo y búsqueda escrita, terminada en negativa visible `Failed(Transport)` por falta de red | No APK del commit de integración en dispositivo (artefacto CI disponible), sin dos pistas YouTube de 15 s, sin captura acústica ni latencia click-to-callback; búsqueda Commons completa pendiente de red |
+| Android | Núcleo puro y contratos locales; sesión física 2026-11-15 con el APK base `4cdcce6` (sha256 verificado contra lo instalado) en SM-J701M/Android 9: viaje ADB `original-native` y `pause` superados, 0 xruns, PSS estable, y perfil normal estable salvo checkpoint de cola y re-sello de sesión (causa fundamentada en código, ver 7.1); 2026-11-18: control base con red que materializó una vez el timeout de 6 s con negativa visible y, con el APK de integración `b4b9cc0` (sha256 verificado contra el artefacto CI y contra lo instalado), pasada completa con dos pistas Commons, pausa/seek/resume, ciclo de vida y perfil preservado | Sin dos pistas YouTube de 15 s (autorización explícita pendiente), sin captura acústica ni latencia click-to-callback; el ciclo de vida de Android destruye el renderer en `onPause`, así que la pausa en segundo plano se valida por el camino destruir/restaurar, no aislada de la pérdida de foco |
 
 No se invocó el probe con una sesión real ni se eligió arbitrariamente una
 pareja YouTube fuera de un corpus autorizado en el repositorio. El corpus
@@ -315,12 +315,13 @@ estricta de todos los ficheros. La lectura correcta, fundamentada en código:
   volcó el fichero; la verificación de contenido se limita a este análisis de
   código y a la estabilidad de los demás ficheros.
 
-**Qué valida y qué no esta sesión:** valida el arnés QA físico y la
-reproducción demo por camino Rust nativo con audio no silencioso, 0 xruns y
-pausa con posición persistida en el dispositivo objetivo, sin alterar los
-datos reales del usuario. No valida el commit de integración (su APK no
-existe), ni dos pistas YouTube de 15 s, ni captura acústica, ni latencia
-click-to-callback; el camino Python/Deno no aplica en Android por diseño.
+**Qué valida y qué no la sesión física:** valida el arnés QA físico y la
+reproducción demo por camino Rust nativo con audio no silencioso y pausa con
+posición persistida. La tercera sesión (abajo) valida además el APK del commit
+de integración con dos pistas Commons, seeks y ciclo de vida, sin alterar los
+datos reales del usuario. No valida dos pistas YouTube de 15 s, ni captura
+acústica, ni latencia click-to-callback; el camino Python/Deno no aplica en
+Android por diseño.
 
 **Segunda sesión (2026-11-18, arnés relajado, sin red en el dispositivo):**
 
@@ -346,13 +347,85 @@ byte contra el sha256 retenido antes de ejecutar.
   por lectura directa en el dispositivo: 6 entradas de YouTube Music
   intactas (current «Saquen Bocina», `next_entry=805`, `position_ms=0`,
   `request_watermark=1231`). El `normal_profile_preserved: false` retenido
-  corresponde a la regla estricta anterior al refinamiento: la regla nueva
-  exige igualdad byte a byte de los cinco ficheros de datos y del contenido
-  del checkpoint (todo salvo `position_ms`, `next_entry` y
-  `request_watermark`, contabilidad volátil documentada), y registra el
-  delta volátil en `queue_checkpoint_delta`. Tiene verificación offline en
-  `scripts/test-android-device-qa-profile.py` (8 casos); falta su
-  re-ejecución en dispositivo, que además requiere red para las búsquedas.
+  corresponde a la regla estricta anterior al refinamiento. La regla final
+  exige igualdad byte a byte de los cuatro ficheros de datos (library,
+  playlists, history, preferences), contenido idéntico del checkpoint (todo
+  salvo `position_ms`, `next_entry` y `request_watermark`, contabilidad
+  volátil documentada) y un sobre de sesión válido de tamaño estable (el
+  re-sello GCM cambia los bytes por diseño). Registra
+  `queue_checkpoint_delta` y `session_resealed`. Se aplicó en la tercera
+  sesión con hashes idénticos en la ventana capturada; el caso de re-sello
+  está cubierto por los tests offline. Verificación:
+  `scripts/test-android-device-qa-profile.py` (13 casos) y
+  `scripts/test-android-device-qa-geometry.py` (5 casos).
+
+**Tercera sesión (2026-11-18, APK de integración y red activa):**
+
+Evidencia:
+`/home/eirom/.local/share/doremi/product-qa/2026-11-18/playback-android-4cdcce6-full/`
+(control con el APK base), `playback-android-b4b9cc0-full/` (primera pasada
+de integración, que llegó al ciclo de vida con un fallo del arnés) y
+`playback-android-b4b9cc0-full2/` (segunda pasada, `pass`). Perfiles
+`playback-adb-20261118-base`, `-int` y `-int2`.
+
+- **Artefacto e instalación.** `android.yml` `44342809444` (success sobre
+  `b4b9cc0`) publicó `doremi-android-dev-b4b9cc0…`; la descarga desde el
+  blob de Actions falló repetidamente por resets de conexión y solo completó
+  al cuarto intento del bucle. El manifiesto declara
+  `source_commit=b4b9cc0b6a5…`, `source_dirty=false`, `release=false`; el
+  sha256 del APK es `4d77b2f9…`. El viaje verifica además el sha256 del APK
+  **instalado** (`pm path` → `sha256sum`) antes de inyectar entrada, así que
+  la sesión no puede atribuirse a otro binario.
+- **Control con el APK base `4cdcce6`.** El smoke y la búsqueda «Chopin»
+  funcionaron (`search_status="Ready"`), pero al seleccionar `26896924` el
+  primer rango de audio agotó el presupuesto total de 6 s
+  (`REQUEST_TIMEOUT_MS`) con `retired_network {requests:1,
+  received_bytes:0}` y el producto pasó a `Failed` con el aviso visible «La
+  fuente agotó el tiempo de espera. Puedes volver a seleccionar la pista.».
+  No se cambió el timeout a ciegas: minutos después, el mismo dispositivo y
+  la misma red descargaron las dos pistas Commons completas; el enlace medía
+  7,1 MiB/s por TCP contra el host, el puerto 443 de `upload.wikimedia.org`
+  conectaba y el host obtenía `206` en 0,19 s con la petición exacta. Fue un
+  atasco transitorio de la primera petición tras habilitar Wi-Fi, no un fallo
+  reproducible; la negativa visible es la conducta correcta y la cola real
+  quedó intacta (`request_watermark [1233,1234]`).
+- **Pasada de integración (segunda ejecución, `pass`).** Smoke
+  `original-native` (`first_pcm_us=196.444`, 0 underruns, 1 xrun reportado en
+  el frame 0, PSS 58.089→58.742 KiB) y `pause` en 17.516 ms. Después, por la
+  UI: búsqueda «Chopin» → `select:26896924` (observado en 4.820 ms,
+  `first_pcm_us=2.037.545`), 15 s con 50 underruns; pausa, seek a 83.858 ms,
+  resume. Búsqueda «Mendelssohn» → `select:17687586` (3.189 ms,
+  `first_pcm_us=1.202.407`), 15 s con 33 underruns; pausa, seek a 65.054 ms,
+  resume. Ambas pistas son CC0 de Commons y el motor reporta
+  `streaming=true`, proveedor `wikimedia-commons`.
+- **Ciclo de vida.** En Android, `MainActivity.onPause` ejecuta
+  `nativeDestroy()` y el QA state deja de dibujarse: la espera de `Paused`
+  antes de volver a primer plano leía un estado congelado y falló en la
+  primera pasada (`full/`). El arnés corregido vuelve a primer plano, exige
+  el mismo pid, `Paused` y posición no reiniciada: `foreground-paused` con
+  pid 7792, `position_ms=66.654`, aviso «Operación cancelada.»; tras
+  `force-stop` + relanzamiento, pid 9288, `Paused`, `audio_metrics=null`,
+  `worker_initialized=false`, aviso «Sesión restaurada en pausa.» — la
+  restauración no inicia red. La pausa en segundo plano se valida por el
+  camino destruir/restaurar del renderer nativo; la rama de pérdida de foco
+  (`native_focus`) no se aísla en esta prueba.
+- **Perfil normal.** La primera pasada de integración cambió
+  `youtube-session-v1.bin` (`5a79f4c8…`→`0ee9c7bd…`), y solo ese fichero; el
+  relanzamiento normal de limpieza del arnés restaura la cookie y la
+  re-sella. La causa está en código: tras restaurar la cookie, `sign_in`
+  re-sella con `credentials::store` y `YoutubeSessionStore` usa AES-GCM con
+  un IV de 12 bytes nuevo (`MAGIC 'DYM',1`), así que los bytes cambian por
+  diseño aunque el contenido sea el mismo. La regla se corrigió: los cuatro
+  ficheros de datos exigen igualdad byte a byte; la cola exige contenido
+  idéntico y conserva sus campos volátiles; la sesión exige un sobre válido
+  (magic, tamaño ≥32) de **tamaño estable** y registra `session_resealed`
+  cuando el digest cambia. La segunda ejecución terminó con
+  `normal_profile_preserved: true`, hashes antes/después idénticos y
+  `queue_checkpoint_delta {request_watermark: [1237,1238]}`.
+- **Frescura del perfil.** El chequeo `run-as … test -e` devolvía 1 incluso
+  para un perfil existente en este dispositivo («Permission denied»), así
+  que la aserción era vacua. Se sustituyó por
+  `run-as … sh -c 'test -e …'`, validado en vivo (existente=0, ausente=1).
 
 ## 8. Checks y CI
 
@@ -403,10 +476,20 @@ reconstruyendo el host completo localmente.
   workflow exista en la rama por defecto y solo existe en esta rama (se
   añadió en `fede768`). Será dispatchable tras integrar en `main`; mientras
   tanto, sus suites se ejecutan dentro de `ci.yml`.
-- `android.yml` publicó el artefacto
-  `doremi-android-dev-79538c3…` (no expirado), que habilita la prueba
-  física del commit de integración. Esa prueba sigue pendiente: la sesión
-  del 2026-11-18 usó el APK base `4cdcce6`.
+- `android.yml` run `44342809444` (success sobre `b4b9cc0`) publicó
+  `doremi-android-dev-b4b9cc0…`; manifiesto y sha256 (`4d77b2f9…`)
+  verificados antes de instalar, y el viaje comprobó el sha256 del APK
+  instalado. La prueba física está en 7.1.
+- `ci.yml` run `44342784124` sobre `b4b9cc0`: `quick`, `clippy`,
+  `full-tests`, `android-core`, `android-apk` y `desktop-build` (Windows y
+  macOS) **success**; `preview-linux` fue cancelado por su
+  `timeout-minutes: 10` en los tres intentos y `verified-artifacts` falló
+  como gate al faltar ese reporte. No es un fallo del código: en el run
+  verde `44251398160` el primer paso de `preview-linux` (solo
+  `apt-get update/install` + `chmod`) consumió 5m57s de los 10 min; en
+  `44342784124` los intentos 1 y 2 murieron en el empaquetado y el 3 en ese
+  mismo paso. El delta con `79538c3` es solo scripts/docs. No se debilitó
+  ningún test ni se amplió el presupuesto sin revisión.
 
 Se añadió `playback.yml`, manual, Linux/Windows, solo core/resolvedor/player y
 estadística offline. Evita compilar Spotifast, GTK/WebView y el host gráfico
@@ -478,20 +561,22 @@ configuración global ni persistir una configuración nueva.
 ### P0: antes de recomendar integración
 
 - CI del commit exacto combinado, incluyendo tests del host, APK y legado:
-  `ci.yml` y `android.yml` ya están verdes en `79538c3`; repetir el disparo
-  sobre el commit final tras cualquier cambio de código.
+  `android.yml` está verde en `b4b9cc0` y los jobs de código de `ci.yml`
+  también; `preview-linux` agota su presupuesto de 10 min en `apt-get` (ver
+  8) y deja el gate `verified-artifacts` en rojo. Repetir el disparo sobre el
+  head final y revisar el presupuesto de ese job.
 - Dos pistas YouTube explícitamente autorizadas, 15 s de PCM no silencioso
   cada una por la UI/producto, pausa/resume/seek/next/previous y prefetch.
 - Al menos veinte intentos por escenario, mismo corpus y red, línea base y
   candidato. Conservar todos los fallos. Ordenar costes por trazas reales.
 - Probar cancelación durante red/extracción y saltos rápidos, sin audio obsoleto.
 - Revisar/integrar los tres commits concurrentes de producto, sin reemplazar UI.
-- Prueba física Windows y APK Android **del commit de integración** (la
-  sesión del 2026-11-15 cubrió el APK base `4cdcce6`; ver 7.1). El artefacto
-  `doremi-android-dev-79538c3…` ya existe; falta instalarlo y repetir el
-  viaje con las aserciones relajadas —implementadas y verificadas offline,
-  pendientes en dispositivo— con Wi-Fi activo para completar las búsquedas
-  Commons y confirmar su guardado.
+- Prueba física Windows y APK Android **del commit de integración**. El APK
+  `b4b9cc0` ya se instaló y pasó el viaje completo en 7.1 (dos pistas
+  Commons, seeks, ciclo de vida y perfil preservado); falta Windows y las dos
+  pistas YouTube con autorización explícita. El ciclo de vida se validó por
+  el camino destruir/restaurar del renderer; la rama de pérdida de foco no se
+  aisló.
 
 ### P1: rendimiento y cobertura pendientes
 

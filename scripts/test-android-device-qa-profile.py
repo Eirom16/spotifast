@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Offline checks for the ADB journey normal-profile preservation rule.
 
-Real user data must survive a journey byte-identically (five files) and the
-queue checkpoint must keep identical user content: only its documented
-volatile fields (playback progress and ID allocation) may move. Runs without
-a device; the device fetches are separate functions.
+Real user data must survive a journey byte-identically (four data files); the
+queue checkpoint must keep identical user content, only its documented
+volatile fields may move; the sealed YouTube session may be re-sealed with a
+fresh IV but must keep its envelope shape and plaintext size. Runs without a
+device; the device fetches are separate functions.
 """
 import importlib.util
 from pathlib import Path
@@ -14,8 +15,14 @@ spec = importlib.util.spec_from_file_location("device_qa", ROOT / "scripts/andro
 device_qa = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(device_qa)
 
-HASHES = "".join(f"{'a' * 64}  files/{name}\n" for name in device_qa.NORMAL_FILES)
+HASHES = "".join(f"{'a' * 64}  files/{name}\n" for name in device_qa.DIGEST_FILES)
 CHANGED = HASHES.replace("a" * 64, "b" * 64, 1)
+SESSION = {"size": 128, "magic": device_qa.SESSION_MAGIC}
+
+
+def resealed_session_hashes():
+    line = "a" * 64 + "  files/" + device_qa.SESSION_FILE
+    return HASHES.replace(line, "c" * 64 + "  files/" + device_qa.SESSION_FILE)
 
 CONTEXT = [
     {"duration_ms": None, "id": "GOqU7LwyDmA", "occurrence": 799,
@@ -34,12 +41,41 @@ def checkpoint(**overrides):
     return value
 
 
-def compare(before_queue, after_queue, before_hashes=HASHES, after_hashes=HASHES):
-    return device_qa.profile_preserved((before_hashes, before_queue), (after_hashes, after_queue))
+def compare(before_queue, after_queue, before_hashes=HASHES, after_hashes=HASHES,
+            before_session=SESSION, after_session=SESSION):
+    return device_qa.profile_preserved((before_hashes, before_queue, before_session),
+                                       (after_hashes, after_queue, after_session))
 
 
 def test_identical_profile_is_preserved():
     preserved, reason = compare(checkpoint(), checkpoint())
+    assert preserved and reason == "", reason
+
+
+def test_session_reseal_is_preserved():
+    preserved, reason = compare(checkpoint(), checkpoint(), after_hashes=resealed_session_hashes())
+    assert preserved and reason == "", reason
+
+
+def test_session_size_change_is_refused():
+    after = dict(SESSION, size=SESSION["size"] + 1)
+    preserved, reason = compare(checkpoint(), checkpoint(), after_session=after)
+    assert not preserved and reason == device_qa.SESSION_FILE + " size changed", reason
+
+
+def test_missing_session_is_refused():
+    preserved, reason = compare(checkpoint(), checkpoint(), after_session=None)
+    assert not preserved and reason == device_qa.SESSION_FILE + " disappeared", reason
+
+
+def test_session_magic_is_refused():
+    after = dict(SESSION, magic="00 00 00 00")
+    preserved, reason = compare(checkpoint(), checkpoint(), after_session=after)
+    assert not preserved and reason == device_qa.SESSION_FILE + " is not a sealed envelope", reason
+
+
+def test_missing_session_on_both_sides_is_preserved():
+    preserved, reason = compare(checkpoint(), checkpoint(), before_session=None, after_session=None)
     assert preserved and reason == "", reason
 
 
