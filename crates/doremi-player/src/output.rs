@@ -49,6 +49,15 @@ pub struct Metrics {
     pub pcm_bytes: u64,
     pub buffer_capacity_frames: u64,
     pub buffer_underruns: u64,
+    pub buffered_frames: u64,
+    pub produced_frames: u64,
+    pub producer_max_gap_us: u64,
+    pub producer_backpressure_waits: u64,
+    pub max_callback_gap_us: u64,
+    pub starvation_episodes: u64,
+    pub starvation_silence_frames: u64,
+    pub max_starvation_frames: u64,
+
     /// Nonzero native output samples after application gain/conversion; not acoustic evidence.
     pub nonzero_samples: u64,
     pub streaming: bool,
@@ -85,11 +94,21 @@ struct Stats {
     streaming: AtomicBool,
     capacity: AtomicU64,
     underruns: AtomicU64,
+    buffered_frames: AtomicU64,
+    produced_frames: AtomicU64,
+    producer_max_gap_us: AtomicU64,
+    producer_backpressure_waits: AtomicU64,
+    max_callback_gap_us: AtomicU64,
+    starvation_episodes: AtomicU64,
+    starvation_silence_frames: AtomicU64,
+    max_starvation_frames: AtomicU64,
+
     nonzero: AtomicU64,
 }
 struct Control {
     epoch: AtomicU64,
     playing: AtomicBool,
+    playback_revision: AtomicU64,
     gain: AtomicU32,
 }
 struct Load {
@@ -115,12 +134,14 @@ pub type StreamFactory =
     Box<dyn FnOnce(Cancellation) -> Result<Box<dyn FrameReader + Send>, EngineError> + Send>;
 #[derive(Clone)]
 pub struct Cancellation {
+    io_cancel: Arc<AtomicBool>,
     control: Arc<Control>,
     epoch: u64,
 }
 impl Cancellation {
     pub fn cancelled(&self) -> bool {
-        self.control.epoch.load(Ordering::Acquire) != self.epoch
+        self.io_cancel.load(Ordering::Acquire)
+            || self.control.epoch.load(Ordering::Acquire) != self.epoch
     }
 }
 enum Command {
@@ -132,6 +153,7 @@ struct Current {
     stats: Arc<Stats>,
 }
 struct CallbackState {
+    io_cancel: Arc<AtomicBool>,
     control: Arc<Control>,
     stats: Arc<Stats>,
     epoch: u64,
@@ -160,6 +182,7 @@ impl Engine {
         let control = Arc::new(Control {
             epoch: AtomicU64::new(0),
             playing: AtomicBool::new(false),
+            playback_revision: AtomicU64::new(0),
             gain: AtomicU32::new(0.7_f32.to_bits()),
         });
         let events = Arc::new(Mutex::new(None));
@@ -315,9 +338,12 @@ impl Engine {
         }
     }
     pub fn set_playing(&self, playing: bool) {
-        self.control
-            .playing
-            .store(playing && self.current.is_some(), Ordering::Release);
+        let playing = playing && self.current.is_some();
+        if self.control.playing.swap(playing, Ordering::AcqRel) != playing {
+            self.control
+                .playback_revision
+                .fetch_add(1, Ordering::Release);
+        }
         self.wake();
     }
     pub fn set_volume(&self, gain: f32) {
@@ -350,6 +376,15 @@ impl Engine {
             pcm_bytes: s.bytes.load(Ordering::Acquire),
             buffer_capacity_frames: s.capacity.load(Ordering::Acquire),
             buffer_underruns: s.underruns.load(Ordering::Acquire),
+            buffered_frames: s.buffered_frames.load(Ordering::Acquire),
+            produced_frames: s.produced_frames.load(Ordering::Acquire),
+            producer_max_gap_us: s.producer_max_gap_us.load(Ordering::Acquire),
+            producer_backpressure_waits: s.producer_backpressure_waits.load(Ordering::Acquire),
+            max_callback_gap_us: s.max_callback_gap_us.load(Ordering::Acquire),
+            starvation_episodes: s.starvation_episodes.load(Ordering::Acquire),
+            starvation_silence_frames: s.starvation_silence_frames.load(Ordering::Acquire),
+            max_starvation_frames: s.max_starvation_frames.load(Ordering::Acquire),
+
             nonzero_samples: s.nonzero.load(Ordering::Acquire),
             streaming: s.streaming.load(Ordering::Acquire),
             first_pcm_us: optional(s.first_pcm.load(Ordering::Acquire)),
@@ -625,6 +660,7 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         return Err(EngineError::UnsupportedFormat);
     }
     let state = CallbackState {
+        io_cancel: Arc::new(AtomicBool::new(false)),
         control,
         stats: load.stats.clone(),
         epoch: load.epoch,
@@ -646,6 +682,7 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         }
         Source::Stream(factory) => (
             Some(factory(Cancellation {
+                io_cancel: state.io_cancel.clone(),
                 control: state.control.clone(),
                 epoch: state.epoch,
             })?),
@@ -728,11 +765,15 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
         stats,
         epoch,
         started,
+        io_cancel: _,
     } = state;
     let channels = usize::from(config.channels);
     let errors = stats.clone();
     let mut first_callback = true;
     let mut first_nonzero = true;
+    let mut previous_callback = None;
+    let mut starvation = Starvation::default();
+    let mut playback_revision = 0;
     device
         .build_output_stream(
             config,
@@ -741,7 +782,28 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                     || !control.playing.load(Ordering::Acquire)
                 {
                     data.fill(T::from_sample(0.0));
+                    previous_callback = None;
+                    starvation.reset();
                     return;
+                }
+                let revision = control.playback_revision.load(Ordering::Acquire);
+                if revision != playback_revision {
+                    previous_callback = None;
+                    starvation.reset();
+                    playback_revision = revision;
+                }
+                let now = Instant::now();
+                if let Some(previous) = previous_callback {
+                    stats.max_callback_gap_us.fetch_max(
+                        now.duration_since(previous).as_micros() as u64,
+                        Ordering::Relaxed,
+                    );
+                }
+                previous_callback = Some(now);
+                if let Input::Streaming { consumer, .. } = &input {
+                    stats
+                        .buffered_frames
+                        .store(consumer.buffered() as u64, Ordering::Relaxed);
                 }
                 let gain = f32::from_bits(control.gain.load(Ordering::Acquire));
                 let mut delivered = 0_u64;
@@ -808,6 +870,21 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                         frame.fill(T::from_sample(0.0));
                     }
                 }
+                let missing = if buffering {
+                    (data.len() / channels) as u64 - delivered
+                } else {
+                    0
+                };
+                let new_episode = starvation.observe(delivered, missing);
+                stats
+                    .starvation_episodes
+                    .fetch_add(u64::from(new_episode), Ordering::Relaxed);
+                stats
+                    .starvation_silence_frames
+                    .fetch_add(missing, Ordering::Relaxed);
+                stats
+                    .max_starvation_frames
+                    .fetch_max(starvation.frames, Ordering::Relaxed);
                 stats.nonzero.fetch_add(nonzero, Ordering::Relaxed);
                 stats.buffering.store(buffering, Ordering::Release);
                 stats.frames.fetch_add(delivered, Ordering::Relaxed);
@@ -834,9 +911,45 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
         .map_err(|_| EngineError::Output)
 }
 
+/// Callback-owned episode accounting. Paused/retired/end silence is excluded.
+#[derive(Default)]
+struct Starvation {
+    frames: u64,
+}
+impl Starvation {
+    fn reset(&mut self) {
+        self.frames = 0;
+    }
+    fn observe(&mut self, delivered: u64, missing: u64) -> bool {
+        if missing == 0 {
+            self.reset();
+            return false;
+        }
+        let new_episode = self.frames == 0 || delivered > 0;
+        if new_episode {
+            self.frames = 0;
+        }
+        self.frames += missing;
+        new_episode
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn starvation_counts_contiguous_silence_not_empty_callbacks() {
+        let mut s = Starvation::default();
+        assert!(s.observe(64, 64));
+        assert!(!s.observe(0, 128));
+        assert_eq!(s.frames, 192);
+        assert!(!s.observe(128, 0));
+        assert!(s.observe(0, 128));
+        s.reset();
+        assert!(s.observe(0, 128));
+        assert!(s.observe(1, 127));
+        assert_eq!(s.frames, 127);
+    }
     #[test]
     fn a_starved_stream_freezes_its_clock_without_announcing_eof() {
         let (mut producer, consumer) = buffer::channel(64).unwrap();
@@ -864,14 +977,98 @@ mod tests {
         producer.finish();
         assert!(matches!(input.next_frame(0.08), Step::End));
     }
+    fn feed_state() -> CallbackState {
+        CallbackState {
+            io_cancel: Arc::new(AtomicBool::new(false)),
+            control: Arc::new(Control {
+                epoch: AtomicU64::new(1),
+                playing: AtomicBool::new(false),
+                playback_revision: AtomicU64::new(0),
+                gain: AtomicU32::new(1.0f32.to_bits()),
+            }),
+            stats: Arc::new(Stats::default()),
+            epoch: 1,
+            started: Instant::now(),
+        }
+    }
+    #[test]
+    fn slow_initial_seek_does_not_consume_pcm_prebuffer_deadline() {
+        struct SlowSeek;
+        impl FrameReader for SlowSeek {
+            fn info(&self) -> crate::wav_stream::Info {
+                crate::wav_stream::Info {
+                    rate: 48000,
+                    channels: 2,
+                    frames: 4800000,
+                }
+            }
+            fn seek_frame(&mut self, _: u64) -> Result<(), DecodeError> {
+                std::thread::sleep(Duration::from_millis(3050));
+                Ok(())
+            }
+            fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
+                Ok(Some([0.1; 2]))
+            }
+        }
+        let state = feed_state();
+        let (feed, consumer) = feed::Feed::start(SlowSeek, 48000, 99000, &state).unwrap();
+        assert!(consumer.buffered() >= feed::CAPACITY / 2);
+        drop(feed);
+    }
+    #[test]
+    fn prebuffer_failure_cancels_io_before_joining_its_producer() {
+        struct Blocked {
+            cancel: Arc<AtomicBool>,
+            reads: u64,
+        }
+        impl FrameReader for Blocked {
+            fn info(&self) -> crate::wav_stream::Info {
+                crate::wav_stream::Info {
+                    rate: 48000,
+                    channels: 2,
+                    frames: 480000,
+                }
+            }
+            fn seek_frame(&mut self, _: u64) -> Result<(), DecodeError> {
+                Ok(())
+            }
+            fn read_frame(&mut self) -> Result<Option<[f32; 2]>, DecodeError> {
+                self.reads += 1;
+                if self.reads <= 2 {
+                    return Ok(Some([0.1; 2]));
+                }
+                let deadline = Instant::now() + Duration::from_secs(6);
+                while !self.cancel.load(Ordering::Acquire) && Instant::now() < deadline {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(DecodeError::Cancelled)
+            }
+        }
+        let state = feed_state();
+        let started = Instant::now();
+        let result = feed::Feed::start(
+            Blocked {
+                cancel: state.io_cancel.clone(),
+                reads: 0,
+            },
+            48000,
+            0,
+            &state,
+        );
+        assert!(matches!(result, Err(EngineError::Timeout)));
+        assert!(started.elapsed() < Duration::from_millis(4500));
+        assert!(state.io_cancel.load(Ordering::Acquire));
+    }
     #[test]
     fn cancelling_a_full_paused_file_feed_joins_the_decoder_without_an_audio_device() {
         let control = Arc::new(Control {
             epoch: AtomicU64::new(1),
             playing: AtomicBool::new(false),
+            playback_revision: AtomicU64::new(0),
             gain: AtomicU32::new(0.08f32.to_bits()),
         });
         let state = CallbackState {
+            io_cancel: Arc::new(AtomicBool::new(false)),
             control,
             stats: Arc::new(Stats::default()),
             epoch: 1,

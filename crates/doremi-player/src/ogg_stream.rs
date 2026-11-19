@@ -652,6 +652,40 @@ mod aac_tests {
     }
 
     #[test]
+    fn conventional_and_fragmented_seek_matrix_matches_reference_pcm() {
+        for bytes in [
+            include_bytes!("../tests/fixtures/scale.m4a").as_slice(),
+            include_bytes!("../tests/fixtures/scale-fragmented.m4a").as_slice(),
+        ] {
+            let mut reference = Vorbis::aac_from_read_seek(
+                std::io::Cursor::new(bytes.to_vec()),
+                bytes.len() as u64,
+            )
+            .unwrap();
+            let info = reference.info();
+            let mut pcm = Vec::new();
+            while let Some(frame) = reference.read_frame().unwrap() {
+                pcm.push(frame);
+            }
+            let mut seeking = Vorbis::aac_from_read_seek(
+                std::io::Cursor::new(bytes.to_vec()),
+                bytes.len() as u64,
+            )
+            .unwrap();
+            for percent in [10, 35, 50, 75, 98, 35, 10, 0] {
+                let frame = info.frames * percent / 100;
+                seeking.seek_frame(frame).unwrap();
+                for expected in pcm.iter().skip(frame as usize).take(256) {
+                    let actual = seeking.read_frame().unwrap().unwrap();
+                    for channel in 0..2 {
+                        assert!((actual[channel] - expected[channel]).abs() < 0.001);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn progressive_open_requires_headers_before_media_and_rewinds() {
         fn atom(kind: &[u8; 4]) -> Vec<u8> {
             let mut bytes = 8_u32.to_be_bytes().to_vec();

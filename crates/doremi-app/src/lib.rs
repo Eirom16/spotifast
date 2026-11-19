@@ -871,7 +871,7 @@ impl DoremiApp {
             "request":engine.current_request().map(|request| format!("{request:?}")),
             "frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,
             "streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,
-            "first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
+            "buffered_frames":m.buffered_frames,"produced_frames":m.produced_frames,"producer_max_gap_us":m.producer_max_gap_us,"producer_backpressure_waits":m.producer_backpressure_waits,"max_callback_gap_us":m.max_callback_gap_us,"starvation_episodes":m.starvation_episodes,"starvation_silence_frames":m.starvation_silence_frames,"max_starvation_frames":m.max_starvation_frames,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,
             "first_nonzero_callback_us":m.first_nonzero_callback_us,"device_start_us":m.device_start_us,"device_ready_us":m.device_ready_us,
         })));
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -1448,7 +1448,7 @@ fn probe_controls(mut model: Model, rows: Vec<Media>) -> Result<serde_json::Valu
             .as_ref()
             .and_then(Engine::metrics)
             .unwrap_or_default();
-        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
+        serde_json::json!({"current":model.queue.current().map(|e|e.media.id.local()),"position_ms":model.queue.position_ms(),"frames":m.frames,"callbacks":m.callbacks,"output_rate":m.output_rate,"pcm_bytes":m.pcm_bytes,"streaming":m.streaming,"buffering":m.buffering,"buffer_capacity_frames":m.buffer_capacity_frames,"buffer_underruns":m.buffer_underruns,"nonzero_samples":m.nonzero_samples,"reported_xruns":m.reported_xruns,"first_xrun_frame":m.first_xrun_frame,"last_xrun_frame":m.last_xrun_frame,"buffered_frames":m.buffered_frames,"produced_frames":m.produced_frames,"producer_max_gap_us":m.producer_max_gap_us,"producer_backpressure_waits":m.producer_backpressure_waits,"max_callback_gap_us":m.max_callback_gap_us,"starvation_episodes":m.starvation_episodes,"starvation_silence_frames":m.starvation_silence_frames,"max_starvation_frames":m.max_starvation_frames,"first_pcm_us":m.first_pcm_us,"first_callback_us":m.first_callback_us})
     }
     model.enable_audio();
     model.start_context(rows, 0);
