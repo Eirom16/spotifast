@@ -369,7 +369,10 @@ fn fast_start_mp4(input: &mut (impl Read + Seek), length: u64) -> std::io::Resul
             match &header[4..] {
                 b"ftyp" => file_type = true,
                 b"moov" => movie = true,
-                b"mdat" | b"moof" => return Ok(file_type && movie),
+                b"mdat" => return Ok(file_type && movie),
+                // Fragment indexes may be spread through the file: keep the
+                // existing complete scan so later seeks retain those indexes.
+                b"moof" => return Ok(false),
                 _ => {}
             }
             position += size;
@@ -620,6 +623,7 @@ mod aac_tests {
             (vec![b"ftyp", b"moov", b"mdat"], true),
             (vec![b"ftyp", b"mdat", b"moov"], false),
             (vec![b"moov", b"mdat"], false),
+            (vec![b"ftyp", b"moov", b"moof", b"mdat"], false),
             (vec![b"ftyp", b"free"], false),
         ] {
             let bytes = kinds.into_iter().flat_map(atom).collect::<Vec<_>>();
