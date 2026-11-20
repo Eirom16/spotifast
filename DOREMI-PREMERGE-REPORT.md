@@ -1,5 +1,12 @@
 # Doremi: validación previa a integración
 
+> Misión P0 de fiabilidad, 2026-11-19–20: las mediciones siguientes conservan su
+> SHA histórico. Las correcciones posteriores, pruebas del nuevo candidato y
+> veredicto de continuidad se documentan en
+> [DOREMI-STREAMING-RELIABILITY.md](DOREMI-STREAMING-RELIABILITY.md).
+> Los resultados de 15 s de este informe no certifican reproducción completa.
+
+
 Fecha de trabajo: 2026-11-18, America/Santo_Domingo (algunas ejecuciones
 Actions ya están fechadas 2026-11-19 UTC). Rama:
 `integration/doremi-premerge-validation`. Implementación en desarrollo,
@@ -7,13 +14,18 @@ sin merge a `main` ni release.
 
 ## Decisión
 
-**NOT_READY. No recomendar todavía la fusión alpha.** La integración de código
-está consolidada. La apertura progresiva de MP4 redujo el arranque en Linux de
-forma medible (frío 56,730→11,785 s; cambio p50 47,007→14,121 s, n=3/4), pero
-la misma serie solo reprodujo 8 de 12 selecciones, el seek a ~99 s falló en
-Linux y Android, la continuidad se rompe y 4 de 8 éxitos registraron underruns.
-La comparación no reúne muestras suficientes para una conclusión estadística y
-una apertura más corta no corrige esos fallos. Un job compilado no los subsana.
+**No recomendar la fusión alpha.** La misión P0 probó el código
+`c18786424d0a673a69ec530312b732d41d46e687` con artefactos CI verificados:
+Linux, 0/3 EOF por cada canción; Samsung SM-J701M, 0/4 EOF por cada canción.
+Hubo tres arranques PCM en cada plataforma, pero todos se interrumpieron por
+lecturas que agotaron la recuperación. Los otros intentos fallaron antes de
+PCM. Ambos workflows del SHA exacto están verdes; eso no certifica continuidad.
+La matriz física de seek sigue sin aprobarse. El detalle y el veredicto P0
+están en el informe de fiabilidad enlazado arriba.
+
+Los apartados 1–10 conservan la validación histórica del 18–19 de noviembre,
+con sus propios SHA y cifras. Las mejoras antiguas de arranque y sus 8/12
+selecciones no son mediciones del candidato P0 final.
 
 Este informe conserva resultados negativos y distingue artefacto probado,
 script ejecutor y commit candidato. El informe histórico sigue en
@@ -33,7 +45,8 @@ Referencias verificadas con Git y `git ls-remote origin` antes de editar:
 | Fix de resolvedor, remoto | `cc8a755f40a76b950dd3d2c233f9603610ffb718` |
 | Merge local ya existente | `fa669b9124bb93347947f65f95b9f167242d7f55` |
 
-Estado final publicado (consultado con `git ls-remote origin`):
+Estado publicado al cierre de la revisión del 18–19 de noviembre, antes de P0
+(consultado entonces con `git ls-remote origin`):
 
 | Referencia final | SHA completo | CI |
 | --- | --- | --- |
@@ -41,9 +54,10 @@ Estado final publicado (consultado con `git ls-remote origin`):
 | Código propuesto, `integration/doremi-premerge-validation` | `5ac877839dba269d200b5a8da5e936bc0c2faafb` | `ci.yml` `44465708503`, `android.yml` `44441447069`: success |
 | Cierre documental publicado | `34af8ab3bdd9f50da0a5a50aec41b4d21f9f9de0` | `ci.yml` `44470862089`, `android.yml` `44470866179`: success (este último tras relanzar apt) |
 
-Los commits posteriores a `34af8ab` solo añaden Markdown; su SHA se obtiene
-con `git log -1 --format=%H -- DOREMI-PREMERGE-REPORT.md` y su diff con
-`git diff 34af8ab..HEAD --stat`.
+Los commits de cierre entre `34af8ab` y `b5cda4a` solo añadían Markdown;
+su diff histórico se conserva con `git diff 34af8ab..b5cda4a --stat`.
+Los cambios productivos posteriores de P0 se describen en §11 y en el
+informe de fiabilidad, con su propio SHA y evidencia.
 
 Se creó un worktree independiente desde `fa669b9` mediante Orca:
 `/home/eirom/orca/workspaces/spotifast/doremi-premerge-validation`.
@@ -761,3 +775,74 @@ arnés descritas arriba. Acceder a la evidencia física exige acceso a esos
 archivos locales; las pruebas nativas de CI tienen además artefactos públicos
 con manifiesto, SHA256SUMS, reportes y capturas. No se afirma que la evidencia
 física se haya publicado ni que Actions haya iniciado sesión en YouTube.
+
+
+## 11. Misión P0 de fiabilidad, noviembre 2026
+
+Se parte de `b5cda4a`; el candidato de código/tests es
+`c18786424d0a673a69ec530312b732d41d46e687`. La evidencia física de
+`fd36e5b`, `4b903bb` y `b39753d` se conserva como pasos intermedios, sin atribuirla al
+candidato posterior. Las series de esta misión y su veredicto se encuentran en
+[DOREMI-STREAMING-RELIABILITY.md](DOREMI-STREAMING-RELIABILITY.md).
+
+Se separa el seek/indexado inicial del plazo de prebuffer y se conecta
+cancelación del feed con I/O. El lector exige Range estándar/206 e intervalo
+exacto. No acepta 200 ambiguos ni publica bloques truncados. Los reintentos de
+interrupción/timeout se limitan a tres operaciones de la misma concesión;
+conservan privadamente el prefijo de un 206 exacto y solicitan su cola faltante.
+No hay renovación o cambio de cliente tras una negativa. Un único worker
+anticipa hasta cinco bloques comprimidos, con generación para destinos fuera
+del bloque validado; los seeks internos del demuxer conservan el anticipo.
+
+La ventana se dimensionó contra recuperaciones reales de 15 s: seis bloques
+incluido el consumidor, hasta 384 KiB + seis bytes de guarda, 256 KiB más que
+el primer intento. No crece el buffer PCM de 8192 frames ni el prebuffer de
+4096, ni los timeouts HTTP. Se conserva la apertura progresiva de MP4. PCM
+distingue callbacks Pending, episodios contiguos y frames exactos de silencio.
+La traza QA es circular, optativa y sin secretos. Los rechazos tardíos conservan
+AccessDenied hasta el aviso existente de UI. En b39753d, el segundo bloque
+Linux tardó 9,73 s y agotó los ~4 s iniciales: 5,64 s de silencio antes de
+recuperarse. c187864 espera dos intervalos de la ventana antes del primer
+byte de cada generación; añade buffering antes del audio, con cancelación,
+sin ampliar memoria comprimida ni timeouts.
+
+Pruebas locales del código final: 59 tests del proveedor (dos ignorados
+históricos), 28 del player con AAC/MP4, Ogg y salida nativa, Clippy de ambos y
+check-local aprobados. La matriz de seek offline incluye MP4 convencional y
+fragmentado a 10/35/50/75/98 % y retorno. Estos PASS no sustituyen audio real.
+
+`4b903bb` tuvo ambos workflows verdes y un EOF Linux de q con cinco timeouts
+recuperados y cero underruns; la otra selección fue rechazada antes de PCM.
+Android logró siete arranques dentro de un proceso y todos terminaron con
+403 exactamente en 1048576; además hubo fallos de cuenta. Se conservan también
+sus silencios, rechazos de seek y pruebas de cancelación, sin convertirlos en
+reproducción completa. b39753d pasó ambos workflows, alcanzó un EOF por pista Linux (q con silencio
+inicial, _d3 sin underruns), pero Android quedó 0/4 EOF por identidad y
+falló seek al 35 % con 403 en 1048576. El código final se volvió a probar: Linux seis intentos, tres por pista,
+0 EOF; Android ocho intentos, cuatro por pista, 0 EOF. En cada plataforma
+hubo tres arranques PCM y todos fallaron posteriormente por timeout HTTP.
+La serie final acumuló 23,789021 s de silencio por starvation en Linux y
+53,262396 s en Android; la duración menor de intentos fallidos impide comparar
+esos totales como una mejora de continuidad. Todos los intervalos aceptados
+observados fueron 206 íntegros; no hubo EOF ficticio ni 403 de medios en esas
+series finales. Las negativas 403 de 1 MiB pertenecen al paso b39753d.
+
+CI final de código: ci.yml 44647361722 y android.yml 44647370690, ambos PASS
+al primer intento sobre c187864. APK SHA256
+282ed75d9845bafd7167ca801fd491f0bcfcd7f7a8076599adc9b7c59b1e8a07,
+verificado también instalado. Binario Linux SHA256
+911af2222af3f2c0cf3a2afc58d37436210b387a1e303d44bffb280b45a1cf56.
+En Linux se verificaron CRC y SHA de todas las entradas utilizadas; se omitió
+solo el alias no ejecutado doremi-app tras agotar la descarga completa. No se
+certifica CRC del ZIP completo. Manifiestos source_commit/dirty comprobados.
+El cierre documental es un commit posterior de Markdown, sin cambiar esos
+payloads; no se presenta como otro build de aplicación.
+
+Cancelación rápida Android c187864: cinco Next, Previous y Stop durante resolve,
+73 observaciones/20 s sin PCM tardío. Seek/pause de la serie Android final:
+bloqueados por fallos de arranque. Las fixtures de seek integrado HTTP→AAC
+convencional/fragmentado pasan sin certificar reproducción física. Windows:
+PHYSICAL_PLAYBACK_NOT_VERIFIED. Se mantiene la recomendación de no fusionar;
+main sigue en cd40da0 según la consulta remota del 20 de noviembre y no se
+modificó. El informe de fiabilidad conserva también el control Linux final
+independiente, las causas demostradas y los escenarios físicos pendientes.
