@@ -1518,12 +1518,17 @@ mod read_ahead_tests {
 #[cfg(test)]
 mod prefetch_contract_tests {
     use super::*;
-    use std::{io::Write, net::TcpListener, sync::Arc};
+    use std::{
+        io::Write,
+        net::TcpListener,
+        sync::{Arc, mpsc},
+    };
     #[test]
     fn next_block_is_validated_while_decoder_consumes_current_and_refusal_is_terminal() {
-        for refused in [false, true] {
+        for (refused, prebuffer) in [(false, false), (true, false), (false, true), (true, true)] {
             let listener = TcpListener::bind("127.0.0.1:0").unwrap();
             let address = listener.local_addr().unwrap();
+            let (release, after_first_byte) = mpsc::channel();
             let server = std::thread::spawn(move || {
                 for at in [0, CHUNK] {
                     let (mut socket, _) = listener.accept().unwrap();
@@ -1537,6 +1542,11 @@ mod prefetch_contract_tests {
                         request.push(b[0]);
                     }
                     if at == CHUNK && refused {
+                        if !prebuffer {
+                            after_first_byte
+                                .recv_timeout(Duration::from_secs(2))
+                                .unwrap();
+                        }
                         write!(socket,"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
                     } else {
                         write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes {at}-{}/{}\r\nConnection: close\r\n\r\n",at+CHUNK-1,2*CHUNK).unwrap();
@@ -1559,7 +1569,25 @@ mod prefetch_contract_tests {
                 .with_trace(trace.clone())
                 .read_ahead()
                 .unwrap();
+            if prebuffer {
+                reader = reader.with_startup_prebuffer();
+                if refused {
+                    let mut byte = [7];
+                    assert_eq!(
+                        reader.read_exact(&mut byte).unwrap_err().kind(),
+                        io::ErrorKind::PermissionDenied
+                    );
+                    assert_eq!(byte, [7]);
+                    assert_eq!(trace.http_snapshot().len(), 2);
+                    drop(reader);
+                    server.join().unwrap();
+                    continue;
+                }
+            }
             reader.read_exact(&mut [0; 1]).unwrap();
+            if refused {
+                release.send(()).unwrap();
+            }
             let deadline = Instant::now() + Duration::from_secs(2);
             while trace.http_snapshot().len() < 2 {
                 assert!(Instant::now() < deadline);

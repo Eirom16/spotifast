@@ -120,7 +120,8 @@ fn run() -> Result<(), String> {
                         .map_err(|_| doremi_player::EngineError::Input)?
                         .with_trace(worker_trace)
                         .read_ahead()
-                        .map_err(|_| doremi_player::EngineError::Input)?;
+                        .map_err(|_| doremi_player::EngineError::Input)?
+                        .with_startup_prebuffer();
                     let source = Vorbis::aac_from_read_seek(reader, length)
                         .map_err(doremi_player::EngineError::Decode)?;
                     Ok(Box::new(source))

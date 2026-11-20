@@ -453,7 +453,8 @@ impl Model {
                                     .map_err(|_| EngineError::Input)?
                                     .with_trace(trace)
                                     .read_ahead()
-                                    .map_err(|_| doremi_player::EngineError::Input)?;
+                                    .map_err(|_| doremi_player::EngineError::Input)?
+                                    .with_startup_prebuffer();
                                 let source = doremi_player::ogg_stream::Vorbis::aac_from_read_seek(
                                     reader, length,
                                 )

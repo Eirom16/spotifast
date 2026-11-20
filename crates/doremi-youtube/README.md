@@ -50,8 +50,14 @@ de seek invalida el trabajo anterior. Cuatro respuestas en cola y una pendiente
 de entrega retienen, junto al bloque del consumidor, como máximo 384 KiB
 (más seis bytes de comprobación y los buffers del cliente HTTP). Son 256 KiB
 adicionales frente al anticipo de un bloque, sin otro thread ni cambios al
-buffer PCM de 8192 frames. No espera llenar la ventana para entregar el primer
-bloque. Las respuestas ya validadas siguen disponibles mientras HTTP espera
+buffer PCM de 8192 frames. No espera llenar toda la ventana. El host y el probe
+activan `with_startup_prebuffer()`: antes del primer byte de cada generación
+esperan dos intervalos completos (uno para recursos de un solo bloque), con
+cancelación cada 20 ms. Un error conocido impide abrir la salida. Un arranque
+real agotó sus ~4 s iniciales mientras el segundo bloque tardaba 9,73 s;
+esta espera traslada ese tiempo a buffering y no añade memoria comprimida.
+Puede añadir hasta el presupuesto existente de otro bloque (18,15 s), sin
+aumentar timeouts ni esperar dentro del callback. Las respuestas ya validadas siguen disponibles mientras HTTP espera
 otro intervalo; seek/Drop retiran también un sender bloqueado por backpressure.
 Un seek del demuxer dentro del bloque ya validado conserva su anticipo:
 el siguiente intervalo sigue siendo el mismo. Buscar fuera de ese bloque

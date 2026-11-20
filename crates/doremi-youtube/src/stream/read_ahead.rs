@@ -10,6 +10,13 @@ struct Block {
     at: u64,
     bytes: Vec<u8>,
 }
+#[derive(Default)]
+struct Progress {
+    epoch: u64,
+    completed: usize,
+    finished: bool,
+    error: Option<io::ErrorKind>,
+}
 type Reply = (u64, io::Result<Block>);
 // Observed 15 s recoveries cannot fit behind one ~4 s AAC block. Five blocks
 // cover the existing 3*6 s + 150 ms recovery budget at the selected 128 kb/s.
@@ -25,6 +32,9 @@ pub struct ReadAhead {
     cancelled: Arc<dyn Fn() -> bool + Send + Sync>,
     expires: Instant,
     denied: Arc<AtomicBool>,
+    progress: Arc<Mutex<Progress>>,
+    prebuffer: bool,
+    primed: Option<u64>,
     position: u64,
     length: u64,
     block: Block,
@@ -55,6 +65,8 @@ impl Reader {
         let worker_stop = stop.clone();
         let denied = Arc::new(AtomicBool::new(false));
         let terminal = denied.clone();
+        let progress = Arc::new(Mutex::new(Progress::default()));
+        let produced = progress.clone();
         let worker = std::thread::Builder::new()
             .name("doremi-http".into())
             .spawn(move || {
@@ -76,6 +88,14 @@ impl Reader {
                             terminal.store(true, Ordering::Release);
                         }
                         let next = result.as_ref().ok().map(|b| b.at + b.bytes.len() as u64);
+                        {
+                            let mut progress = produced.lock().unwrap_or_else(|e| e.into_inner());
+                            if progress.epoch == epoch {
+                                progress.completed += 1;
+                                progress.finished = next.is_none_or(|next| next >= length);
+                                progress.error = result.as_ref().err().map(io::Error::kind);
+                            }
+                        }
                         // Already validated replies remain available while the
                         // sole HTTP owner is waiting on a later block.
                         if send.send((epoch, result)).is_err() {
@@ -102,6 +122,9 @@ impl Reader {
             cancelled: original_fence,
             expires,
             denied,
+            progress,
+            prebuffer: false,
+            primed: None,
             position,
             length,
             block: Block {
@@ -123,6 +146,18 @@ fn block(reader: &mut Reader, at: u64) -> io::Result<Block> {
 impl Read for ReadAhead {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         self.check()?;
+        let epoch = self.generation.load(Ordering::Acquire);
+        if self.prebuffer && self.primed != Some(epoch) {
+            let progress = self
+                .progress
+                .lock()
+                .map_err(|_| io::ErrorKind::BrokenPipe)?;
+            if progress.epoch == epoch
+                && let Some(error) = progress.error
+            {
+                return Err(error.into());
+            }
+        }
         if out.is_empty() || self.position == self.length {
             return Ok(0);
         }
@@ -134,6 +169,13 @@ impl Read for ReadAhead {
             // Drop consumed bytes before receiving another validated block.
             self.block.bytes = Vec::new();
             if self.next != Some((epoch, at)) {
+                *self
+                    .progress
+                    .lock()
+                    .map_err(|_| io::ErrorKind::BrokenPipe)? = Progress {
+                    epoch,
+                    ..Progress::default()
+                };
                 self.commands
                     .as_ref()
                     .ok_or(io::ErrorKind::BrokenPipe)?
@@ -159,6 +201,49 @@ impl Read for ReadAhead {
                 return Err(io::ErrorKind::InvalidData.into());
             }
             self.next = Some((epoch, at + self.block.bytes.len() as u64));
+            if self.prebuffer && self.primed != Some(epoch) {
+                // One ~4 s AAC interval cannot cover the observed 9.73 s
+                // second GET. Wait for a second result before PCM starts,
+                // using the existing bounded window, not another buffer.
+                let required = if self.length - at > CHUNK as u64 {
+                    2
+                } else {
+                    1
+                };
+                loop {
+                    self.check()?;
+                    let ready = {
+                        let progress = self
+                            .progress
+                            .lock()
+                            .map_err(|_| io::ErrorKind::BrokenPipe)?;
+                        if progress.epoch == epoch {
+                            if let Some(error) = progress.error {
+                                return Err(error.into());
+                            }
+                            progress.completed >= required || progress.finished
+                        } else {
+                            false
+                        }
+                    };
+                    if ready {
+                        break;
+                    }
+                    if self
+                        .worker
+                        .as_ref()
+                        .is_none_or(|worker| worker.is_finished())
+                    {
+                        self.progress
+                            .lock()
+                            .map_err(|_| io::ErrorKind::BrokenPipe)?
+                            .error = Some(io::ErrorKind::BrokenPipe);
+                        return Err(io::ErrorKind::BrokenPipe.into());
+                    }
+                    std::thread::park_timeout(Duration::from_millis(20));
+                }
+                self.primed = Some(epoch);
+            }
         }
         self.check()?;
         let index = (self.position - self.block.at) as usize;
@@ -217,6 +302,14 @@ impl Drop for ReadAhead {
 }
 
 impl ReadAhead {
+    /// Buffer two encoded intervals before the first read in each seek
+    /// generation. Runs when opening/seeking before the PCM prebuffer clock;
+    /// cached demux seeks preserve the generation and its authorized window.
+    pub fn with_startup_prebuffer(mut self) -> Self {
+        self.prebuffer = true;
+        self
+    }
+
     fn check(&self) -> io::Result<()> {
         if (self.cancelled)() {
             return Err(io::ErrorKind::ConnectionAborted.into());
@@ -274,6 +367,167 @@ mod window_tests {
             assert!(Instant::now() < deadline);
             std::thread::sleep(Duration::from_millis(5));
         }
+    }
+    #[test]
+    fn startup_waits_for_two_intervals_and_repeats_after_an_uncached_seek() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let input = reader(&listener, 12 * CHUNK, trace.clone()).with_startup_prebuffer();
+        let (held, waiting) = mpsc::channel();
+        let (release, proceed) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            for at in [
+                0,
+                CHUNK,
+                2 * CHUNK,
+                3 * CHUNK,
+                4 * CHUNK,
+                5 * CHUNK,
+                10 * CHUNK,
+                11 * CHUNK,
+            ] {
+                // Holding the first/second generation's second response must
+                // keep their first byte out of the decoder.
+                if at == CHUNK || at == 11 * CHUNK {
+                    held.send(()).unwrap();
+                    proceed.recv_timeout(Duration::from_secs(3)).unwrap();
+                }
+                reply(&listener, at, 12 * CHUNK);
+            }
+        });
+        let (complete, completed) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut input = input;
+            let mut byte = [255];
+            input.read_exact(&mut byte).unwrap();
+            complete.send(byte[0]).unwrap();
+            filled(&trace);
+            input.seek(SeekFrom::Start((10 * CHUNK) as u64)).unwrap();
+            input.read_exact(&mut byte).unwrap();
+            complete.send(byte[0]).unwrap();
+        });
+        for expected in [0, 10] {
+            waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+            assert!(matches!(
+                completed.recv_timeout(Duration::from_millis(80)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ));
+            release.send(()).unwrap();
+            assert_eq!(
+                completed.recv_timeout(Duration::from_secs(3)).unwrap(),
+                expected
+            );
+        }
+        worker.join().unwrap();
+        server.join().unwrap();
+    }
+    #[test]
+    fn startup_prebuffer_cancels_while_the_second_interval_is_blocked() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stop = cancel.clone();
+        let input = Stream {
+            url: format!("http://{}/fixture", listener.local_addr().unwrap()),
+            user_agent: UA.into(),
+            length: (2 * CHUNK) as u64,
+            expires: Instant::now() + Duration::from_secs(20),
+            duration_ms: 60000,
+        }
+        .reader(move || stop.load(Ordering::Acquire))
+        .unwrap()
+        .read_ahead()
+        .unwrap()
+        .with_startup_prebuffer();
+        let (held, waiting) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            reply(&listener, 0, 2 * CHUNK);
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            held.send(()).unwrap();
+            assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+        });
+        let (complete, completed) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut input = input;
+            let mut byte = [255];
+            complete
+                .send((input.read_exact(&mut byte).unwrap_err().kind(), byte))
+                .unwrap();
+        });
+        waiting.recv_timeout(Duration::from_secs(3)).unwrap();
+        assert!(matches!(
+            completed.recv_timeout(Duration::from_millis(50)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        let started = Instant::now();
+        cancel.store(true, Ordering::Release);
+        assert_eq!(
+            completed.recv_timeout(Duration::from_millis(250)).unwrap(),
+            (io::ErrorKind::ConnectionAborted, [255])
+        );
+        worker.join().unwrap();
+        assert!(started.elapsed() < Duration::from_millis(250));
+        server.join().unwrap();
+    }
+    #[test]
+    fn one_interval_resource_does_not_wait_for_a_nonexistent_second_block() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut input =
+            reader(&listener, CHUNK, Arc::new(Trace::default())).with_startup_prebuffer();
+        let server = std::thread::spawn(move || reply(&listener, 0, CHUNK));
+        let mut bytes = vec![255; CHUNK];
+        input.read_exact(&mut bytes).unwrap();
+        assert!(bytes.iter().all(|byte| *byte == 0));
+        assert_eq!(input.read(&mut [0; 1]).unwrap(), 0);
+        drop(input);
+        server.join().unwrap();
+    }
+    #[test]
+    fn invalid_second_interval_fails_startup_without_delivering_cached_audio() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let trace = Arc::new(Trace::default());
+        trace.enable_http();
+        let mut input = reader(&listener, 2 * CHUNK, trace.clone()).with_startup_prebuffer();
+        let server = std::thread::spawn(move || {
+            reply(&listener, 0, 2 * CHUNK);
+            let (mut socket, _) = listener.accept().unwrap();
+            socket
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                let mut byte = [0];
+                socket.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            write!(socket,"HTTP/1.1 206 OK\r\nContent-Length: {CHUNK}\r\nContent-Range: bytes {}-{}/{}\r\nConnection: close\r\n\r\n",CHUNK+1,2*CHUNK,2*CHUNK).unwrap();
+            assert_eq!(socket.read(&mut [0; 1]).unwrap(), 0);
+        });
+        let mut byte = [255];
+        assert_eq!(
+            input.read_exact(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
+        assert_eq!(byte, [255]);
+        assert_eq!(
+            input.read_exact(&mut byte).unwrap_err().kind(),
+            io::ErrorKind::Other
+        );
+        assert_eq!(byte, [255]);
+        let reads = trace.http_snapshot();
+        assert_eq!(reads.len(), 2);
+        assert_eq!(reads[1].outcome, "content_range");
+        drop(input);
+        server.join().unwrap();
     }
     #[test]
     fn full_window_is_bounded_and_seek_retires_a_blocked_sender() {
