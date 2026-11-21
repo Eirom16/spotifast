@@ -485,9 +485,9 @@ impl Model {
             self.online.phase_seen = phase;
             self.revision += 1;
             match phase {
-                "resolve" => self.notice = "Resolviendo audio CC0…".into(),
-                "download" => self.notice = "Descargando tono CC0…".into(),
-                "decode" => self.notice = "Preparando audio CC0…".into(),
+                "resolve" => self.notice = "Resolviendo audio…".into(),
+                "download" => self.notice = "Descargando audio…".into(),
+                "decode" => self.notice = "Preparando audio…".into(),
                 _ => {}
             }
         }
