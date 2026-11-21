@@ -835,7 +835,11 @@ public final class DoremiInstrumentation extends Instrumentation {
             complete.put(new JSONObject().put("id",id).put("round",round).put("wall_ms",elapsed).put("eof",true).put("native",last[0]));
             Files.write(new File(profileDirectory(),"qa-rescue-complete.json").toPath(),complete.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             capture("qa-rescue-eof-"+round+"-"+i);
-            tap("stop");until(data -> data.isNull("audio_metrics"));
+            // The player bar disappears when the queue ends with the last
+            // item, so the stop control only exists while something is
+            // loading or playing (an auto-advanced item, for example).
+            if(hasControl(state(),"stop")) tap("stop");
+            until(data -> data.isNull("audio_metrics") && !onlinePlaying(data,id));
         }
         tap("library");tap("select:"+ids[0]);until(600000,"control playback",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>1000);
         tap("pause");until(data -> "Paused".equals(data.optString("playback")));
