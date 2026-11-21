@@ -6,7 +6,7 @@
 //! failures resume the same grant; any HTTP access refusal is terminal.
 use crate::{Client, Error, PROVIDER, id, stream};
 use doremi_core::media::MediaId;
-use reqwest::{Client as Http, Response, redirect::Policy};
+use reqwest::Response;
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -86,53 +86,65 @@ pub async fn prepare(client: &mut Client, media: &MediaId) -> Result<Audio, Erro
     }
     let grant = primary(client, media).await?;
     client.resolution_stage = "rescue-download";
-    let http = Http::builder()
-        .redirect(Policy::custom(|attempt| {
-            if attempt.previous().len() > 3 || stream::media_url(attempt.url().as_str()).is_err() {
-                attempt.stop()
-            } else {
-                attempt.follow()
-            }
-        }))
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(90))
-        .user_agent(grant.user_agent)
-        .build()
-        .map_err(crate::network_error)?;
-    let bytes = download(&http, &grant.url, grant.length).await?;
+    let bytes = download(&grant.url, grant.length, grant.user_agent).await?;
     client.resolution_stage = "rescue-ready";
     Ok(Audio {
         bytes,
         duration_ms: grant.duration_ms,
     })
 }
-async fn download(http: &Http, url: &str, length: u64) -> Result<Vec<u8>, Error> {
+struct Cancel(std::sync::Arc<std::sync::atomic::AtomicBool>);
+impl Drop for Cancel {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+async fn download(url: &str, length: u64, user_agent: &str) -> Result<Vec<u8>, Error> {
     if !(1..=MAX_BYTES).contains(&length) {
         return Err(Error::TooLarge);
     }
-    let mut bytes = Vec::with_capacity(length as usize);
-    let mut retries = 0;
-    while (bytes.len() as u64) < length {
-        match append_range(http, url, length, &mut bytes).await {
-            Ok(()) => {}
-            Err(Error::Transport | Error::Timeout) if retries < 3 => {
-                // Tubefast resumes at the actual received offset after a broken
-                // read. Same grant/client only, bounded transient retries.
-                retries += 1;
-                transfer_event(bytes.len() as u64, length - 1, "resume-transport");
-                tokio::time::sleep(Duration::from_millis(200)).await;
+    let cancel = Cancel(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
+        false,
+    )));
+    let stopped = cancel.0.clone();
+    let url = url.to_owned();
+    let user_agent = user_agent.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let agent = ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(10))
+            .timeout_read(Duration::from_secs(30))
+            .timeout_write(Duration::from_secs(30))
+            .redirects(0)
+            .user_agent(&user_agent)
+            .build();
+        let mut bytes = Vec::with_capacity(length as usize);
+        let mut retries = 0;
+        while (bytes.len() as u64) < length {
+            if stopped.load(std::sync::atomic::Ordering::Acquire) {
+                return Err(Error::Cancelled);
             }
-            Err(error) => return Err(error),
+            match append_range(&agent, &url, length, &mut bytes, &stopped) {
+                Ok(()) => {}
+                Err(Error::Transport | Error::Timeout) if retries < 3 => {
+                    retries += 1;
+                    transfer_event(bytes.len() as u64, length - 1, "resume-transport");
+                }
+                Err(error) => return Err(error),
+            }
         }
-    }
-    Ok(bytes)
+        Ok(bytes)
+    })
+    .await
+    .map_err(|_| Error::Transport)?
 }
-async fn append_range(
-    http: &Http,
+fn append_range(
+    agent: &ureq::Agent,
     url: &str,
     length: u64,
     bytes: &mut Vec<u8>,
+    cancel: &std::sync::atomic::AtomicBool,
 ) -> Result<(), Error> {
+    use std::io::Read;
     let from = bytes.len() as u64;
     let to = (from + CHUNK).min(length) - 1;
     let expected = (to - from + 1) as usize;
@@ -140,34 +152,64 @@ async fn append_range(
     url.query_pairs_mut()
         .append_pair("range", &format!("{from}-{to}"));
     transfer_event(from, to, "request");
-    let mut response = http
-        .get(url)
-        .header("Accept-Encoding", "identity")
-        .send()
-        .await
-        .map_err(transport_error)?;
-    status(&response)?;
+    let mut redirects = 0;
+    let response = loop {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Cancelled);
+        }
+        let response = match agent
+            .get(url.as_str())
+            .set("Accept-Encoding", "identity")
+            .call()
+        {
+            Ok(response) => response,
+            Err(ureq::Error::Status(401 | 403, _)) => return Err(Error::AccessDenied),
+            Err(ureq::Error::Status(429, _)) => {
+                return Err(Error::RateLimited {
+                    retry_after_ms: Some(30_000),
+                });
+            }
+            Err(ureq::Error::Status(_, _)) => return Err(Error::Unavailable),
+            Err(ureq::Error::Transport(_)) => return Err(Error::Transport),
+        };
+        match response.status() {
+            200 | 206 => break response,
+            301..=303 | 307 | 308 if redirects < 3 => {
+                let next = url
+                    .join(response.header("location").ok_or(Error::InvalidResponse)?)
+                    .map_err(|_| Error::InvalidResponse)?;
+                url = stream::media_url(next.as_str())?;
+                redirects += 1;
+            }
+            _ => return Err(Error::Unavailable),
+        }
+    };
     if response
-        .content_length()
-        .is_some_and(|n| n != expected as u64)
+        .header("content-length")
+        .is_some_and(|n| n.parse::<usize>().ok() != Some(expected))
     {
         return Err(Error::InvalidResponse);
     }
-    if let Some(value) = response.headers().get("content-range") {
-        let wanted = format!("bytes {from}-{to}/{length}");
-        if value.to_str().ok() != Some(wanted.as_str()) {
-            return Err(Error::InvalidResponse);
-        }
+    if let Some(range) = response.header("content-range")
+        && range != format!("bytes {from}-{to}/{length}")
+    {
+        return Err(Error::InvalidResponse);
     }
     let end = bytes.len() + expected;
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        if chunk.len() > end.saturating_sub(bytes.len()) {
-            return Err(Error::TooLarge);
+    let mut body = response.into_reader();
+    let mut block = [0; 16 * 1024];
+    while bytes.len() < end {
+        if cancel.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(Error::Cancelled);
         }
-        bytes.extend_from_slice(&chunk);
-    }
-    if bytes.len() != end {
-        return Err(Error::Transport);
+        let budget = block.len().min(end - bytes.len());
+        let read = body
+            .read(&mut block[..budget])
+            .map_err(|_| Error::Transport)?;
+        if read == 0 {
+            return Err(Error::Transport);
+        }
+        bytes.extend_from_slice(&block[..read]);
     }
     transfer_event(from, to, "complete");
     Ok(())
@@ -242,17 +284,16 @@ mod tests {
                     .is_err()
             );
         });
-        let http = Http::new();
         let url = format!("http://{address}/media?sig=fixture");
-        let bytes = download(&http, &url, CHUNK + 7).await.unwrap();
+        let bytes = download(&url, CHUNK + 7, UA).await.unwrap();
         assert_eq!(bytes, vec![42; CHUNK as usize + 7]);
         assert!(matches!(
-            download(&http, &url, 10).await,
+            download(&url, 10, UA).await,
             Err(Error::AccessDenied)
         ));
         server.await.unwrap();
         assert!(matches!(
-            download(&http, &url, MAX_BYTES + 1).await,
+            download(&url, MAX_BYTES + 1, UA).await,
             Err(Error::TooLarge)
         ));
     }
@@ -272,13 +313,9 @@ mod tests {
             }
         });
         assert_eq!(
-            download(
-                &Http::new(),
-                &format!("http://{address}/media?sig=same-grant"),
-                10
-            )
-            .await
-            .unwrap(),
+            download(&format!("http://{address}/media?sig=same-grant"), 10, UA)
+                .await
+                .unwrap(),
             b"abcdefghij"
         );
         server.await.unwrap();

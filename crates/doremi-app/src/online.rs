@@ -141,13 +141,18 @@ impl Worker {
                     .enable_all()
                     .build()
                 {
-                    Ok(runtime) => runtime.block_on(async move {
-                        let client = Sources {
-                            commons: commons::http::client(),
-                            youtube,
-                        };
-                        actor(receiver, state, client, origin).await;
-                    }),
+                    Ok(runtime) => {
+                        runtime.block_on(async move {
+                            let client = Sources {
+                                commons: commons::http::client(),
+                                youtube,
+                            };
+                            actor(receiver, state, client, origin).await;
+                        });
+                        // Cancellation stops the download at the next read;
+                        // never join a blocked HTTP read from host shutdown.
+                        runtime.shutdown_timeout(Duration::from_millis(100));
+                    }
                     Err(_) => fail_jobs(receiver, state),
                 }
             })
