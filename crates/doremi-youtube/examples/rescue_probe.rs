@@ -23,10 +23,9 @@ fn main() {
             let start = std::time::Instant::now();
             let mut client = doremi_youtube::Client::new().unwrap();
             #[cfg(any(target_os = "linux", target_os = "windows"))]
-            if let Some(cookie) = &cookie {
-                if let Err(error) = client.sign_in(cookie.clone()).await {
-                    eprintln!("Existing session verification failed: {error:?}"); std::process::exit(1);
-                }
+            if let Some(cookie) = &cookie
+                && let Err(error) = client.sign_in(cookie.clone()).await {
+                eprintln!("Existing session verification failed: {error:?}"); std::process::exit(1);
             }
             #[cfg(not(any(target_os = "linux", target_os = "windows")))]
             if saved { eprintln!("Use the platform session adapter"); std::process::exit(1); }

@@ -46,8 +46,8 @@ def main():
     assert exists.returncode == 1, 'Use a new isolated profile'
     protected = ['library-v1.json', 'youtube-session-v1.bin']
     before = {name: normal_hash(name) for name in protected}
-    try:
-        with verifier['qa_session'](args.profile):
+    with verifier['qa_session'](args.profile):
+        try:
             with (output / 'instrumentation.log').open('wb') as log:
                 result = subprocess.run(['adb', '-d', 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'rescue-playback', '-e', 'profile', args.profile, PACKAGE + '.test/dev.eirom.doremi.DoremiInstrumentation'], stdout=log, stderr=subprocess.STDOUT, timeout=2400)
             for name in ['qa-rescue-complete.json', 'qa-rescue-result.json', 'qa-state.json', 'qa-failure.json']:
@@ -61,10 +61,10 @@ def main():
             assert report['result'] == 'pass' and len(report['complete']) == 4
             for identity in ['qQzdAsjWGPg', '_d3SaQI_Ag4']:
                 assert sum(row['id'] == identity and row['eof'] for row in report['complete']) == 2
-    finally:
-        after = {name: normal_hash(name) for name in protected}
-        (output / 'protected-data.json').write_text(json.dumps({'before': before, 'after': after}, indent=2))
-        assert before == after, 'Normal-profile library/session changed'
+        finally:
+            after = {name: normal_hash(name) for name in protected}
+            (output / 'protected-data.json').write_text(json.dumps({'before': before, 'after': after}, indent=2))
+            assert before == after, 'Normal-profile library/session changed during isolated QA'
     (output / 'artifact.json').write_text(json.dumps({'commit': args.commit, 'apk_sha256': hashlib.sha256(apk.read_bytes()).hexdigest(), 'result': 'pass'}, indent=2))
     print('PASS: whole corpus twice, controls and normal-profile hashes; see', output)
 

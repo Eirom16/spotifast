@@ -2,7 +2,8 @@
 //! Primary guest request and 1 MiB query ranges adapted from Tubefast's
 //! src/ytm.rs and src/player.rs, MIT, Yiğit Bozyaka, revision
 //! c0813fc0619e670096fc51a9d944a9ca4e4b2e42. See LICENSE-TUBEFAST.
-//! No visitor replacement, client refresh, account fallback or access retries.
+//! No visitor replacement, client refresh or account fallback. Only transport
+//! failures resume the same grant; any HTTP access refusal is terminal.
 use crate::{Client, Error, PROVIDER, id, stream};
 use doremi_core::media::MediaId;
 use reqwest::{Client as Http, Response, redirect::Policy};
@@ -33,7 +34,7 @@ fn status(response: &Response) -> Result<(), Error> {
 async fn json_response(mut response: Response) -> Result<Value, Error> {
     status(&response)?;
     let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(crate::network_error)? {
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
         if chunk.len() > crate::MAX_BYTES.saturating_sub(bytes.len()) {
             return Err(Error::TooLarge);
         }
@@ -94,7 +95,7 @@ pub async fn prepare(client: &mut Client, media: &MediaId) -> Result<Audio, Erro
             }
         }))
         .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(90))
         .user_agent(grant.user_agent)
         .build()
         .map_err(crate::network_error)?;
@@ -110,44 +111,90 @@ async fn download(http: &Http, url: &str, length: u64) -> Result<Vec<u8>, Error>
         return Err(Error::TooLarge);
     }
     let mut bytes = Vec::with_capacity(length as usize);
+    let mut retries = 0;
     while (bytes.len() as u64) < length {
-        let from = bytes.len() as u64;
-        let to = (from + CHUNK).min(length) - 1;
-        let expected = (to - from + 1) as usize;
-        let mut url = reqwest::Url::parse(url).map_err(|_| Error::InvalidResponse)?;
-        url.query_pairs_mut()
-            .append_pair("range", &format!("{from}-{to}"));
-        let mut response = http
-            .get(url)
-            .header("Accept-Encoding", "identity")
-            .send()
-            .await
-            .map_err(crate::network_error)?;
-        status(&response)?;
-        if response
-            .content_length()
-            .is_some_and(|n| n != expected as u64)
-        {
-            return Err(Error::InvalidResponse);
-        }
-        if let Some(value) = response.headers().get("content-range") {
-            let wanted = format!("bytes {from}-{to}/{length}");
-            if value.to_str().ok() != Some(wanted.as_str()) {
-                return Err(Error::InvalidResponse);
+        match append_range(http, url, length, &mut bytes).await {
+            Ok(()) => {}
+            Err(Error::Transport | Error::Timeout) if retries < 3 => {
+                // Tubefast resumes at the actual received offset after a broken
+                // read. Same grant/client only, bounded transient retries.
+                retries += 1;
+                transfer_event(bytes.len() as u64, length - 1, "resume-transport");
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
-        }
-        let end = bytes.len() + expected;
-        while let Some(chunk) = response.chunk().await.map_err(crate::network_error)? {
-            if chunk.len() > end.saturating_sub(bytes.len()) {
-                return Err(Error::TooLarge);
-            }
-            bytes.extend_from_slice(&chunk);
-        }
-        if bytes.len() != end {
-            return Err(Error::Transport);
+            Err(error) => return Err(error),
         }
     }
     Ok(bytes)
+}
+async fn append_range(
+    http: &Http,
+    url: &str,
+    length: u64,
+    bytes: &mut Vec<u8>,
+) -> Result<(), Error> {
+    let from = bytes.len() as u64;
+    let to = (from + CHUNK).min(length) - 1;
+    let expected = (to - from + 1) as usize;
+    let mut url = reqwest::Url::parse(url).map_err(|_| Error::InvalidResponse)?;
+    url.query_pairs_mut()
+        .append_pair("range", &format!("{from}-{to}"));
+    transfer_event(from, to, "request");
+    let mut response = http
+        .get(url)
+        .header("Accept-Encoding", "identity")
+        .send()
+        .await
+        .map_err(transport_error)?;
+    status(&response)?;
+    if response
+        .content_length()
+        .is_some_and(|n| n != expected as u64)
+    {
+        return Err(Error::InvalidResponse);
+    }
+    if let Some(value) = response.headers().get("content-range") {
+        let wanted = format!("bytes {from}-{to}/{length}");
+        if value.to_str().ok() != Some(wanted.as_str()) {
+            return Err(Error::InvalidResponse);
+        }
+    }
+    let end = bytes.len() + expected;
+    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
+        if chunk.len() > end.saturating_sub(bytes.len()) {
+            return Err(Error::TooLarge);
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if bytes.len() != end {
+        return Err(Error::Transport);
+    }
+    transfer_event(from, to, "complete");
+    Ok(())
+}
+
+fn transport_error(error: reqwest::Error) -> Error {
+    let category = if error.is_timeout() {
+        "timeout"
+    } else if error.is_connect() {
+        "connect"
+    } else if error.is_body() {
+        "body"
+    } else {
+        "request"
+    };
+    #[cfg(target_os = "android")]
+    log::warn!("YTM buffered transport category={category}");
+    #[cfg(not(target_os = "android"))]
+    eprintln!("YTM buffered transport category={category}");
+    crate::network_error(error)
+}
+
+fn transfer_event(from: u64, to: u64, stage: &'static str) {
+    #[cfg(target_os = "android")]
+    log::info!("YTM buffered range from={from} to={to} stage={stage}");
+    #[cfg(not(target_os = "android"))]
+    eprintln!("YTM buffered range from={from} to={to} stage={stage}");
 }
 
 #[cfg(test)]
@@ -181,7 +228,8 @@ mod tests {
             }
             let (mut socket, _) = listener.accept().await.unwrap();
             let mut request = [0; 8192];
-            socket.read(&mut request).await.unwrap();
+            let received = socket.read(&mut request).await.unwrap();
+            assert!(received > 0);
             socket
                 .write_all(
                     b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
@@ -207,5 +255,32 @@ mod tests {
             download(&http, &url, MAX_BYTES + 1).await,
             Err(Error::TooLarge)
         ));
+    }
+    #[tokio::test]
+    async fn broken_body_resumes_the_same_grant_at_the_received_offset() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for (range, size, body) in [("0-9", 10, "abcd"), ("4-9", 6, "efghij")] {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0; 8192];
+                let read = socket.read(&mut request).await.unwrap();
+                assert!(
+                    String::from_utf8_lossy(&request[..read]).contains(&format!("range={range}"))
+                );
+                socket.write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n{body}").as_bytes()).await.unwrap();
+            }
+        });
+        assert_eq!(
+            download(
+                &Http::new(),
+                &format!("http://{address}/media?sig=same-grant"),
+                10
+            )
+            .await
+            .unwrap(),
+            b"abcdefghij"
+        );
+        server.await.unwrap();
     }
 }

@@ -50,7 +50,7 @@ pub fn run() -> Result<String, String> {
     for round in 1..=2 {
         for row in &rows {
             model.start_context(vec![row.clone()], 0);
-            wait(&mut model, &ctx, 180, |m| {
+            wait(&mut model, &ctx, 600, |m| {
                 m.queue.playback() == Playback::Playing
             })?;
             let start = Instant::now();
@@ -81,7 +81,7 @@ pub fn run() -> Result<String, String> {
         }
     }
     model.start_context(rows.clone(), 0);
-    wait(&mut model, &ctx, 180, |m| m.queue.position_ms() > 500)?;
+    wait(&mut model, &ctx, 600, |m| m.queue.position_ms() > 500)?;
     model.command(Command::Pause);
     wait(&mut model, &ctx, 2, |m| {
         m.queue.playback() == Playback::Paused
@@ -102,11 +102,11 @@ pub fn run() -> Result<String, String> {
     wait(&mut model, &ctx, 5, |m| m.queue.position_ms() > 60500)?;
     let seek = metrics(model.audio.as_ref().unwrap().metrics().unwrap());
     model.command(Command::Next);
-    wait(&mut model, &ctx, 180, |m| {
+    wait(&mut model, &ctx, 600, |m| {
         m.queue.current().is_some_and(|e| e.media.id == rows[1].id) && m.queue.position_ms() > 250
     })?;
     model.command(Command::Previous);
-    wait(&mut model, &ctx, 180, |m| {
+    wait(&mut model, &ctx, 600, |m| {
         m.queue.current().is_some_and(|e| e.media.id == rows[0].id) && m.queue.position_ms() > 250
     })?;
     model.command(Command::Cancel);

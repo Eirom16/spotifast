@@ -819,7 +819,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         for(int round=1;round<=2;round++) for(int i=0;i<ids.length;i++) {
             final String id=ids[i];final long duration=durations[i];
             tap("library");tap("select:"+id);
-            until(180000,"rescue native start",data -> {
+            until(600000,"rescue native start",data -> {
                 if("Failed".equals(data.optString("playback"))) throw new AssertionError("Rescue failed: "+data.optString("notice"));
                 return onlinePlaying(data,id) && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000;
             });
@@ -837,7 +837,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-rescue-eof-"+round+"-"+i);
             tap("stop");until(data -> data.isNull("audio_metrics"));
         }
-        tap("library");tap("select:"+ids[0]);until(180000,"control playback",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>1000);
+        tap("library");tap("select:"+ids[0]);until(600000,"control playback",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>1000);
         tap("pause");until(data -> "Paused".equals(data.optString("playback")));
         long paused=state().optLong("position_ms");SystemClock.sleep(500);
         if(state().optLong("position_ms")!=paused) throw new AssertionError("Pause advanced");

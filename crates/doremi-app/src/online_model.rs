@@ -169,7 +169,7 @@ impl Model {
                     deadline: Instant::now()
                         + Duration::from_secs(
                             if id.provider.as_str() == doremi_youtube::PROVIDER {
-                                180
+                                600
                             } else {
                                 12
                             },
