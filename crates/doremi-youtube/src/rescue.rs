@@ -99,6 +99,19 @@ impl Drop for Cancel {
         self.0.store(true, std::sync::atomic::Ordering::Release);
     }
 }
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
+fn agent(user_agent: &str, request_timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        // Whole request, including the response body. A stalled grant is
+        // abandoned as a transport failure and resumed from the bytes already
+        // cached, instead of blocking the load until its deadline.
+        .timeout(request_timeout)
+        .timeout_write(Duration::from_secs(30))
+        .redirects(0)
+        .user_agent(user_agent)
+        .build()
+}
 async fn download(url: &str, length: u64, user_agent: &str) -> Result<Vec<u8>, Error> {
     if !(1..=MAX_BYTES).contains(&length) {
         return Err(Error::TooLarge);
@@ -110,13 +123,7 @@ async fn download(url: &str, length: u64, user_agent: &str) -> Result<Vec<u8>, E
     let url = url.to_owned();
     let user_agent = user_agent.to_owned();
     tokio::task::spawn_blocking(move || {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(Duration::from_secs(10))
-            .timeout_read(Duration::from_secs(30))
-            .timeout_write(Duration::from_secs(30))
-            .redirects(0)
-            .user_agent(&user_agent)
-            .build();
+        let agent = agent(&user_agent, REQUEST_TIMEOUT);
         let mut bytes = Vec::with_capacity(length as usize);
         let mut retries = 0;
         let mut stalled = 0;
@@ -302,6 +309,35 @@ mod tests {
             download(&url, MAX_BYTES + 1, UA).await,
             Err(Error::TooLarge)
         ));
+    }
+    #[tokio::test]
+    async fn a_stalled_grant_is_abandoned_by_the_request_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            // Accept the request and never answer it.
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = [0; 8192];
+            assert!(socket.read(&mut request).await.unwrap() > 0);
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        let agent = agent(UA, Duration::from_millis(250));
+        let started = std::time::Instant::now();
+        let mut bytes = Vec::new();
+        let result = tokio::task::spawn_blocking(move || {
+            append_range(
+                &agent,
+                &format!("http://{address}/media?sig=stalled"),
+                CHUNK,
+                &mut bytes,
+                &std::sync::atomic::AtomicBool::new(false),
+            )
+        })
+        .await
+        .unwrap();
+        assert!(matches!(result, Err(Error::Transport)), "{result:?}");
+        assert!(started.elapsed() < Duration::from_secs(3));
+        server.abort();
     }
     #[tokio::test]
     async fn broken_body_resumes_the_same_grant_at_the_received_offset() {
