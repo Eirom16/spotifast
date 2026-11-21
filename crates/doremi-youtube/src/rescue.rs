@@ -119,13 +119,19 @@ async fn download(url: &str, length: u64, user_agent: &str) -> Result<Vec<u8>, E
             .build();
         let mut bytes = Vec::with_capacity(length as usize);
         let mut retries = 0;
+        let mut stalled = 0;
         while (bytes.len() as u64) < length {
             if stopped.load(std::sync::atomic::Ordering::Acquire) {
                 return Err(Error::Cancelled);
             }
+            let before = bytes.len();
             match append_range(&agent, &url, length, &mut bytes, &stopped) {
-                Ok(()) => {}
-                Err(Error::Transport | Error::Timeout) if retries < 3 => {
+                Ok(()) => stalled = 0,
+                Err(Error::Transport | Error::Timeout) if retries < 32 => {
+                    stalled = if bytes.len() > before { 0 } else { stalled + 1 };
+                    if stalled > 3 {
+                        return Err(Error::Transport);
+                    }
                     retries += 1;
                     transfer_event(bytes.len() as u64, length - 1, "resume-transport");
                 }
@@ -302,7 +308,15 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
-            for (range, size, body) in [("0-9", 10, "abcd"), ("4-9", 6, "efghij")] {
+            // Repeated short bodies still make progress. Three interruptions
+            // across an entire file must not discard the already cached bytes.
+            for (range, size, body) in [
+                ("0-9", 10, "ab"),
+                ("2-9", 8, "cd"),
+                ("4-9", 6, "ef"),
+                ("6-9", 4, "gh"),
+                ("8-9", 2, "ij"),
+            ] {
                 let (mut socket, _) = listener.accept().await.unwrap();
                 let mut request = [0; 8192];
                 let read = socket.read(&mut request).await.unwrap();
