@@ -38,9 +38,20 @@ fn main() -> eframe::Result {
             }
             return Ok(());
         }
+        #[cfg(target_os = "linux")]
+        [argument] if argument == "--rescue-audio-probe" => {
+            match doremi_app::rescue_audio_probe() {
+                Ok(report) => println!("{report}"),
+                Err(error) => {
+                    eprintln!("{error}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
         [argument] if argument == "--help" => {
             println!(
-                "Doremi Native Dev: --version, --help, --audio-probe, --wav-audio-probe PATH. UI: YouTube Music catalog and native media resolution, optional MusicBrainz metadata, selected Commons CC0 music with progressive native playback and test tones, local library and native player. MusicBrainz supplies no audio. Linux also supports --online-audio-probe. Development build; no stable release."
+                "Doremi Native Dev: --version, --help, --audio-probe, --wav-audio-probe PATH. UI: YouTube Music catalog and native media resolution, optional MusicBrainz metadata, selected Commons CC0 music with progressive native playback and test tones, local library and native player. MusicBrainz supplies no audio. Linux also supports --online-audio-probe and --rescue-audio-probe (authorized corpus, whole songs twice). Development build; no stable release."
             );
             return Ok(());
         }

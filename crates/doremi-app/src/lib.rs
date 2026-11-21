@@ -17,6 +17,10 @@ mod online;
 mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
+#[cfg(target_os = "linux")]
+mod rescue_probe;
+#[cfg(target_os = "linux")]
+pub use rescue_probe::run as rescue_audio_probe;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod youtube_session;
 use doremi_library as persistence;

@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 pub(super) enum Prepared {
     YouTube(Box<doremi_youtube::stream::Stream>),
+    BufferedYouTube(Vec<u8>),
     Pcm(Arc<Pcm>),
     Stream(
         Box<(
@@ -39,7 +40,7 @@ impl From<ProviderError> for Error {
 impl Error {
     pub fn message(self) -> String {
         match self {
-            Self::YouTube(ProviderError::AccessDenied)=>"YouTube Music rechazó el acceso o requiere una sesión válida. Conecta la cuenta para comprobar sus permisos.".into(),
+            Self::YouTube(ProviderError::AccessDenied)=>"YouTube Music denegó el acceso a esta pista. Comprueba la sesión y los permisos de la fuente.".into(),
             Self::YouTube(ProviderError::Unavailable)=>"YouTube Music indica que el contenido no está disponible.".into(),
             Self::YouTube(error)=>format!("No se pudo reproducir desde YouTube Music: {error:?}"),
             Self::Provider(error) => format!("Fuente online: {error:?}"),
@@ -362,7 +363,20 @@ async fn source(
             .get_or_insert_with(doremi_youtube::Client::new)
         {
             Ok(client) => {
-                let result = client.resolve(media).await;
+                // Rescue is the default on both platforms. The previous HTTP
+                // range source remains selectable without changing UI or data.
+                let result = if std::env::var("DOREMI_PLAYBACK_BACKEND").as_deref() == Ok("legacy")
+                {
+                    client
+                        .resolve(media)
+                        .await
+                        .map(|stream| Prepared::YouTube(Box::new(stream)))
+                } else {
+                    state.phase(generation, 2, ctx);
+                    doremi_youtube::rescue::prepare(client, media)
+                        .await
+                        .map(|audio| Prepared::BufferedYouTube(audio.bytes))
+                };
                 if result.is_err() {
                     let message =
                         format!("YTM resolve failure stage={}", client.resolution_stage());
@@ -394,9 +408,7 @@ async fn source(
             }
             Err(error) => Err(*error),
         };
-        return result
-            .map(|stream| Prepared::YouTube(Box::new(stream)))
-            .map_err(Error::YouTube);
+        return result.map_err(Error::YouTube);
     }
     let client = client.commons;
     if commons::candidate(media) && commons::audited(media.local()).is_none() {

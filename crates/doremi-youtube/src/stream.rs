@@ -125,9 +125,9 @@ impl PlayerDiagnostic {
 }
 /// Ephemeral, non-serializable grant. Its transport URL is never a media ID.
 pub struct Stream {
-    url: String,
-    user_agent: &'static str,
-    length: u64,
+    pub(super) url: String,
+    pub(super) user_agent: &'static str,
+    pub(super) length: u64,
     expires: Instant,
     pub duration_ms: u64,
 }
@@ -250,7 +250,7 @@ fn with_nonce(url: &mut Url, nonce: &str) {
         .extend_pairs(pairs)
         .append_pair("cpn", nonce);
 }
-fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
+pub(super) fn parse(media: &MediaId, value: &Value) -> Result<Stream, Error> {
     parse_with_url(media, value, None)
 }
 fn validate(media: &MediaId, value: &Value) -> Result<(), Error> {

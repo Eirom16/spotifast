@@ -11,6 +11,7 @@ pub mod embedded;
 pub mod parser;
 mod player_config;
 mod player_program;
+pub mod rescue;
 pub mod session;
 mod signatures;
 pub mod stream;

@@ -169,7 +169,7 @@ impl Model {
                     deadline: Instant::now()
                         + Duration::from_secs(
                             if id.provider.as_str() == doremi_youtube::PROVIDER {
-                                20
+                                180
                             } else {
                                 12
                             },
@@ -333,6 +333,35 @@ impl Model {
                     }
                     let load = self.online.load.take().unwrap();
                     match result {
+                        Ok(Prepared::BufferedYouTube(bytes)) => {
+                            let length = bytes.len() as u64;
+                            let factory: doremi_player::StreamFactory = Box::new(move |cancel| {
+                                if cancel.cancelled() {
+                                    return Err(EngineError::Closed);
+                                }
+                                let source = doremi_player::ogg_stream::Vorbis::aac_from_read_seek(
+                                    std::io::Cursor::new(bytes),
+                                    length,
+                                )
+                                .map_err(EngineError::Decode)?;
+                                Ok(Box::new(source))
+                            });
+                            if let Err(error) = self
+                                .audio
+                                .as_mut()
+                                .ok_or(EngineError::Closed)
+                                .and_then(|engine| {
+                                    engine.load_stream(request, factory, load.position)
+                                })
+                            {
+                                self.notice = format!(
+                                    "No se pudo preparar el audio de YouTube Music: {error:?}"
+                                );
+                                self.event(Event::Failed(request));
+                            } else {
+                                self.notice = "Audio preparado de YouTube Music".into();
+                            }
+                        }
                         Ok(Prepared::YouTube(stream)) => {
                             let length = stream.length();
                             let factory: doremi_player::StreamFactory = Box::new(move |cancel| {

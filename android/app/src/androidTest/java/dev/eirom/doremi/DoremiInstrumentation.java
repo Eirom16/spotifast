@@ -802,6 +802,51 @@ public final class DoremiInstrumentation extends Instrumentation {
             .put("license_evidence","https://wiki.creativecommons.org/wiki/Nine_Inch_Nails_The_Slip")
             .toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    // Opt-in physical whole-song acceptance, only in a new isolated profile.
+    private void seedRescue() throws Exception {
+        File directory=profileDirectory();
+        if(directory.exists()) throw new AssertionError("Rescue requires a new private profile");
+        if(!directory.mkdirs()) throw new AssertionError("Cannot create isolated profile");
+        JSONArray items=new JSONArray();
+        String[] ids={"qQzdAsjWGPg","_d3SaQI_Ag4"};long[] durations={276253,284427};
+        for(int i=0;i<ids.length;i++) items.put(new JSONObject().put("provider","youtube-music").put("id",ids[i]).put("title",ids[i]).put("duration_ms",durations[i]));
+        Files.write(new File(directory,"library-v1.json").toPath(),new JSONObject().put("schema",1).put("items",items).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+    private void rescuePlayback() throws Exception {
+        String[] ids={"qQzdAsjWGPg","_d3SaQI_Ag4"};long[] durations={276253,284427};
+        tap("demo-examples");tap("select:dawn");tap("pause");slide("volume",0.08f);tap("stop");
+        JSONArray complete=new JSONArray();
+        for(int round=1;round<=2;round++) for(int i=0;i<ids.length;i++) {
+            final String id=ids[i];final long duration=durations[i];
+            tap("library");tap("select:"+id);
+            until(180000,"rescue native start",data -> {
+                if("Failed".equals(data.optString("playback"))) throw new AssertionError("Rescue failed: "+data.optString("notice"));
+                return onlinePlaying(data,id) && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000;
+            });
+            final long start=SystemClock.elapsedRealtime();final JSONObject[] last={new JSONObject()};
+            until(400000,"complete song to natural EOF",data -> {
+                if("Failed".equals(data.optString("playback"))) throw new AssertionError("Rescue failed during playback");
+                JSONObject metrics=data.optJSONObject("audio_metrics");
+                if(metrics!=null && metrics.optLong("frames")>=last[0].optLong("frames")) last[0]=metrics;
+                return "Stopped".equals(data.optString("playback")) || !id.equals(data.optString("current"));
+            });
+            long elapsed=SystemClock.elapsedRealtime()-start;
+            if(last[0].optLong("output_rate")==0 || last[0].optLong("nonzero_samples")==0 || last[0].optLong("frames")*1000/last[0].optLong("output_rate")+2000<duration || elapsed+2000<duration) throw new AssertionError("Premature EOF");
+            complete.put(new JSONObject().put("id",id).put("round",round).put("wall_ms",elapsed).put("eof",true).put("native",last[0]));
+            Files.write(new File(profileDirectory(),"qa-rescue-complete.json").toPath(),complete.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            capture("qa-rescue-eof-"+round+"-"+i);
+            tap("stop");until(data -> data.isNull("audio_metrics"));
+        }
+        tap("library");tap("select:"+ids[0]);until(180000,"control playback",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>1000);
+        tap("pause");until(data -> "Paused".equals(data.optString("playback")));
+        long paused=state().optLong("position_ms");SystemClock.sleep(500);
+        if(state().optLong("position_ms")!=paused) throw new AssertionError("Pause advanced");
+        slide("seek",0.5f);until(data -> "Paused".equals(data.optString("playback")) && data.optLong("position_ms")>durations[0]/2-2000);
+        tap("play");until(10000,"resume after seek",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>durations[0]/2+500);
+        capture("qa-rescue-seek-resume");tap("stop");until(data -> data.isNull("audio_metrics"));
+        SystemClock.sleep(1000);if(!state().isNull("audio_metrics")) throw new AssertionError("Cancelled audio survived");
+        Files.write(new File(profileDirectory(),"qa-rescue-result.json").toPath(),new JSONObject().put("result","pass").put("complete",complete).put("controls","pause, resume, seek, cancel").put("acoustic_capture",false).toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
     private void musicUi() throws Exception {
         if(hasControl(state(),"player") || hasControl(state(),"play") || !state().isNull("current")) throw new AssertionError("Fresh browsing screen must not show an empty mini-player");
         capture("qa-mobile-empty");
@@ -989,6 +1034,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
+            if("rescue-playback".equals(mode)) seedRescue();
             Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
             activity=startActivitySync(intent);
@@ -996,6 +1042,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("rescue-playback".equals(mode)) {
+                rescuePlayback();result.putString("stream","PASS: authorized corpus twice to natural EOF, native output, pause, resume, seek and cancel; isolated profile\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("youtube-auth-policy".equals(mode)) {
                 youtubeAuthPolicy();
                 result.putString("stream","PASS: isolated YouTube authentication host and allowed navigation; no real account authorization\n");finish(Activity.RESULT_OK,result);return;
