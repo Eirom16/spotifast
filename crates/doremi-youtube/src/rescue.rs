@@ -41,7 +41,7 @@ async fn json_response(mut response: Response) -> Result<Value, Error> {
     }
     serde_json::from_slice(&bytes).map_err(|_| Error::InvalidResponse)
 }
-async fn guest(client: &mut Client, media: &MediaId) -> Result<stream::Stream, Error> {
+async fn primary(client: &mut Client, media: &MediaId) -> Result<stream::Stream, Error> {
     // A visitor issued once for this attempt, as in the pinned reference.
     client.resolution_stage = "rescue-visitor";
     let value = json_response(client.http.post(VISITOR).json(&json!({
@@ -72,7 +72,10 @@ async fn guest(client: &mut Client, media: &MediaId) -> Result<stream::Stream, E
     client.player_diagnostic = Some(stream::PlayerDiagnostic::response(200, &value));
     stream::parse(media, &value)
 }
-/// Uses the current account when signed in; a refusal never switches to guest.
+/// Tubefast's primary public playback client is independent of the musical
+/// catalog session, including when that catalog is signed in. Credentials are
+/// never sent to this client. Private/account-only media can be refused; no
+/// account/client fallback follows a refusal.
 /// Dropping this future cancels the current request and releases all cached bytes.
 pub async fn prepare(client: &mut Client, media: &MediaId) -> Result<Audio, Error> {
     client.player_diagnostic = None;
@@ -80,11 +83,7 @@ pub async fn prepare(client: &mut Client, media: &MediaId) -> Result<Audio, Erro
     if media.provider.as_str() != PROVIDER || id(media.local()).is_err() {
         return Err(Error::InvalidRequest);
     }
-    let grant = if client.signed_in() {
-        client.resolve(media).await?
-    } else {
-        guest(client, media).await?
-    };
+    let grant = primary(client, media).await?;
     client.resolution_stage = "rescue-download";
     let http = Http::builder()
         .redirect(Policy::custom(|attempt| {
