@@ -544,59 +544,67 @@ impl DoremiApp {
                     model.music.session.connect(PathBuf::new());
                 }
             }
-            #[cfg(target_os = "android")]
-            if self.button(
-                ui,
-                "youtube-import-session",
-                "Importar sesión de Doremi-Rust",
-                280.0,
-            ) {
-                self.model.as_mut().unwrap().music.session.import_document();
-            }
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
-            {
-                ui.small("También puedes conectar una sesión ya autorizada y guardada en el llavero por Doremi-Rust. Solo se leerá cuando pulses el botón.");
+            if self.internal_ui {
+                #[cfg(target_os = "android")]
                 if self.button(
                     ui,
                     "youtube-import-session",
-                    "Conectar cuenta de Doremi-Rust",
+                    "Importar sesión de Doremi-Rust",
                     280.0,
                 ) {
-                    self.model.as_mut().unwrap().music.session.import_legacy();
+                    self.model.as_mut().unwrap().music.session.import_document();
                 }
-            }
-            ui.add_space(12.0);
-            ui.small("Alternativa: copia la cabecera Cookie de music.youtube.com con la sesión ya iniciada (F12, Red, copiar Cabeceras de solicitud) y pégala aquí.");
-            let pasted = ui.add_sized(
-                [ui.available_width(), 56.0],
-                egui::TextEdit::singleline(&mut self.model.as_mut().unwrap().music.session.pasted)
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                {
+                    ui.small("También puedes conectar una sesión ya autorizada y guardada en el llavero por Doremi-Rust. Solo se leerá cuando pulses el botón.");
+                    if self.button(
+                        ui,
+                        "youtube-import-session",
+                        "Conectar cuenta de Doremi-Rust",
+                        280.0,
+                    ) {
+                        self.model.as_mut().unwrap().music.session.import_legacy();
+                    }
+                }
+                ui.add_space(12.0);
+                ui.small("Alternativa: copia la cabecera Cookie de music.youtube.com con la sesión ya iniciada (F12, Red, copiar Cabeceras de solicitud) y pégala aquí.");
+                let pasted = ui.add_sized(
+                    [ui.available_width(), 56.0],
+                    egui::TextEdit::singleline(
+                        &mut self.model.as_mut().unwrap().music.session.pasted,
+                    )
                     .id(egui::Id::new(TextField::SessionCookie.key()))
                     .hint_text("SID=…; SAPISID=…; LOGIN_INFO=…")
                     .font(egui::TextStyle::Monospace)
                     .password(true)
                     .char_limit(16384),
-            );
-            if pasted.has_focus() {
-                self.editor = TextField::SessionCookie;
-            }
-            self.follow_editor(ui, &pasted, TextField::SessionCookie);
-            self.record("session-cookie", &pasted);
-            if !self.model.as_ref().unwrap().music.session.pasted.is_empty()
-                && self.button(
-                    ui,
-                    "youtube-cookie-signin",
-                    "Conectar con esa cookie",
-                    260.0,
-                )
-            {
-                self.model.as_mut().unwrap().music.session.paste();
+                );
+                if pasted.has_focus() {
+                    self.editor = TextField::SessionCookie;
+                }
+                self.follow_editor(ui, &pasted, TextField::SessionCookie);
+                self.record("session-cookie", &pasted);
+                if !self.model.as_ref().unwrap().music.session.pasted.is_empty()
+                    && self.button(
+                        ui,
+                        "youtube-cookie-signin",
+                        "Conectar con esa cookie",
+                        260.0,
+                    )
+                {
+                    self.model.as_mut().unwrap().music.session.paste();
+                }
             }
         }
         if let Some(error) = self.model.as_ref().unwrap().music.session.error {
             ui.colored_label(ui.visuals().error_fg_color,match error {
                 ProviderError::AccessDenied=>"YouTube Music rechazó la sesión. Vuelve a conectar la cuenta.",
                 ProviderError::Cancelled=>"Conexión cancelada.",
-                ProviderError::Unsupported=>"Navegador no compatible para lectura automática de cookies. Usa Chrome/Edge/Chromium o pega la cookie manualmente.",
+                ProviderError::Unsupported=> if self.internal_ui {
+                    "Navegador no compatible para lectura automática de cookies. Usa Chrome/Edge/Chromium o pega la cookie manualmente."
+                } else {
+                    "No se pudo completar el inicio de sesión. Vuelve a intentarlo."
+                },
                 ProviderError::InvalidRequest|ProviderError::InvalidResponse=>"No se pudo validar el archivo o la sesión de YouTube Music.",
                 ProviderError::TooLarge=>"El archivo de sesión supera el tamaño admitido.",
                 ProviderError::Timeout=>"La conexión agotó el tiempo de espera.",

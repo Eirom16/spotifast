@@ -33,6 +33,7 @@ def main():
             (directory/name).write_bytes(data)
     env=os.environ.copy(); env.pop('WAYLAND_DISPLAY',None);env.pop('WAYLAND_SOCKET',None)
     env['DOREMI_DATA_DIR']=str(directory)
+    env['DOREMI_INTERNAL_QA']='1'
     logfile=(output/'runtime.log').open('w')
     process=subprocess.Popen([str(args.binary.resolve())],env=env,stdout=logfile,stderr=subprocess.STDOUT)
     def xdo(*command):
@@ -57,7 +58,7 @@ def main():
             wait(lambda s:all(abs(actual-expected)<1 for actual,expected in zip(s['viewport'],args.size)))
         wait(lambda s:bool(s['controls']))
         def tap(name):
-            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','seek','volume','player-more'}
+            fixed={'home','search','library','queue','settings','previous','pause','play','next','stop','shuffle','repeat','player','player-now-playing','seek','volume','player-more'}
             for attempt in range(45):
                 data=state()
                 if name.startswith('playlist-add:') and not any(c['name']==name for c in data['controls']):
@@ -73,7 +74,13 @@ def main():
                     tap('player');data=state()
                 if not any(c['name']==name for c in data['controls']) and name.startswith(('add:','forget:','save-again:')):
                     tap('row-more:'+name.split(':',1)[1]);data=state()
-                control=next(c for c in data['controls'] if c['name']==name)
+                control=next((c for c in data['controls'] if c['name']==name),None)
+                if control is None:
+                    # Navigation and the writer's diagnostic snapshot can land
+                    # in adjacent frames. Stay within this attempt bound and
+                    # never inject input using a previous page's geometry.
+                    time.sleep(.1)
+                    continue
                 x1,y1,x2,y2=control['rect']; scale=data['pixels_per_point']
                 left,top,right,bottom=data.get('page_rect',[0,0,*data['viewport']])
                 is_menu=name.startswith(('add:','forget:','save-again:','playlist-add:','playlist-up:','playlist-down:','playlist-remove:','playlist-choose:','up:','down:','remove:'))
@@ -91,7 +98,7 @@ def main():
                     return
                 xdo('mousemove','--window',window,round((left+right)*scale/2),round((top+bottom)*scale/2),'click',4 if y1<top else 5)
                 time.sleep(.15)
-            raise AssertionError(f'Control did not scroll into the page: {name}')
+            raise AssertionError(f'Control unavailable or did not scroll into the page: {name}')
         def capture(name):
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
@@ -269,6 +276,11 @@ def main():
         tap('search');wait(lambda s:s['page']=='Search');tap('source-demo');tap('query')
         xdo('type','--clearmodifiers','Lluvia');wait(lambda s:s['query']=='Lluvia');capture('search')
         tap('cancel-search');wait(lambda s:s['query']=='')
+        capture('search-idle')
+        tap('query');xdo('type','--clearmodifiers','No matches in this demo')
+        wait(lambda s:s['query']=='No matches in this demo' and not any(c['name'].startswith('select:') for c in s['controls']))
+        capture('search-empty')
+        tap('cancel-search');wait(lambda s:s['query']=='')
         tap('home');wait(lambda s:s['page']=='Home')
         tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
         tap('add:cafe');wait(lambda s:len(s['manual'])==3)
@@ -284,6 +296,15 @@ def main():
         tap('clear');wait(lambda s:not s['manual'])
         assert state()['current_occurrence']==current and state()['context_occurrences']==context
         tap('queue-current');wait(lambda s:s['page']=='Player');capture('player')
+        selected=state()['current'];was_saved=selected in state()['library']
+        tap('player-save');wait(lambda s:(selected in s['library'])!=was_saved)
+        tap('player-save');wait(lambda s:(selected in s['library'])==was_saved)
+        if state()['viewport'][0]>=760:
+            tap('player-queue');wait(lambda s:s['page']=='Queue')
+            tap('queue-current');wait(lambda s:s['page']=='Player')
+            tap('player-back');wait(lambda s:s['page']=='Queue')
+            tap('player-now-playing');wait(lambda s:s['page']=='Player')
+            assert state()['current_occurrence']==current and state()['context_occurrences']==context
         tap('home');tap('add:dawn');tap('add:dawn');wait(lambda s:len(s['manual'])==2)
         tap('player')
         tap('library');capture('mini-player-light');tap('player')

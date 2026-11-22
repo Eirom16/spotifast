@@ -36,14 +36,17 @@ pub fn hero(
 ) {
     ui.add_space(12.0);
     let width = ui.available_width();
-    let cover_size = if width > 720.0 {
+    let stacked = width < 420.0;
+    let cover_size = if stacked {
+        width.min(160.0)
+    } else if width > 720.0 {
         HERO_ART
     } else if width > 520.0 {
         160.0
     } else {
         96.0
     };
-    ui.horizontal(|ui| {
+    let mut contents = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing.x = if width > 520.0 { 24.0 } else { 16.0 };
         let (rect, response) = ui.allocate_exact_size(
             Vec2::splat(cover_size),
@@ -65,7 +68,9 @@ pub fn hero(
             let width = ui.available_width().max(0.0);
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 6.0;
-            ui.add_space(cover_size * 0.08);
+            if !stacked {
+                ui.add_space(cover_size * 0.08);
+            }
             slot(
                 ui,
                 HeroSlot::Text {
@@ -108,11 +113,73 @@ pub fn hero(
                     },
                 );
             }
+            let previous_height = ui.spacing().interact_size.y;
+            // Hosts with no credits must not reserve an empty touch-sized row.
+            // Interactive credits supply their own explicit hit targets.
+            ui.spacing_mut().interact_size.y = 0.0;
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 slot(ui, HeroSlot::Byline);
             });
+            ui.spacing_mut().interact_size.y = previous_height;
         });
-    });
+    };
+    if stacked {
+        ui.vertical(&mut contents);
+    } else {
+        ui.horizontal_top(contents);
+    }
     ui.add_space(20.0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_collection_titles_and_credits_fit_phone_landscape_and_desktop() {
+        let ctx = egui::Context::default();
+        crate::install(&ctx);
+        for palette in [Palette::dark(), Palette::light()] {
+            for width in [264.0, 320.0, 384.0, 682.0, 1100.0] {
+                let mut text_rects = Vec::new();
+                let mut cover = Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0))),
+                    ..Default::default()
+                }, |ui| {
+                    ui.spacing_mut().interact_size.y = 48.0;
+                    hero(ui, &palette, Hero {
+                        kind: "ÁLBUM",
+                        title: "Una colección musical con un título largo para comprobar el ajuste de texto",
+                        description: Some("Metadatos del catálogo seleccionado"),
+                        round: false,
+                        cover_clickable: false,
+                    }, |ui, slot| match slot {
+                        HeroSlot::Cover { rect, .. } => cover = rect,
+                        HeroSlot::Text { text, font, color } => {
+                            text_rects.push(ui.add(egui::Label::new(egui::RichText::new(text).font(font).color(color)).wrap()).rect);
+                        }
+                        HeroSlot::Byline => {
+                            text_rects.push(ui.label("Artista invitado · Edición especial").rect);
+                        }
+                    });
+                    assert_eq!(ui.spacing().interact_size.y, 48.0);
+                });
+                output.textures_delta.clear();
+                assert!(cover.right() <= width);
+                for rect in text_rects {
+                    assert!(
+                        rect.left() >= 0.0 && rect.right() <= width,
+                        "{width}: {rect:?}"
+                    );
+                    if width < 420.0 {
+                        assert!(rect.top() >= cover.bottom());
+                    } else {
+                        assert!(rect.left() >= cover.right());
+                    }
+                }
+            }
+        }
+    }
 }

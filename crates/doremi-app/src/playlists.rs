@@ -179,18 +179,29 @@ impl DoremiApp {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
         for list in snapshot.lists() {
+            if !self.collection_visible(&list.entries) {
+                continue;
+            }
+            let count = list
+                .entries
+                .iter()
+                .filter(|media| self.media_visible(media))
+                .count();
             let row = theme::list_row(
                 ui,
                 &palette,
                 ui.id().with(("playlist", list.id)),
                 theme::ListRow {
                     title: &list.name,
-                    subtitle: &format!("{} canciones · En este dispositivo", list.entries.len()),
+                    subtitle: &format!("{count} canciones · En este dispositivo"),
                     round: false,
                     actions: 0,
                     action_label: "Abrir playlist",
                 },
             );
+            if let Some(media) = list.entries.iter().find(|media| self.media_visible(media)) {
+                self.media_artwork(ui, &media.id, row.cover_rect(), 4);
+            }
             self.record(&format!("playlist-open:{}", list.id), &row.body);
             if row.body.clicked() {
                 self.open_playlist(list.id);
@@ -210,6 +221,13 @@ impl DoremiApp {
             }
             return;
         };
+        if !self.collection_visible(&list.entries) {
+            ui.heading("Esta playlist no está disponible");
+            if self.button(ui, "playlist-library", "Volver a Biblioteca", 220.0) {
+                self.navigate(Page::Library);
+            }
+            return;
+        }
         let palette = theme::palette(model.prefs.light, model.prefs.green);
         if self.button(ui, "playlist-library", "Biblioteca", 140.0) {
             self.navigate(Page::Library);
@@ -227,7 +245,11 @@ impl DoremiApp {
             },
             |ui, slot| match slot {
                 HeroSlot::Cover { rect, radius, .. } => {
-                    theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic)
+                    theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic);
+                    if let Some(media) = list.entries.iter().find(|media| self.media_visible(media))
+                    {
+                        self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
+                    }
                 }
                 HeroSlot::Text { text, font, color } => {
                     ui.label(egui::RichText::new(text).font(font).color(color));
@@ -235,22 +257,22 @@ impl DoremiApp {
                 HeroSlot::Byline => {
                     ui.weak(format!(
                         "{} canciones · En este dispositivo",
-                        list.entries.len()
+                        list.entries
+                            .iter()
+                            .filter(|media| self.media_visible(media))
+                            .count()
                     ));
                 }
             },
         );
         ui.add_space(12.0);
-        let playable = list
-            .entries
-            .iter()
-            .any(|media| media.id.provider.as_str() != "musicbrainz");
+        let playable = list.entries.iter().any(|media| self.playable_media(media));
         ui.add_enabled_ui(playable, |ui| {
             if self.button(ui, "playlist-play", "Reproducir playlist", 220.0) {
                 let rows: Vec<_> = list
                     .entries
                     .iter()
-                    .filter(|media| media.id.provider.as_str() != "musicbrainz")
+                    .filter(|media| self.playable_media(media))
                     .cloned()
                     .collect();
                 self.model.as_mut().unwrap().start_context(rows, 0);
@@ -369,11 +391,8 @@ impl DoremiApp {
 
 fn playlist_track(media: &Media) -> bool {
     // A saved catalog collection is a reference, not a track to expand or play.
-    media.id.provider.as_str() != "musicbrainz"
-        || !matches!(
-            media.id.local().split_once(':'),
-            Some(("artist" | "release", _))
-        )
+    presentation::metadata_kind(&media.id)
+        .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
 }
 
 #[cfg(test)]

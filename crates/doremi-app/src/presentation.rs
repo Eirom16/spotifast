@@ -68,6 +68,10 @@ impl DoremiApp {
         }
         model.page = page;
         model.revision += 1;
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        if page == Page::Search {
+            self.ensure_product_search();
+        }
     }
     pub(super) fn can_go_back(&self) -> bool {
         self.model.as_ref().is_some_and(|model| {
@@ -113,6 +117,118 @@ impl DoremiApp {
         }
     }
 
+    pub(super) fn choice_button(
+        &mut self,
+        ui: &mut egui::Ui,
+        name: &str,
+        label: &str,
+        width: f32,
+        selected: bool,
+    ) -> bool {
+        let height = if ui.ctx().content_rect().width() < 760.0 {
+            TOUCH
+        } else {
+            36.0
+        };
+        // Measure intrinsic labels before a wrapping layout allocates their cell.
+        let width = if width > 0.0 {
+            width
+        } else {
+            ui.painter()
+                .layout_no_wrap(
+                    label.to_owned(),
+                    egui::TextStyle::Button.resolve(ui.style()),
+                    ui.visuals().text_color(),
+                )
+                .size()
+                .x
+                + 2.0 * ui.spacing().button_padding.x
+        };
+        let response = ui.add_sized(
+            [width.max(TOUCH), height],
+            egui::Button::new(label)
+                .selected(selected)
+                .corner_radius(18)
+                .wrap(),
+        );
+        self.record(name, &response);
+        response.clicked()
+    }
+
+    pub(super) fn home_header(&mut self, ui: &mut egui::Ui) {
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        Frame::new()
+            .fill(palette.surface)
+            .corner_radius(16)
+            .inner_margin(Margin::same(20))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new("DOREMI")
+                        .font(theme::semibold(12.0))
+                        .color(palette.accent),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new("Tu música, a tu ritmo")
+                        .font(theme::bold(if ui.available_width() < 400.0 {
+                            26.0
+                        } else {
+                            32.0
+                        }))
+                        .color(palette.text),
+                );
+                ui.label(
+                    RichText::new("Busca canciones, artistas y álbumes. Guarda tus descubrimientos en este dispositivo.")
+                        .font(theme::regular(14.0))
+                        .color(palette.secondary),
+                );
+                ui.add_space(16.0);
+                let width = ui.available_width();
+                // A disabled scope is one layout item, not a wrapping button.
+                // Choose the direction from the whole group's required width.
+                let inline = width >= 220.0 + GAP + 250.0;
+                let layout = if inline {
+                    Layout::left_to_right(Align::Center)
+                } else {
+                    Layout::top_down(Align::Min)
+                };
+                let height = if ui.ctx().content_rect().width() >= 760.0 {
+                    32.0
+                } else {
+                    TOUCH
+                };
+                let height = if inline { height } else { 2.0 * height + GAP };
+                ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
+                    ui.spacing_mut().item_spacing = Vec2::splat(GAP);
+                    if self.button(ui, "browse-catalog", "Buscar música", width.min(220.0)) {
+                        self.navigate(Page::Search);
+                    }
+                    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                    ui.add_enabled_ui(
+                        self.model.as_ref().unwrap().music.can_refresh_home(),
+                        |ui| {
+                            if self.button(
+                                ui,
+                                "youtube-home",
+                                if self.model.as_ref().unwrap().music.home_root() {
+                                    "Actualizar inicio"
+                                } else if !self.internal_ui {
+                                    "Explorar música"
+                                } else {
+                                    "Explorar YouTube Music"
+                                },
+                                width.min(250.0),
+                            ) {
+                                self.model.as_mut().unwrap().refresh_music_home();
+                            }
+                        },
+                    );
+                });
+            });
+    }
+
     pub(super) fn shell(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let wide = ui.available_width() >= 760.0;
         let ctx = ui.ctx().clone();
@@ -120,7 +236,8 @@ impl DoremiApp {
             self.navigate(Page::Search);
             ctx.memory_mut(|memory| memory.request_focus(egui::Id::new("catalog-query")));
         }
-        if !ctx.egui_wants_keyboard_input()
+        if self.current_visible()
+            && !ctx.egui_wants_keyboard_input()
             && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Space))
         {
             let model = self.model.as_mut().unwrap();
@@ -165,9 +282,7 @@ impl DoremiApp {
         }
         if wide {
             self.player_bar(ui, palette);
-        } else if self.model.as_ref().unwrap().page != Page::Player
-            && self.model.as_ref().unwrap().queue.current().is_some()
-        {
+        } else if self.model.as_ref().unwrap().page != Page::Player && self.current_visible() {
             self.mini_player(ui, palette);
         }
         if wide {
@@ -206,7 +321,16 @@ impl DoremiApp {
                     ui.separator();
                     ui.add_space(10.0);
                     ui.label(RichText::new("Tu biblioteca").font(theme::bold(15.0)));
-                    let rows = self.model.as_ref().unwrap().library.items().to_vec();
+                    let rows: Vec<_> = self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .library
+                        .items()
+                        .iter()
+                        .filter(|media| self.media_visible(media))
+                        .cloned()
+                        .collect();
                     let playlists = self.model.as_ref().unwrap().playlists.clone();
                     egui::ScrollArea::vertical()
                         .id_salt("sidebar-library")
@@ -215,6 +339,9 @@ impl DoremiApp {
                                 ui.weak("Guarda música para encontrarla aquí.");
                             }
                             for list in playlists.lists() {
+                                if !self.collection_visible(&list.entries) {
+                                    continue;
+                                }
                                 let model = self.model.as_ref().unwrap();
                                 let response = theme::nav_row(
                                     ui,
@@ -341,10 +468,37 @@ impl DoremiApp {
     }
 
     fn transport(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
-        ui.horizontal(|ui| self.transport_controls(ui, palette, touch));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            ui.add_space(((ui.available_width() - transport_width(touch)) / 2.0).max(0.0));
+            self.transport_controls(ui, palette, touch);
+        });
     }
     fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
-        if self.icon_control(ui, palette, "shuffle", Icon::Shuffle, "Aleatorio", touch) {
+        ui.add_enabled_ui(self.current_visible(), |ui| {
+            self.transport_controls_inner(ui, palette, touch);
+        });
+    }
+
+    fn transport_controls_inner(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
+        // Explicit spacing also keeps the mobile centering calculation truthful.
+        ui.spacing_mut().item_spacing.x = GAP;
+        let dimensions = if touch { [24.0, TOUCH] } else { [20.0, 32.0] };
+        let shuffle_active = self.model.as_ref().unwrap().queue.shuffled();
+        let response = theme::icon_toggle(
+            ui,
+            palette,
+            Icon::Shuffle,
+            dimensions,
+            shuffle_active,
+            if shuffle_active {
+                "Aleatorio activado"
+            } else {
+                "Aleatorio desactivado"
+            },
+        );
+        self.record("shuffle", &response);
+        if response.clicked() {
             let queue = &self.model.as_ref().unwrap().queue;
             let order = if queue.shuffled() {
                 Order::Sequential
@@ -385,7 +539,12 @@ impl DoremiApp {
         ) {
             self.model.as_mut().unwrap().command(Command::Next);
         }
-        if self.icon_control(ui, palette, "repeat", Icon::Repeat, "Repetir", touch) {
+        let repeat = self.model.as_ref().unwrap().queue.repeat();
+        let (icon, label) = repeat_presentation(repeat);
+        let response =
+            theme::icon_toggle(ui, palette, icon, dimensions, repeat != Repeat::Off, label);
+        self.record("repeat", &response);
+        if response.clicked() {
             let repeat = match self.model.as_ref().unwrap().queue.repeat() {
                 Repeat::Off => Repeat::Context,
                 Repeat::Context => Repeat::Track,
@@ -484,15 +643,24 @@ impl DoremiApp {
 
     fn now_playing(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let model = self.model.as_ref().unwrap();
-        let id = model.queue.current().map(|entry| entry.media.id.clone());
-        let caption = playback_caption(model);
+        let current = model
+            .queue
+            .current()
+            .filter(|entry| self.playable_media(&entry.media));
+        let id = current.map(|entry| entry.media.id.clone());
+        let caption = if current.is_some() {
+            playback_caption(model)
+        } else {
+            "Elige qué escuchar"
+        };
         let title = model
             .queue
             .current()
+            .filter(|entry| self.playable_media(&entry.media))
             .map(|entry| entry.media.title.as_str())
             .unwrap_or("Ninguna canción seleccionada")
             .to_owned();
-        ui.horizontal(|ui| {
+        let row = ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
             theme::cover_placeholder(ui, palette, rect, 4.0, Icon::Music);
             if let Some(id) = &id {
@@ -500,11 +668,30 @@ impl DoremiApp {
             }
             ui.vertical(|ui| {
                 ui.add(
-                    egui::Label::new(RichText::new(title).font(theme::semibold(14.0))).truncate(),
+                    egui::Label::new(RichText::new(&title).font(theme::semibold(14.0))).truncate(),
                 );
-                ui.weak(caption);
+                ui.add(
+                    egui::Label::new(RichText::new(caption).color(palette.secondary)).truncate(),
+                );
             });
         });
+        let response = ui.interact(
+            row.response.rect,
+            ui.id().with("now-playing-open"),
+            egui::Sense::click(),
+        );
+        response.widget_info(|| {
+            egui::WidgetInfo::labeled(
+                egui::WidgetType::Button,
+                ui.is_enabled(),
+                format!("Abrir reproductor: {title}"),
+            )
+        });
+        theme::focus_ring(ui, &response);
+        self.record("player-now-playing", &response);
+        if response.clicked() {
+            self.navigate(Page::Player);
+        }
     }
 
     fn player_bar(&mut self, ui: &mut egui::Ui, palette: &Palette) {
@@ -534,12 +721,15 @@ impl DoremiApp {
 
     fn mini_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         egui::Panel::bottom("mobile-mini-player")
-            .exact_size(72.0)
+            .exact_size(MINI_PLAYER_HEIGHT)
             .resizable(false)
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(palette.panel)
+                    .fill(palette.surface)
+                    .stroke(egui::Stroke::new(1.0, palette.outline))
+                    .corner_radius(12)
+                    .outer_margin(Margin::same(8))
                     .inner_margin(Margin::symmetric(12, 6)),
             )
             .show(ui, |ui| {
@@ -562,15 +752,23 @@ impl DoremiApp {
                     egui::WidgetInfo::labeled(
                         egui::WidgetType::Button,
                         true,
-                        format!("Abrir reproductor: {}", media.title),
+                        format!("Abrir reproductor: {} · {caption}", media.title),
                     )
                 });
+                let hover = ui.ctx().animate_bool(
+                    response.id.with("hover"),
+                    response.hovered() || response.has_focus(),
+                );
+                if hover > 0.0 {
+                    ui.painter()
+                        .rect_filled(body, 6, palette.surface_hover.gamma_multiply(hover));
+                }
                 let cover = egui::Rect::from_center_size(
                     egui::pos2(body.left() + 20.0, body.center().y),
                     Vec2::splat(40.0),
                 );
-                theme::cover_placeholder(ui, palette, cover, 4.0, Icon::Music);
-                self.media_artwork(ui, &media.id, cover, 4);
+                theme::cover_placeholder(ui, palette, cover, 6.0, Icon::Music);
+                self.media_artwork(ui, &media.id, cover, 6);
                 let text = egui::Rect::from_min_max(
                     egui::pos2(cover.right() + 12.0, body.top() + 5.0),
                     egui::pos2(body.right() - 4.0, body.bottom()),
@@ -629,10 +827,11 @@ impl DoremiApp {
                 ) {
                     self.model.as_mut().unwrap().command(Command::Next);
                 }
-                let (track, _) = ui.allocate_exact_size(
+                let (track, response) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width(), 2.0),
                     egui::Sense::hover(),
                 );
+                self.record("mini-progress", &response);
                 ui.painter().rect_filled(track, 1.0, palette.outline);
                 if let Some(duration) = media.duration_ms.filter(|duration| *duration > 0) {
                     let progress = egui::Rect::from_min_size(
@@ -647,26 +846,33 @@ impl DoremiApp {
             });
     }
 
+    fn mobile_player_header(&mut self, ui: &mut egui::Ui, palette: &Palette) -> bool {
+        let mut back = false;
+        ui.horizontal(|ui| {
+            back = self.can_go_back()
+                && self.icon_control(
+                    ui,
+                    palette,
+                    "player-back",
+                    Icon::ChevronDown,
+                    "Volver",
+                    true,
+                );
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                self.player_favorite(ui, palette);
+            });
+        });
+        back
+    }
+
     pub(super) fn mobile_player(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let width = self.page_rect[2] - self.page_rect[0];
         let height = self.page_rect[3] - self.page_rect[1];
-        if width >= 616.0
-            && width > height
-            && self.model.as_ref().unwrap().queue.current().is_some()
-        {
+        if width >= 616.0 && width > height && self.current_visible() {
             self.mobile_player_landscape(ui, palette, height);
             return;
         }
-        if self.can_go_back()
-            && self.icon_control(
-                ui,
-                palette,
-                "player-back",
-                Icon::ChevronDown,
-                "Volver",
-                true,
-            )
-        {
+        if self.mobile_player_header(ui, palette) {
             self.go_back();
             return;
         }
@@ -675,11 +881,19 @@ impl DoremiApp {
             self.empty_player(ui);
             return;
         };
+        if !self.playable_media(&current.media) {
+            self.empty_player(ui);
+            return;
+        }
         let title = current.media.title.clone();
         let id = current.media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = model.notice.clone();
+        let notice = if self.internal_ui {
+            model.notice.clone()
+        } else {
+            "Intenta reproducir de nuevo o elige otra canción.".into()
+        };
         ui.spacing_mut().item_spacing.y = 8.0;
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
         let art = (height * 0.28).clamp(96.0, 256.0).min(ui.available_width());
@@ -721,18 +935,16 @@ impl DoremiApp {
         let id = model.queue.current().unwrap().media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = model.notice.clone();
+        let notice = if self.internal_ui {
+            model.notice.clone()
+        } else {
+            "Intenta reproducir de nuevo o elige otra canción.".into()
+        };
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.columns(2, |columns| {
-            if self.icon_control(
-                &mut columns[0],
-                palette,
-                "player-back",
-                Icon::ChevronDown,
-                "Volver",
-                true,
-            ) {
+            if self.mobile_player_header(&mut columns[0], palette) {
                 self.go_back();
+                return;
             }
             columns[0].vertical_centered(|ui| {
                 #[cfg(any(target_os = "android", test))]
@@ -790,8 +1002,15 @@ impl DoremiApp {
     }
 
     pub(super) fn empty_player(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Elige qué escuchar");
-        ui.weak("Busca música o abre una canción de tu biblioteca.");
+        let prefs = &self.model.as_ref().unwrap().prefs;
+        let palette = theme::palette(prefs.light, prefs.green);
+        theme::feedback::panel(
+            ui,
+            &palette,
+            theme::feedback::Kind::Info,
+            "Elige qué escuchar",
+            "Busca música o abre una canción de tu biblioteca.",
+        );
         if self.button(ui, "player-search", "Buscar música", 200.0) {
             self.navigate(Page::Search);
         }
@@ -800,7 +1019,8 @@ impl DoremiApp {
     fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.progress_sized(ui, TOUCH);
         ui.horizontal(|ui| {
-            let width = 4.0 * TOUCH + 64.0 + 4.0 * 8.0;
+            ui.spacing_mut().item_spacing.x = GAP;
+            let width = transport_width(true);
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
             self.transport_controls(ui, palette, true);
         });
@@ -817,6 +1037,9 @@ impl DoremiApp {
         let Some(media) = rows.get(index) else {
             return;
         };
+        if !self.media_visible(media) {
+            return;
+        }
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if media.id.provider.as_str() == "musicbrainz"
             || metadata_kind(&media.id)
@@ -839,23 +1062,18 @@ impl DoremiApp {
             self.navigate(Page::Search);
             return;
         }
+        if !self.playable_media(media) {
+            return;
+        }
         let playable: Vec<_> = rows
             .iter()
-            .filter(|item| {
-                item.id.provider.as_str() != "musicbrainz"
-                    && metadata_kind(&item.id)
-                        .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
-            })
+            .filter(|item| self.playable_media(item))
             .cloned()
             .collect();
         if !playable.is_empty() {
             let index = rows[..index]
                 .iter()
-                .filter(|item| {
-                    item.id.provider.as_str() != "musicbrainz"
-                        && metadata_kind(&item.id)
-                            .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
-                })
+                .filter(|item| self.playable_media(item))
                 .count();
             self.model.as_mut().unwrap().start_context(playable, index);
             self.navigate(Page::Player);
@@ -871,11 +1089,24 @@ impl DoremiApp {
         rows: &[Media],
         prefix: Option<&str>,
     ) {
+        let visible: Vec<_> = rows
+            .iter()
+            .enumerate()
+            .filter(|(_, media)| self.media_visible(media))
+            .collect();
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        for (index, media) in rows.iter().enumerate() {
+        for (index, media) in visible {
             ui.push_id((&media.id, index), |ui| {
-                let subtitle = if media.id.provider.as_str() == "musicbrainz"
+                let subtitle = if !self.internal_ui {
+                    match metadata_kind(&media.id) {
+                        Some(doremi_core::media::EntityKind::Artist) => "Artista",
+                        Some(doremi_core::media::EntityKind::Release) => "Álbum",
+                        Some(doremi_core::media::EntityKind::Playlist) => "Playlist",
+                        _ if media.id.provider.as_str() == "local-files" => "Audio local",
+                        _ => "Canción",
+                    }
+                } else if media.id.provider.as_str() == "musicbrainz"
                     || media.id.provider.as_str() == "youtube-music"
                 {
                     match metadata_kind(&media.id) {
@@ -1011,7 +1242,7 @@ impl DoremiApp {
                     self.record(&format!("playlist-row-more:{index}"), &more);
                 }
                 egui::Popup::menu(&more).show(|ui| {
-                    if media.id.provider.as_str() != "musicbrainz"
+                    if self.playable_media(media)
                         && self.button(
                             ui,
                             &format!("add:{}", media.id.local()),
@@ -1054,7 +1285,19 @@ impl DoremiApp {
     }
 }
 
-fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
+fn transport_width(touch: bool) -> f32 {
+    4.0 * if touch { TOUCH } else { 32.0 } + if touch { 64.0 } else { 32.0 } + 4.0 * GAP
+}
+
+fn repeat_presentation(repeat: Repeat) -> (Icon, &'static str) {
+    match repeat {
+        Repeat::Off => (Icon::Repeat, "Repetición desactivada"),
+        Repeat::Context => (Icon::Repeat, "Repetir toda la lista"),
+        Repeat::Track => (Icon::Repeat1, "Repetir una canción"),
+    }
+}
+
+pub(super) fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     {
         doremi_youtube::entity_kind(id).or_else(|| doremi_musicbrainz::entity_kind(id).ok())
@@ -1095,7 +1338,14 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
     } else if !model.real_audio() {
         "Demostración · sin audio"
     } else if model.queue.playback() == Playback::Loading {
-        "Cargando audio…"
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        match model.online.phase() {
+            "resolve" => return "Buscando el audio…",
+            "download" => return "Descargando canción completa…",
+            "decode" => return "Preparando reproducción…",
+            _ => {}
+        }
+        "Preparando audio…"
     } else if model.queue.playback() == Playback::Playing
         && model
             .audio
@@ -1103,10 +1353,167 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
             .and_then(Engine::metrics)
             .is_some_and(|metrics| metrics.buffering)
     {
-        "Buffering…"
+        "Preparando reproducción…"
     } else if model.queue.playback() == Playback::Paused {
         "En pausa"
     } else {
-        "Audio nativo"
+        "Reproduciendo"
+    }
+}
+
+#[cfg(test)]
+mod presentation_tests {
+    use super::*;
+
+    #[test]
+    fn floating_mini_player_keeps_independent_touch_targets_and_progress_at_multiple_scales() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/mini-player-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
+        let mut media = songs()[0].clone();
+        media.title =
+            "Un título muy largo que no debe invadir los controles del reproductor".repeat(4);
+        app.model.as_mut().unwrap().command(Command::StartContext {
+            media: vec![media],
+            start: 0,
+            order: Order::Sequential,
+        });
+        app.navigate(Page::Library);
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for scale in [1.0, 1.5, 2.0] {
+                for size in [
+                    [320.0, 640.0],
+                    [384.0, 760.0],
+                    [440.0, 800.0],
+                    [682.0, 336.0],
+                ] {
+                    for _ in 0..3 {
+                        let mut input = egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                size.into(),
+                            )),
+                            ..Default::default()
+                        };
+                        input
+                            .viewports
+                            .get_mut(&egui::ViewportId::ROOT)
+                            .unwrap()
+                            .native_pixels_per_point = Some(scale);
+                        let mut output = ctx.run_ui(input, |ui| app.draw(ui));
+                        output.textures_delta.clear();
+                    }
+                    let find = |name: &str| {
+                        app.controls
+                            .iter()
+                            .find(|control| control.name == name)
+                            .unwrap()
+                            .rect
+                    };
+                    let body = find("player");
+                    let play = app
+                        .controls
+                        .iter()
+                        .find(|control| matches!(control.name.as_str(), "play" | "pause"))
+                        .unwrap()
+                        .rect;
+                    let next = find("next");
+                    let progress = find("mini-progress");
+                    for rect in [body, play, next, progress] {
+                        assert!(
+                            rect[0] >= 0.0
+                                && rect[2] <= size[0]
+                                && rect[1] >= 0.0
+                                && rect[3] <= size[1],
+                            "{size:?} at {scale}: {rect:?}"
+                        );
+                    }
+                    for rect in [body, play, next] {
+                        assert!(rect[3] - rect[1] >= TOUCH);
+                    }
+                    assert!((play[0] - body[2] - GAP).abs() < 0.1);
+                    assert!((next[0] - play[2] - GAP).abs() < 0.1);
+                    assert!(progress[1] > body[3] && progress[3] < find("home")[1]);
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn home_actions_wrap_inside_narrow_and_desktop_headers() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/home-header-layout-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for width in [320.0, 384.0, 440.0, 760.0, 1280.0] {
+                for _ in 0..3 {
+                    app.controls.clear();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.home_header(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let search = app
+                    .controls
+                    .iter()
+                    .find(|c| c.name == "browse-catalog")
+                    .unwrap();
+                assert!(search.rect[0] >= 20.0);
+                assert!(search.rect[2] <= width - 20.0);
+                assert!(
+                    search.rect[1] < 220.0,
+                    "Actions must follow the text, not center in the remaining viewport"
+                );
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                {
+                    let explore = app
+                        .controls
+                        .iter()
+                        .find(|c| c.name == "youtube-home")
+                        .unwrap();
+                    assert!(explore.rect[0] >= 20.0);
+                    assert!(explore.rect[2] <= width - 20.0);
+                    if width < 510.0 {
+                        assert!(explore.rect[1] >= search.rect[3] + GAP);
+                    } else {
+                        assert_eq!(explore.rect[1], search.rect[1]);
+                        assert!(explore.rect[0] >= search.rect[2] + GAP);
+                    }
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
+    fn repeat_modes_have_distinct_labels_and_single_track_glyph() {
+        let (off_icon, off_label) = repeat_presentation(Repeat::Off);
+        let (context_icon, context_label) = repeat_presentation(Repeat::Context);
+        let (track_icon, track_label) = repeat_presentation(Repeat::Track);
+        assert!(matches!(off_icon, Icon::Repeat));
+        assert!(matches!(context_icon, Icon::Repeat));
+        assert!(matches!(track_icon, Icon::Repeat1));
+        assert_ne!(off_label, context_label);
+        assert_ne!(context_label, track_label);
+        assert_ne!(off_label, track_label);
     }
 }

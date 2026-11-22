@@ -11,6 +11,7 @@ manifest=json.loads((binary.parent/'manifest.json').read_text())
 assert manifest['product']=='Doremi' and manifest['source_commit']==args.commit
 assert manifest['payload']['sha256']==hashlib.sha256(binary.read_bytes()).hexdigest()
 env=os.environ.copy();env.pop('WAYLAND_DISPLAY',None);env.pop('WAYLAND_SOCKET',None);env['DOREMI_DATA_DIR']=str(out/'profile')
+env['DOREMI_INTERNAL_QA']='1'
 log=(out/'runtime.log').open('w');process=subprocess.Popen([str(binary)],env=env,stdout=log,stderr=subprocess.STDOUT)
 def xdo(*args):return subprocess.check_output(['xdotool',*map(str,args)],text=True,timeout=15).strip()
 def state():return json.loads((out/'profile/qa-state.json').read_text())

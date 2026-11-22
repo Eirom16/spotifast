@@ -2,7 +2,7 @@ name: Doremi Android development
 
 on:
   push:
-    branches: ["feature/doremi-android-real", "feature/doremi-product-ui"]
+    branches: ["feature/doremi-android-real", "feature/doremi-product-ui", "integration/doremi-alpha-unified"]
     paths: ["crates/doremi-auth/**", "crates/doremi-youtube/**", "crates/doremi-musicbrainz/**", "crates/doremi-ui/**", "assets/icons/**", "crates/doremi-app/**", "crates/doremi-core/**", "crates/doremi-library/**", "crates/doremi-player/**", "crates/doremi-commons/**", "assets/audio/**", "android/**", "Cargo.toml", "Cargo.lock", "scripts/build-android.sh", "scripts/verify-android.py", "scripts/android-native-identity.py", "scripts/native-qa.py", "scripts/native-manifest.py", "scripts/windows-native-smoke.ps1", ".github/workflows/android.yml"]
   workflow_dispatch:
     inputs:

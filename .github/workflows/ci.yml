@@ -4,7 +4,7 @@ on:
   push:
     # The active development branch runs the same CI as PRs; AGENTS.md keeps
     # complete builds local-free, so this is the autonomous validation gate.
-    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1", "feature/doremi-product-ui"]
+    branches: [main, "chore/doremi-f0", "chore/doremi-f1a", "chore/doremi-f1b1", "feature/doremi-preview-0-1", "feature/doremi-product-ui", "integration/doremi-alpha-unified"]
     # Recording evidence must not launch another complete build of unchanged code.
     paths-ignore: ["CI-REPORT.md", "F0-REPORT.md", "F1A-REPORT.md", "F1B1-REPORT.md", "DOREMI-PREVIEW-REPORT.md", "DOREMI-GOAL-REPORT.md"]
   pull_request:
@@ -416,6 +416,14 @@ jobs:
         run: |
           chmod +x target/native-binary/doremi target/native-binary/doremi-app
           xvfb-run -a -s "-screen 0 1440x1000x24" python3 scripts/native-qa.py target/native-binary/doremi target/ci-reports/native-visual
+      - name: Verify the normal product UI without development controls
+        run: |
+          for geometry in "384 760" "682 360" "1100 800"; do
+            set -- $geometry
+            python3 scripts/ci-report.py run "product-ui-$1x$2" -- \
+              xvfb-run -a -s "-screen 0 1440x1000x24" python3 scripts/product-ui-qa.py \
+              target/native-binary/doremi "target/ci-reports/product-ui-$1x$2" --size "$1" "$2"
+          done
       - uses: actions/upload-artifact@v6
         with:
           name: doremi-native-linux-${{ github.sha }}

@@ -1,6 +1,10 @@
 # Doremi: roadmap de migración
 
 Corte de producto activo en `feature/doremi-product-ui`: extracción compartida
+de presentación. La navegación normal usa YouTube Music; MusicBrainz, Commons
+y Demo se mantienen solo en perfiles internos de QA, sin borrar sus contratos,
+herramientas ni datos persistidos. Los filtros de producto son de contenido.
+El corte anterior incluía extracción
 de presentación, catálogo público MusicBrainz y primer stream musical CC0;
 detalles, evidencia y gates
 pendientes en `DOREMI-PRODUCT-REPORT.md`. La recuperación visual completa,

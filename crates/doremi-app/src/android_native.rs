@@ -51,6 +51,7 @@ pub extern "system" fn native_init(
     directory: JString<'_>,
     context: JObject<'_>,
     input_generation: jlong,
+    internal_ui: jboolean,
 ) -> jboolean {
     android_logger::init_once(
         android_logger::Config::default()
@@ -130,7 +131,15 @@ pub extern "system" fn native_init(
             }
         };
         let ctx = egui::Context::default();
+        let qa_ui = cfg!(debug_assertions)
+            && internal_ui != 0
+            && !normal_profile
+            && directory
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .is_some_and(|name| name == "qa");
         let mut app = DoremiApp::new_context(&ctx, directory);
+        app.internal_ui = qa_ui;
         app.model.as_mut().unwrap().music.session.restore();
         if normal_profile && !app.model.as_ref().unwrap().music.home_started() {
             app.model

@@ -28,7 +28,7 @@ import javax.microedition.khronos.opengles.GL10;
 /** Android EGL, touch, IME and lifecycle only. All music rules remain in Rust. */
 public final class MainActivity extends Activity {
     static { System.loadLibrary("doremi_app"); }
-    private static native boolean nativeInit(String directory,Context application,long inputGeneration);
+    private static native boolean nativeInit(String directory,Context application,long inputGeneration,boolean internalUi);
     private static native String nativeDraw(int width,int height,float scale);
     private static native void nativeTouch(int action,float x,float y);
     private static native void nativeText(String text,String field,long generation);
@@ -37,6 +37,7 @@ public final class MainActivity extends Activity {
     private static native void nativeBack();
     private volatile boolean canGoBack=false;
     private String nativeDirectory;
+    private boolean internalUi=false;
     private String inputTarget="search";
     private static native void nativeDocument(long generation,String uri);
     private static final int OPEN_WAV=403;
@@ -244,6 +245,7 @@ public final class MainActivity extends Activity {
                 Toast.makeText(this,"Perfil de pruebas no válido",Toast.LENGTH_LONG).show();finish();return;
             }
             nativeDirectory=new java.io.File(getFilesDir(),"qa/"+qaProfile).getAbsolutePath();
+            internalUi=getIntent().getBooleanExtra("dev.eirom.doremi.qa.internalUi",true);
         }
         scale=getResources().getDisplayMetrics().density;
         FrameLayout root=new FrameLayout(this);
@@ -324,7 +326,7 @@ public final class MainActivity extends Activity {
             // a native renderer after it has just been destroyed for pausing.
             if(!resumed) return;
             if(!ready) {
-                ready=nativeInit(nativeDirectory,getApplicationContext(),inputGeneration);
+                ready=nativeInit(nativeDirectory,getApplicationContext(),inputGeneration,internalUi);
                 if(!ready) { runOnUiThread(() -> Toast.makeText(MainActivity.this,"No se pudo iniciar OpenGL de Doremi",Toast.LENGTH_LONG).show()); return; }
             }
             if(documentResultReady) {

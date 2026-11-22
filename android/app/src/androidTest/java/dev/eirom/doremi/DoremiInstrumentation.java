@@ -811,10 +811,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         String[] ids={"qQzdAsjWGPg","_d3SaQI_Ag4"};long[] durations={276253,284427};
         for(int i=0;i<ids.length;i++) items.put(new JSONObject().put("provider","youtube-music").put("id",ids[i]).put("title",ids[i]).put("duration_ms",durations[i]));
         Files.write(new File(directory,"library-v1.json").toPath(),new JSONObject().put("schema",1).put("items",items).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(directory,"preferences-v1.json").toPath(),new JSONObject().put("volume",0.08).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void rescuePlayback() throws Exception {
         String[] ids={"qQzdAsjWGPg","_d3SaQI_Ag4"};long[] durations={276253,284427};
-        tap("demo-examples");tap("select:dawn");tap("pause");slide("volume",0.08f);tap("stop");
         JSONArray complete=new JSONArray();
         for(int round=1;round<=2;round++) for(int i=0;i<ids.length;i++) {
             final String id=ids[i];final long duration=durations[i];
@@ -838,7 +838,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             // The player bar disappears when the queue ends with the last
             // item, so the stop control only exists while something is
             // loading or playing (an auto-advanced item, for example).
-            if(hasControl(state(),"stop")) tap("stop");
+            if(!state().isNull("current")) {openPlayer();tap("stop");}
             until(data -> data.isNull("audio_metrics") && !onlinePlaying(data,id));
         }
         tap("library");tap("select:"+ids[0]);until(600000,"control playback",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>1000);
@@ -847,9 +847,14 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(state().optLong("position_ms")!=paused) throw new AssertionError("Pause advanced");
         slide("seek",0.5f);until(data -> "Paused".equals(data.optString("playback")) && data.optLong("position_ms")>durations[0]/2-2000);
         tap("play");until(10000,"resume after seek",data -> onlinePlaying(data,ids[0]) && data.optLong("position_ms")>durations[0]/2+500);
-        capture("qa-rescue-seek-resume");tap("stop");until(data -> data.isNull("audio_metrics"));
+        capture("qa-rescue-seek-resume");
+        tap("next");until(600000,"next track",data -> onlinePlaying(data,ids[1]));
+        tap("previous");until(600000,"previous track",data -> onlinePlaying(data,ids[0]));
+        tap("search");until(data -> hasControl(data,"player") && hasControl(data,"pause"));capture("qa-rescue-mini");
+        tap("queue");capture("qa-rescue-queue");openPlayer();
+        tap("stop");until(data -> data.isNull("audio_metrics"));
         SystemClock.sleep(1000);if(!state().isNull("audio_metrics")) throw new AssertionError("Cancelled audio survived");
-        Files.write(new File(profileDirectory(),"qa-rescue-result.json").toPath(),new JSONObject().put("result","pass").put("complete",complete).put("controls","pause, resume, seek, cancel").put("acoustic_capture",false).toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        Files.write(new File(profileDirectory(),"qa-rescue-result.json").toPath(),new JSONObject().put("result","pass").put("complete",complete).put("controls","product UI, mini-player, queue, pause, resume, seek, next, previous, cancel").put("acoustic_capture",false).toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
     private void musicUi() throws Exception {
         if(hasControl(state(),"player") || hasControl(state(),"play") || !state().isNull("current")) throw new AssertionError("Fresh browsing screen must not show an empty mini-player");
@@ -1035,11 +1040,73 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(info.exported || !info.processName.endsWith(":youtube_auth")) throw new AssertionError("Authentication host is not isolated");
         Files.write(new File(profileDirectory(),"qa-youtube-auth-policy.json").toPath(),new JSONObject().put("result","pass").put("separate_process",true).put("exported",false).put("origins_checked",15).put("google_regions_checked",YoutubeAuthActivity.GOOGLE_DOMAINS.size()).put("cookie_capture_guards",12).put("platform_intent_guards",6).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
+    private void assertProductControls() throws Exception {
+        JSONObject data=state();JSONArray controls=data.getJSONArray("controls");
+        java.util.Set<String> forbidden=new java.util.HashSet<>(java.util.Arrays.asList(
+            "demo-examples","local-audio","long-audio","session-cookie",
+            "youtube-cookie-signin","youtube-import-session","cancel-search"));
+        int filters=0;
+        for(int i=0;i<controls.length();i++) {
+            JSONObject control=controls.getJSONObject(i);String name=control.getString("name");
+            if(name.startsWith("source-") || forbidden.contains(name))
+                throw new AssertionError("Internal control exposed in product mode: "+name);
+            if(name.startsWith("catalog-kind:")) {
+                filters++;JSONArray rect=control.getJSONArray("rect"),viewport=data.getJSONArray("viewport");
+                if(rect.getDouble(0)<0 || rect.getDouble(2)>viewport.getDouble(0) ||
+                    rect.getDouble(1)<0 || rect.getDouble(3)>viewport.getDouble(1) ||
+                    rect.getDouble(3)-rect.getDouble(1)<48)
+                    throw new AssertionError("Content filter outside the usable touch area: "+name);
+            }
+        }
+        if("Search".equals(data.optString("page"))) {
+            if(filters!=4 || !"youtube-music".equals(data.getJSONObject("music_catalog").getString("provider")))
+                throw new AssertionError("Product search must use four content filters and the musical catalog");
+        }
+        if(!data.isNull("current") || !data.isNull("audio_metrics"))
+            throw new AssertionError("The empty product profile must not fabricate playback");
+    }
+    private void productUi() throws Exception {
+        int originalOrientation=activity.getRequestedOrientation();
+        try {
+            for(boolean landscape:new boolean[]{false,true}) {
+                runOnMainSync(() -> activity.setRequestedOrientation(landscape?ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+                until(s -> (s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1))==landscape);
+                settledForeground();
+                for(String theme:new String[]{"dark","light"}) {
+                    tap("settings");until(s -> "Settings".equals(s.optString("page")));tap(theme);
+                    until(s -> s.optBoolean("light")=="light".equals(theme));
+                    for(String page:new String[]{"home","search","library","queue","settings"}) {
+                        tap(page);until(s -> page.equalsIgnoreCase(s.optString("page")));
+                        assertProductControls();
+                        if("search".equals(page)) {
+                            for(String kind:new String[]{"Artist","Release","Playlist","Recording"}) {
+                                tap("catalog-kind:"+kind);
+                                until(s -> kind.equals(s.optJSONObject("music_catalog").optString("kind")) && !s.optJSONObject("music_catalog").optBoolean("waiting"));
+                            }
+                            assertProductControls();
+                        }
+                        capture("qa-product-"+page+"-"+theme+"-"+(landscape?"landscape":"portrait"));
+                    }
+                }
+            }
+            runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+            until(s -> s.optJSONArray("viewport").optDouble(0)<s.optJSONArray("viewport").optDouble(1));
+            settledForeground();tap("search");until(s -> "Search".equals(s.optString("page")));
+            double before=state().getJSONArray("viewport").getDouble(1);
+            tap("query");
+            until(s -> s.optJSONArray("viewport").optDouble(1)<before-48);
+            assertProductControls();capture("qa-product-ime");
+            runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+        } finally {
+            runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
+        }
+    }
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
             if("rescue-playback".equals(mode)) seedRescue();
             Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if("product-ui".equals(mode) || "rescue-playback".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.internalUi",false);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
             activity=startActivitySync(intent);
             until(s -> s.optString("page").equals("Home"));
@@ -1048,6 +1115,11 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-startup");
             if("rescue-playback".equals(mode)) {
                 rescuePlayback();result.putString("stream","PASS: authorized corpus twice to natural EOF, native output, pause, resume, seek and cancel; isolated profile\n");finish(Activity.RESULT_OK,result);return;
+            }
+            if("product-ui".equals(mode)) {
+                productUi();
+                result.putString("stream","PASS: production UI in an isolated profile; four musical filters, no internal controls, portrait/landscape, themes and physical IME; no search or audio requests\n");
+                finish(Activity.RESULT_OK,result);return;
             }
             if("youtube-auth-policy".equals(mode)) {
                 youtubeAuthPolicy();
