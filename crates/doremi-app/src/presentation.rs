@@ -889,11 +889,9 @@ impl DoremiApp {
         let id = current.media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = if self.internal_ui {
-            model.notice.clone()
-        } else {
-            "Intenta reproducir de nuevo o elige otra canción.".into()
-        };
+        // Worker notices are already typed, user-facing errors without URLs or secrets.
+        // Keep provider refusals visible on mobile just as on the desktop player.
+        let notice = model.notice.clone();
         ui.spacing_mut().item_spacing.y = 8.0;
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
         let art = (height * 0.28).clamp(96.0, 256.0).min(ui.available_width());
@@ -935,11 +933,9 @@ impl DoremiApp {
         let id = model.queue.current().unwrap().media.id.clone();
         let caption = playback_caption(model);
         let failed = model.queue.playback() == Playback::Failed;
-        let notice = if self.internal_ui {
-            model.notice.clone()
-        } else {
-            "Intenta reproducir de nuevo o elige otra canción.".into()
-        };
+        // Worker notices are already typed, user-facing errors without URLs or secrets.
+        // Keep provider refusals visible on mobile just as on the desktop player.
+        let notice = model.notice.clone();
         ui.spacing_mut().item_spacing.y = 8.0;
         ui.columns(2, |columns| {
             if self.mobile_player_header(&mut columns[0], palette) {
