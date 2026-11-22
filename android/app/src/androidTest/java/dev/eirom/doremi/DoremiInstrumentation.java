@@ -363,6 +363,20 @@ public final class DoremiInstrumentation extends Instrumentation {
     private void hideKeyboard() throws Exception {
         runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
         SystemClock.sleep(400);
+        // The IME animation resizes the viewport after this call returns. Read
+        // the layout only once the published viewport has stopped changing,
+        // otherwise a tap can use a rect from the previous window size.
+        JSONArray previous=state().getJSONArray("viewport");int stable=0;
+        for(int sample=0;sample<25;sample++) {
+            SystemClock.sleep(100);JSONArray current=state().getJSONArray("viewport");
+            if(Math.abs(current.getDouble(0)-previous.getDouble(0))<0.25 && Math.abs(current.getDouble(1)-previous.getDouble(1))<0.25) {
+                if(++stable>=3) return;
+            } else {
+                stable=0;
+            }
+            previous=current;
+        }
+        throw new AssertionError("Viewport did not settle after hiding the keyboard");
     }
     private boolean hasControl(JSONObject state,String name) {
         JSONArray controls=state.optJSONArray("controls");
