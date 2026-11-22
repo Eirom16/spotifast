@@ -671,7 +671,7 @@ pub fn nav_row(
             egui::Align2::LEFT_CENTER,
             label,
             bold(15.0),
-            color,
+            if active { palette.text } else { color },
         );
     }
     response.widget_info(|| {
@@ -723,7 +723,6 @@ pub fn player_bar<R>(
         .show(ui, content)
 }
 
-/// Original artwork fallback; never invent an image for an unknown release.
 /// Center-crop to the destination without stretching rectangular provider art.
 pub fn cover_uv(source: Vec2, destination: Vec2) -> Rect {
     let scale = (destination.x / source.x).max(destination.y / source.y);
@@ -731,6 +730,7 @@ pub fn cover_uv(source: Vec2, destination: Vec2) -> Rect {
     Rect::from_center_size(pos2(0.5, 0.5), visible)
 }
 
+/// Original artwork fallback; never invent an image for an unknown release.
 pub fn cover_placeholder(
     ui: &egui::Ui,
     palette: &Palette,

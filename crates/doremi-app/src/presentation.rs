@@ -201,11 +201,12 @@ impl DoremiApp {
                 } else {
                     TOUCH
                 };
+                let button_height = height;
                 let height = if inline { height } else { 2.0 * height + GAP };
                 ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::splat(GAP);
                     let response = ui.add_sized(
-                        [width.min(220.0), height.min(TOUCH)],
+                        [width.min(220.0), button_height],
                         egui::Button::new(RichText::new("Buscar música").color(palette.on_accent))
                             .fill(palette.accent)
                             .corner_radius(24),
