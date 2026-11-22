@@ -79,46 +79,60 @@ impl DoremiApp {
             _ if demo_candidate(&media.id) => "Demostración · sin audio",
             _ => "Audio en este dispositivo",
         };
-        theme::collection::hero(
-            ui,
-            &palette,
-            Hero {
-                kind: "REPRODUCTOR",
-                title: &media.title,
-                description: Some(source),
-                round: false,
-                cover_clickable: false,
-            },
-            |ui, slot| match slot {
-                HeroSlot::Cover {
-                    rect,
-                    radius,
-                    response,
-                } => {
-                    theme::cover_placeholder(ui, &palette, rect, radius, Icon::Music);
-                    self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
-                    self.record("player-art", response);
-                }
-                HeroSlot::Text { text, font, color } => {
-                    let mut job = egui::text::LayoutJob::simple(
-                        text.into(),
-                        font,
-                        color,
-                        ui.available_width(),
-                    );
-                    job.wrap.max_rows = if text == media.title { 3 } else { 2 };
-                    ui.add(egui::Label::new(job)).on_hover_text(text);
-                }
-                HeroSlot::Byline => {
-                    if let Some(ms) = media.duration_ms {
-                        let seconds = ms / 1000;
-                        ui.weak(format!("{}:{:02} · {caption}", seconds / 60, seconds % 60));
-                    } else {
-                        ui.weak(caption);
-                    }
-                }
-            },
-        );
+        // The existing collection hero supplies the artwork and typography.
+        // A bounded surface groups the musical identity separately from actions.
+        egui::Frame::new()
+            .fill(palette.surface)
+            .corner_radius(16)
+            .inner_margin(egui::Margin::same(20))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                theme::collection::hero(
+                    ui,
+                    &palette,
+                    Hero {
+                        kind: "REPRODUCTOR",
+                        title: &media.title,
+                        description: Some(source),
+                        round: false,
+                        cover_clickable: false,
+                    },
+                    |ui, slot| match slot {
+                        HeroSlot::Cover {
+                            rect,
+                            radius,
+                            response,
+                        } => {
+                            theme::cover_placeholder(ui, &palette, rect, radius, Icon::Music);
+                            self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
+                            self.record("player-art", response);
+                        }
+                        HeroSlot::Text { text, font, color } => {
+                            let mut job = egui::text::LayoutJob::simple(
+                                text.into(),
+                                font,
+                                color,
+                                ui.available_width(),
+                            );
+                            job.wrap.max_rows = if text == media.title { 3 } else { 2 };
+                            ui.add(egui::Label::new(job)).on_hover_text(text);
+                        }
+                        HeroSlot::Byline => {
+                            if let Some(ms) = media.duration_ms {
+                                let seconds = ms / 1000;
+                                ui.weak(format!(
+                                    "{}:{:02} · {caption}",
+                                    seconds / 60,
+                                    seconds % 60
+                                ));
+                            } else {
+                                ui.weak(caption);
+                            }
+                        }
+                    },
+                );
+            });
+        ui.add_space(16.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(GAP);
             let saved = self.model.as_ref().unwrap().library.contains(&media.id);

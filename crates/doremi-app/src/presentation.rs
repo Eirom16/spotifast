@@ -31,6 +31,8 @@ impl DoremiApp {
             model.artwork.request_thumbnail(id, url, ui.ctx());
             if let Some(cover) = self.artwork_textures.current(&model.artwork, id, ui.ctx()) {
                 egui::Image::new((cover.id(), cover.size_vec2()))
+                    .uv(theme::cover_uv(cover.size_vec2(), rect.size()))
+                    .maintain_aspect_ratio(false)
                     .fit_to_exact_size(rect.size())
                     .corner_radius(radius)
                     .paint_at(ui, rect);
@@ -202,7 +204,14 @@ impl DoremiApp {
                 let height = if inline { height } else { 2.0 * height + GAP };
                 ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
                     ui.spacing_mut().item_spacing = Vec2::splat(GAP);
-                    if self.button(ui, "browse-catalog", "Buscar música", width.min(220.0)) {
+                    let response = ui.add_sized(
+                        [width.min(220.0), height.min(TOUCH)],
+                        egui::Button::new(RichText::new("Buscar música").color(palette.on_accent))
+                            .fill(palette.accent)
+                            .corner_radius(24),
+                    );
+                    self.record("browse-catalog", &response);
+                    if response.clicked() {
                         self.navigate(Page::Search);
                     }
                     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -416,6 +425,9 @@ impl DoremiApp {
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         self.page_content(ui);
+                        // Keep the last row clear of the fixed player/navigation,
+                        // including fractional device-pixel rounding at scroll end.
+                        ui.add_space(GAP);
                     });
             });
     }
@@ -444,14 +456,14 @@ impl DoremiApp {
 
     fn play_control(&mut self, ui: &mut egui::Ui, palette: &Palette, size: f32) {
         let playing = self.model.as_ref().unwrap().queue.playback() == Playback::Playing;
-        let response = theme::circle_button(
+        let response = theme::circle_button_sized(
             ui,
             if playing {
                 Icon::PauseFilled
             } else {
                 Icon::PlayFilled
             },
-            size,
+            [if size == TOUCH { 40.0 } else { size }, size],
             palette.accent,
             palette.accent_hover,
             palette.on_accent,
@@ -667,6 +679,7 @@ impl DoremiApp {
                 self.media_artwork(ui, id, rect, 4);
             }
             ui.vertical(|ui| {
+                ui.set_width(ui.available_width().max(0.0));
                 ui.add(
                     egui::Label::new(RichText::new(&title).font(theme::semibold(14.0))).truncate(),
                 );
@@ -696,25 +709,35 @@ impl DoremiApp {
 
     fn player_bar(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         theme::player_bar(ui, palette.panel, theme::PLAYER_BAR_HEIGHT, |ui| {
-            ui.columns(3, |columns| {
-                columns[0].add_space(18.0);
-                self.now_playing(&mut columns[0], palette);
-                columns[1].add_space(8.0);
-                columns[1].with_layout(Layout::top_down(Align::Center), |ui| {
-                    self.transport(ui, palette, false);
-                    self.progress(ui);
-                });
-                columns[2].add_space(22.0);
-                columns[2].with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if self.icon_control(ui, palette, "stop", Icon::Square, "Detener", false) {
-                        self.model.as_mut().unwrap().command(Command::Cancel);
-                    }
-                    if self.icon_control(ui, palette, "player", Icon::Expand, "Reproductor", false)
-                    {
-                        self.navigate(Page::Player);
-                    }
-                    self.volume(ui, palette);
-                });
+            let rect = ui.available_rect_before_wrap();
+            let side = (rect.width() * 0.30).clamp(216.0, 420.0);
+            let bands = [
+                egui::Rect::from_min_max(rect.min, egui::pos2(rect.left() + side, rect.bottom())),
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.left() + side, rect.top()),
+                    egui::pos2(rect.right() - side, rect.bottom()),
+                ),
+                egui::Rect::from_min_max(egui::pos2(rect.right() - side, rect.top()), rect.max),
+            ];
+            let mut left = ui.new_child(egui::UiBuilder::new().max_rect(bands[0]));
+            left.add_space(18.0);
+            self.now_playing(&mut left, palette);
+            let mut center = ui.new_child(egui::UiBuilder::new().max_rect(bands[1]));
+            center.add_space(8.0);
+            center.with_layout(Layout::top_down(Align::Center), |ui| {
+                self.transport(ui, palette, false);
+                self.progress(ui);
+            });
+            let mut right = ui.new_child(egui::UiBuilder::new().max_rect(bands[2]));
+            right.add_space(22.0);
+            right.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if self.icon_control(ui, palette, "stop", Icon::Square, "Detener", false) {
+                    self.model.as_mut().unwrap().command(Command::Cancel);
+                }
+                if self.icon_control(ui, palette, "player", Icon::Expand, "Reproductor", false) {
+                    self.navigate(Page::Player);
+                }
+                self.volume(ui, palette);
             });
         });
     }
@@ -894,7 +917,11 @@ impl DoremiApp {
         let notice = model.notice.clone();
         ui.spacing_mut().item_spacing.y = 8.0;
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
-        let art = (height * 0.28).clamp(96.0, 256.0).min(ui.available_width());
+        // Reserve the header, two title lines, timeline, transport and footer.
+        // Tall phones can devote spare height to art without pushing controls away.
+        let art = (height - 380.0)
+            .clamp(96.0, 320.0)
+            .min(ui.available_width());
         ui.vertical_centered(|ui| {
             let (rect, response) = ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
             theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
@@ -1331,8 +1358,6 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
         "Sin reproducción activa"
     } else if model.queue.playback() == Playback::Failed {
         "No se pudo reproducir"
-    } else if !model.real_audio() {
-        "Demostración · sin audio"
     } else if model.queue.playback() == Playback::Loading {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         match model.online.phase() {
@@ -1342,6 +1367,8 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
             _ => {}
         }
         "Preparando audio…"
+    } else if !model.real_audio() {
+        "Demostración · sin audio"
     } else if model.queue.playback() == Playback::Playing
         && model
             .audio
@@ -1360,6 +1387,78 @@ pub(super) fn playback_caption(model: &Model) -> &'static str {
 #[cfg(test)]
 mod presentation_tests {
     use super::*;
+
+    #[test]
+    fn loading_caption_does_not_claim_a_demo_before_audio_exists() {
+        let mut model = Model::new(Preferences::default());
+        model
+            .queue
+            .command(Command::StartContext {
+                media: songs(),
+                start: 0,
+                order: Order::Sequential,
+            })
+            .unwrap();
+        assert_eq!(model.queue.playback(), Playback::Loading);
+        assert!(!model.real_audio());
+        assert_eq!(playback_caption(&model), "Preparando audio…");
+    }
+
+    #[test]
+    fn desktop_transport_and_long_metadata_stay_in_separate_bands() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/desktop-player-bands-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
+        let mut media = songs()[0].clone();
+        media.title = "Una canción con un título largo ".repeat(12);
+        app.model.as_mut().unwrap().start_context(vec![media], 0);
+        for light in [false, true] {
+            app.model.as_mut().unwrap().prefs.light = light;
+            for width in [760.0, 900.0, 1240.0, 1920.0] {
+                for _ in 0..3 {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(
+                                egui::Pos2::ZERO,
+                                Vec2::new(width, 800.0),
+                            )),
+                            ..Default::default()
+                        },
+                        |ui| app.draw(ui),
+                    );
+                    output.textures_delta.clear();
+                }
+                let find = |name: &str| app.controls.iter().find(|c| c.name == name).unwrap().rect;
+                let metadata = find("player-now-playing");
+                let seek = find("seek");
+                let volume = find("volume");
+                assert!(
+                    metadata[2] <= seek[0],
+                    "Metadata overlaps progress at {width}"
+                );
+                assert!(
+                    find("total-time")[2] <= volume[0],
+                    "Progress overlaps volume at {width}"
+                );
+                for name in [
+                    "shuffle", "previous", "play", "next", "repeat", "seek", "volume", "stop",
+                    "player",
+                ] {
+                    let rect = find(name);
+                    assert!(
+                        rect[0] >= 0.0 && rect[2] <= width && rect[3] <= 800.0,
+                        "{name}: {rect:?} at {width}"
+                    );
+                }
+            }
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn floating_mini_player_keeps_independent_touch_targets_and_progress_at_multiple_scales() {

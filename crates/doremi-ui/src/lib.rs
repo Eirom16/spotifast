@@ -548,14 +548,35 @@ pub fn circle_button(
     icon_color: Color32,
     tooltip: &str,
 ) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(diameter), Sense::click());
+    circle_button_sized(
+        ui,
+        icon,
+        [diameter, diameter],
+        fill,
+        fill_hover,
+        icon_color,
+        tooltip,
+    )
+}
+
+/// Separate the painted disc from its hit target, as for mini-player controls.
+pub fn circle_button_sized(
+    ui: &mut egui::Ui,
+    icon: Icon,
+    dimensions: [f32; 2],
+    fill: Color32,
+    fill_hover: Color32,
+    icon_color: Color32,
+    tooltip: &str,
+) -> Response {
+    let [diameter, edge] = dimensions;
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(edge.max(diameter)), Sense::click());
     response.widget_info(|| {
         egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
     });
     if ui.is_rect_visible(rect) {
-        let hovered = response.hovered();
-        let grow = if hovered { 1.05 } else { 1.0 };
-        let radius = diameter / 2.0 * grow;
+        let hovered = response.hovered() || response.has_focus();
+        let radius = diameter / 2.0;
         let fill = if hovered { fill_hover } else { fill };
         ui.painter().circle_filled(rect.center(), radius, fill);
         let icon_size = diameter * 0.46;
@@ -624,7 +645,20 @@ pub fn nav_row(
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     if ui.is_rect_visible(rect) {
-        let color = if active || response.hovered() {
+        if active || response.hovered() || response.has_focus() {
+            ui.painter().rect_filled(
+                rect,
+                RADIUS,
+                if active {
+                    palette.accent.gamma_multiply(0.14)
+                } else {
+                    palette.surface_hover
+                },
+            );
+        }
+        let color = if active {
+            palette.accent
+        } else if response.hovered() {
             palette.text
         } else {
             palette.secondary
@@ -690,6 +724,13 @@ pub fn player_bar<R>(
 }
 
 /// Original artwork fallback; never invent an image for an unknown release.
+/// Center-crop to the destination without stretching rectangular provider art.
+pub fn cover_uv(source: Vec2, destination: Vec2) -> Rect {
+    let scale = (destination.x / source.x).max(destination.y / source.y);
+    let visible = destination / (source * scale);
+    Rect::from_center_size(pos2(0.5, 0.5), visible)
+}
+
 pub fn cover_placeholder(
     ui: &egui::Ui,
     palette: &Palette,
@@ -1239,5 +1280,24 @@ mod transport_tests {
             assert!(!response.clicked());
         });
         output.textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod cover_geometry_tests {
+    use super::*;
+
+    #[test]
+    fn rectangular_covers_crop_the_excess_axis_without_distorting_art() {
+        for source in [vec2(1600.0, 900.0), vec2(900.0, 1600.0), vec2(250.0, 250.0)] {
+            for destination in [vec2(40.0, 40.0), vec2(320.0, 320.0)] {
+                let uv = cover_uv(source, destination);
+                assert_eq!(uv.center(), pos2(0.5, 0.5));
+                assert!(uv.min.x >= 0.0 && uv.min.y >= 0.0 && uv.max.x <= 1.0 && uv.max.y <= 1.0);
+                let visible = source * uv.size();
+                assert!((visible.x / visible.y - destination.x / destination.y).abs() < 0.001);
+                assert!(uv.width() == 1.0 || uv.height() == 1.0);
+            }
+        }
     }
 }
