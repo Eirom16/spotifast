@@ -1,5 +1,5 @@
 //! Shared Linux/Android host IO actor. Queue/playing intent remain solely in Model/core.
-//! One search and one source future, bounded commands/results and two PCMs.
+//! One search and one source future, bounded commands/results and source caches.
 use doremi_commons as commons;
 use doremi_core::{
     catalog::{ProviderError, SearchRequest, Tick},
@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 pub(super) enum Prepared {
     YouTube(Box<doremi_youtube::stream::Stream>),
-    BufferedYouTube(Vec<u8>),
+    BufferedYouTube(Arc<[u8]>),
     Pcm(Arc<Pcm>),
     Stream(
         Box<(
@@ -260,6 +260,33 @@ struct Sources {
     commons: Result<commons::Client, ProviderError>,
     youtube: super::youtube_session::SharedClient,
 }
+#[derive(Default)]
+struct SourceCache {
+    pcm: Mutex<Vec<(MediaId, Arc<Pcm>)>>,
+    youtube: Mutex<EncodedCache>,
+}
+
+/// Two complete encoded songs (each bounded by rescue::MAX_BYTES), shared with
+/// the decoder. Seeks and previous/repeat reuse bytes without copying on the UI.
+#[derive(Default)]
+struct EncodedCache(Vec<(MediaId, Arc<[u8]>)>);
+impl EncodedCache {
+    fn get(&mut self, media: &MediaId) -> Option<Arc<[u8]>> {
+        let index = self.0.iter().position(|(id, _)| id == media)?;
+        let entry = self.0.remove(index);
+        let bytes = entry.1.clone();
+        self.0.push(entry);
+        Some(bytes)
+    }
+
+    fn insert(&mut self, media: MediaId, bytes: Arc<[u8]>) {
+        self.0.retain(|(id, _)| *id != media);
+        if self.0.len() >= 2 {
+            self.0.remove(0);
+        }
+        self.0.push((media, bytes));
+    }
+}
 async fn actor(
     mut receiver: mpsc::Receiver<Job>,
     shared: Arc<Shared>,
@@ -267,7 +294,7 @@ async fn actor(
     origin: Instant,
 ) {
     let mut tasks: [Task; 2] = [None, None];
-    let cache = Arc::new(Mutex::new(Vec::<(MediaId, Arc<Pcm>)>::new()));
+    let cache = Arc::new(SourceCache::default());
     loop {
         if shared.closed.load(Ordering::Acquire) {
             break;
@@ -355,11 +382,17 @@ async fn source(
     media: &MediaId,
     generation: u64,
     state: &Shared,
-    cache: &Mutex<Vec<(MediaId, Arc<Pcm>)>>,
+    cache: &SourceCache,
     origin: Instant,
     ctx: &egui::Context,
 ) -> Result<Prepared, Error> {
     if media.provider.as_str() == doremi_youtube::PROVIDER {
+        let legacy = std::env::var("DOREMI_PLAYBACK_BACKEND").as_deref() == Ok("legacy");
+        // A queue seek reloads the current item; the whole encoded song is
+        // already in memory, so reuse it instead of fetching it again.
+        if !legacy && let Some(bytes) = cache.youtube.lock().unwrap().get(media) {
+            return Ok(Prepared::BufferedYouTube(bytes));
+        }
         state.phase(generation, 1, ctx);
         let result = match client
             .youtube
@@ -370,8 +403,7 @@ async fn source(
             Ok(client) => {
                 // Rescue is the default on both platforms. The previous HTTP
                 // range source remains selectable without changing UI or data.
-                let result = if std::env::var("DOREMI_PLAYBACK_BACKEND").as_deref() == Ok("legacy")
-                {
+                let result = if legacy {
                     client
                         .resolve(media)
                         .await
@@ -380,7 +412,15 @@ async fn source(
                     state.phase(generation, 2, ctx);
                     doremi_youtube::rescue::prepare(client, media)
                         .await
-                        .map(|audio| Prepared::BufferedYouTube(audio.bytes))
+                        .map(|audio| {
+                            let bytes: Arc<[u8]> = audio.bytes.into();
+                            cache
+                                .youtube
+                                .lock()
+                                .unwrap()
+                                .insert(media.clone(), bytes.clone());
+                            Prepared::BufferedYouTube(bytes)
+                        })
                 };
                 if result.is_err() {
                     let message =
@@ -424,6 +464,7 @@ async fn source(
         return Ok(Prepared::Stream(Box::new((resource, grant))));
     }
     if let Some(pcm) = cache
+        .pcm
         .lock()
         .unwrap()
         .iter()
@@ -447,13 +488,85 @@ async fn source(
     if !state.current(1, generation) {
         return Err(ProviderError::Cancelled.into());
     }
-    let mut buffers = cache.lock().unwrap();
+    let mut buffers = cache.pcm.lock().unwrap();
     if buffers.len() >= 2 {
         return Err(ProviderError::TooLarge.into());
     }
     buffers.push((media.clone(), pcm.clone()));
     state.phase(generation, 4, ctx);
     Ok(Prepared::Pcm(pcm))
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+
+    #[test]
+    fn encoded_cache_reuses_recent_songs_and_evicts_the_least_recent() {
+        let first = doremi_youtube::id("qQzdAsjWGPg").unwrap();
+        let second = doremi_youtube::id("_d3SaQI_Ag4").unwrap();
+        let third = doremi_youtube::id("aaaaaaaaaaa").unwrap();
+        let bytes: Arc<[u8]> = vec![1, 2, 3].into();
+        let mut cache = EncodedCache::default();
+        cache.insert(first.clone(), bytes.clone());
+        cache.insert(second.clone(), vec![4].into());
+        assert!(Arc::ptr_eq(&cache.get(&first).unwrap(), &bytes));
+        cache.insert(third.clone(), vec![5].into());
+        assert!(cache.get(&second).is_none());
+        assert!(Arc::ptr_eq(&cache.get(&first).unwrap(), &bytes));
+        assert!(cache.get(&third).is_some());
+        // Replacing an entry must release its old buffer and keep the bound.
+        cache.insert(first.clone(), vec![6].into());
+        assert_eq!(cache.get(&first).unwrap().as_ref(), &[6]);
+        assert_eq!(Arc::strong_count(&bytes), 1);
+        assert_eq!(cache.0.len(), 2);
+    }
+
+    #[test]
+    fn seek_reload_uses_encoded_audio_without_resolving_again() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let cache = SourceCache::default();
+            let media = doremi_youtube::id("qQzdAsjWGPg").unwrap();
+            let bytes: Arc<[u8]> = vec![1, 2, 3].into();
+            cache
+                .youtube
+                .lock()
+                .unwrap()
+                .insert(media.clone(), bytes.clone());
+            let state = Shared {
+                generation: [AtomicU64::new(0), AtomicU64::new(2)],
+                closed: AtomicBool::new(false),
+                events: Mutex::new([None, None]),
+                phase_generation: AtomicU64::new(0),
+                phase: AtomicU8::new(0),
+            };
+            // Both transports fail if touched: the new load generation must
+            // succeed solely from the previous load's prepared audio.
+            let client = Sources {
+                commons: Err(ProviderError::Transport),
+                youtube: Arc::new(tokio::sync::Mutex::new(Some(Err(ProviderError::Transport)))),
+            };
+            let prepared = source(
+                client,
+                &media,
+                2,
+                &state,
+                &cache,
+                Instant::now(),
+                &egui::Context::default(),
+            )
+            .await
+            .unwrap();
+            let Prepared::BufferedYouTube(reused) = prepared else {
+                panic!("seek did not reuse encoded audio");
+            };
+            assert!(Arc::ptr_eq(&reused, &bytes));
+        });
+    }
 }
 
 #[cfg(test)]
