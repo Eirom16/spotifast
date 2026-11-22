@@ -1416,6 +1416,7 @@ mod presentation_tests {
         let mut media = songs()[0].clone();
         media.title = "Una canción con un título largo ".repeat(12);
         app.model.as_mut().unwrap().start_context(vec![media], 0);
+        app.model.as_mut().unwrap().command(Command::Pause);
         for light in [false, true] {
             app.model.as_mut().unwrap().prefs.light = light;
             for width in [760.0, 900.0, 1240.0, 1920.0] {
