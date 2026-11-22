@@ -52,7 +52,7 @@ def main():
     assert installed.startswith("package:") and "\n" not in installed
     assert hashlib.sha256(adb("exec-out", "cat", installed.removeprefix("package:"))).digest() == hashlib.sha256(apk.read_bytes()).digest()
     adb("install", "-r", "-t", str(args.artifact / "app-debug-androidTest.apk"))
-    captures = ["qa-startup", "qa-product-ime"] + [
+    captures = ["qa-startup", "qa-product-ime", "qa-product-library-ime"] + [
         f"qa-product-{page}-{theme}-{orientation}"
         for orientation in ("portrait", "landscape")
         for theme in ("dark", "light")
@@ -92,7 +92,9 @@ def main():
         "mode": "product", "private_profile": args.profile, "captures": len(captures),
         "normal_library_sha256": normal_after,
         "checks": ["no internal controls", "four musical filters", "portrait and landscape",
-                   "light and dark", "physical IME resize", "no fake playback"],
+                   "light and dark", "physical IME resize",
+                   "library field stays visible and unscrolled under the IME",
+                   "no fake playback"],
         "audio": False, "search_requests": False,
     }, indent=2) + "\n")
     print(output)

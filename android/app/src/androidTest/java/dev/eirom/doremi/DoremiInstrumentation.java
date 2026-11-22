@@ -1096,7 +1096,25 @@ public final class DoremiInstrumentation extends Instrumentation {
             tap("query");
             until(s -> s.optJSONArray("viewport").optDouble(1)<before-48);
             assertProductControls();capture("qa-product-ime");
-            runOnMainSync(() -> ((android.view.inputmethod.InputMethodManager)activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(activity.getWindow().getDecorView().getWindowToken(),0));
+            hideKeyboard();
+            until(s -> s.optJSONArray("viewport").optDouble(1)>=before-1);
+            // The playlist field now lives at the top of Biblioteca. Opening the
+            // IME must not scroll the page or move the field out of view.
+            tap("library");until(s -> "Library".equals(s.optString("page")));
+            JSONArray field=controlRect(state(),"playlist-name");
+            if(field==null) throw new AssertionError("Library playlist field is missing");
+            double fieldTop=field.getDouble(1);
+            tap("playlist-name");
+            until(s -> s.optJSONArray("viewport").optDouble(1)<before-48);
+            JSONObject shrunk=state();JSONArray visible=controlRect(shrunk,"playlist-name");
+            double shrunkHeight=shrunk.getJSONArray("viewport").getDouble(1);
+            if(visible==null || visible.getDouble(1)<0 || visible.getDouble(3)>shrunkHeight)
+                throw new AssertionError("Library field left the visible area when the IME opened");
+            if(Math.abs(visible.getDouble(1)-fieldTop)>2)
+                throw new AssertionError("Library page scrolled under the IME: "+fieldTop+" -> "+visible.getDouble(1));
+            assertProductControls();capture("qa-product-library-ime");
+            hideKeyboard();
+            until(s -> s.optJSONArray("viewport").optDouble(1)>=before-1);
         } finally {
             runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
         }
