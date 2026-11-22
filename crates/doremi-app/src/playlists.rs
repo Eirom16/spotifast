@@ -108,9 +108,13 @@ impl DoremiApp {
             });
             // Android's native editor may own window focus while its IME
             // shrinks this viewport. Keep its explicit field target visible.
-            if response.gained_focus()
+            // Only move the page when the field is actually hidden. A field at
+            // the top stays fully visible while the IME resizes the viewport,
+            // so re-centering it here would make the page fight the keyboard.
+            if (response.gained_focus()
                 || response.changed()
-                || (resized && (response.has_focus() || self.editor == field))
+                || (resized && (response.has_focus() || self.editor == field)))
+                && !ui.clip_rect().contains_rect(response.rect)
             {
                 response.scroll_to_me(Some(egui::Align::Center));
             }
@@ -152,26 +156,30 @@ impl DoremiApp {
             self.navigate(Page::Playlist);
         }
     }
-    pub(super) fn playlist_library(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Playlists");
+    /// Playlist creation lives at the top of Biblioteca, above the filters, so
+    /// the mobile IME never has to scroll a mid-page field into view.
+    pub(super) fn playlist_creation(&mut self, ui: &mut egui::Ui) {
         if !self.model.as_ref().unwrap().write_playlists {
             ui.weak("Solo lectura: se conserva el archivo anterior.");
-        } else {
-            ui.horizontal(|ui| {
-                self.playlist_editor(ui, TextField::PlaylistName);
-                if self.button(ui, "playlist-create", "Crear", 80.0) {
-                    let model = self.model.as_mut().unwrap();
-                    match model.playlists.create(&model.playlist_name) {
-                        Ok(id) => {
-                            model.playlist_name.clear();
-                            model.revision += 1;
-                            self.open_playlist(id);
-                        }
-                        Err(error) => model.playlist_feedback(Err(error), ""),
-                    }
-                }
-            });
+            return;
         }
+        ui.horizontal(|ui| {
+            self.playlist_editor(ui, TextField::PlaylistName);
+            if self.button(ui, "playlist-create", "Crear", 80.0) {
+                let model = self.model.as_mut().unwrap();
+                match model.playlists.create(&model.playlist_name) {
+                    Ok(id) => {
+                        model.playlist_name.clear();
+                        model.revision += 1;
+                        self.open_playlist(id);
+                    }
+                    Err(error) => model.playlist_feedback(Err(error), ""),
+                }
+            }
+        });
+    }
+    pub(super) fn playlist_library(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Playlists");
         let snapshot = self.model.as_ref().unwrap().playlists.clone();
         if snapshot.lists().is_empty() {
             ui.weak("Crea una playlist y añade canciones desde su menú de opciones.");

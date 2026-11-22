@@ -75,6 +75,10 @@ impl DoremiApp {
             );
         }
         ui.add_space(12.0);
+        // Creation sits above the filters so the field keeps a stable position
+        // at the top of the page, like the search field, even with the IME open.
+        self.playlist_creation(ui);
+        ui.add_space(12.0);
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::Vec2::splat(GAP);
             for (filter, key, label) in [
