@@ -1950,6 +1950,28 @@ mod tests {
                 app.page_rect
             );
         }
+        // Hiding the native keyboard must leave the same editor reachable,
+        // with its pending Unicode text and queue selection intact.
+        for _ in 0..6 {
+            frame(&mut app, &ctx, &mut time, 658.65625, true, vec![]);
+        }
+        let model = app.model.as_ref().unwrap();
+        assert_eq!(model.playlist_edit_name, "Café · lectura");
+        assert_eq!(model.playlists.get(id).unwrap().name, "Café nocturno");
+        assert_eq!(model.queue.playback(), Playback::Paused);
+        for name in ["playlist-rename", "playlist-rename-save"] {
+            let control = app
+                .controls
+                .iter()
+                .find(|control| control.name == name)
+                .unwrap();
+            assert!(
+                control.rect[1] >= app.page_rect[1] && control.rect[3] <= app.page_rect[3],
+                "{name} {:?} outside {:?} after hiding IME",
+                control.rect,
+                app.page_rect
+            );
+        }
         drop(app);
         DoremiApp::shutdown();
         let _ = std::fs::remove_dir_all(directory);

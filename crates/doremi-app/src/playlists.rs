@@ -116,7 +116,12 @@ impl DoremiApp {
                 || (resized && (response.has_focus() || self.editor == field)))
                 && !ui.clip_rect().contains_rect(response.rect)
             {
-                response.scroll_to_me(Some(egui::Align::Center));
+                // Resolve IME insets in one frame. An animated scroll can
+                // temporarily hide the focused field and toggle the native IME.
+                response.scroll_to_me_animation(
+                    Some(egui::Align::Center),
+                    egui::style::ScrollAnimation::none(),
+                );
             }
         }
     }
@@ -241,6 +246,41 @@ impl DoremiApp {
             self.navigate(Page::Library);
             return;
         }
+        // Keep the rename field near the top, like creation in Biblioteca.
+        // The mobile keyboard must not chase a focused field below the hero.
+        let edit = ui.collapsing("Editar playlist", |ui| {
+            ui.add_enabled_ui(self.model.as_ref().unwrap().write_playlists, |ui| {
+                ui.horizontal(|ui| {
+                    self.playlist_editor(ui, TextField::PlaylistRename);
+                    if self.button(ui, "playlist-rename-save", "Guardar", 80.0) {
+                        let model = self.model.as_mut().unwrap();
+                        let result = model.playlists.rename(list.id, &model.playlist_edit_name);
+                        model.playlist_feedback(result, "Nombre actualizado.");
+                    }
+                });
+                if self.button(ui, "playlist-delete", "Eliminar playlist", 200.0) {
+                    self.model.as_mut().unwrap().playlist_delete_confirmation = true;
+                }
+                if self.model.as_ref().unwrap().playlist_delete_confirmation {
+                    ui.label("¿Eliminar esta playlist? Tus favoritos y la cola se conservan.");
+                    if self.button(
+                        ui,
+                        "playlist-delete-confirm",
+                        "Confirmar eliminación",
+                        220.0,
+                    ) {
+                        let model = self.model.as_mut().unwrap();
+                        let result = model.playlists.delete(list.id);
+                        model.playlist_feedback(result, "Playlist eliminada.");
+                        self.navigate(Page::Library);
+                    }
+                    if self.button(ui, "playlist-delete-cancel", "Conservar playlist", 220.0) {
+                        self.model.as_mut().unwrap().playlist_delete_confirmation = false;
+                    }
+                }
+            });
+        });
+        self.record("playlist-edit", &edit.header_response);
         theme::collection::hero(
             ui,
             &palette,
@@ -290,39 +330,6 @@ impl DoremiApp {
         if !list.entries.is_empty() && !playable {
             ui.weak("Esta lista contiene metadatos sin audio. Puedes explorar sus grabaciones.");
         }
-        let edit = ui.collapsing("Editar playlist", |ui| {
-            ui.add_enabled_ui(self.model.as_ref().unwrap().write_playlists, |ui| {
-                ui.horizontal(|ui| {
-                    self.playlist_editor(ui, TextField::PlaylistRename);
-                    if self.button(ui, "playlist-rename-save", "Guardar", 80.0) {
-                        let model = self.model.as_mut().unwrap();
-                        let result = model.playlists.rename(list.id, &model.playlist_edit_name);
-                        model.playlist_feedback(result, "Nombre actualizado.");
-                    }
-                });
-                if self.button(ui, "playlist-delete", "Eliminar playlist", 200.0) {
-                    self.model.as_mut().unwrap().playlist_delete_confirmation = true;
-                }
-                if self.model.as_ref().unwrap().playlist_delete_confirmation {
-                    ui.label("¿Eliminar esta playlist? Tus favoritos y la cola se conservan.");
-                    if self.button(
-                        ui,
-                        "playlist-delete-confirm",
-                        "Confirmar eliminación",
-                        220.0,
-                    ) {
-                        let model = self.model.as_mut().unwrap();
-                        let result = model.playlists.delete(list.id);
-                        model.playlist_feedback(result, "Playlist eliminada.");
-                        self.navigate(Page::Library);
-                    }
-                    if self.button(ui, "playlist-delete-cancel", "Conservar playlist", 220.0) {
-                        self.model.as_mut().unwrap().playlist_delete_confirmation = false;
-                    }
-                }
-            });
-        });
-        self.record("playlist-edit", &edit.header_response);
         if let Some(notice) = &self.model.as_ref().unwrap().playlist_notice {
             ui.weak(notice);
         }
