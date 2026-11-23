@@ -325,22 +325,15 @@ mod tests {
                     .iter()
                     .find(|control| control.name == "repeat")
                     .unwrap();
-                let elapsed = app
+                let cover = app
                     .controls
                     .iter()
-                    .find(|c| c.name == "elapsed-time")
+                    .find(|c| c.name == "player-art")
                     .unwrap();
-                let total = app
-                    .controls
-                    .iter()
-                    .find(|c| c.name == "total-time")
-                    .unwrap();
+                let center = (cover.rect[2] + 32.0 + app.page_rect[2]) / 2.0;
                 assert!(
-                    ((shuffle.rect[0] + repeat.rect[2]) / 2.0
-                        - (elapsed.rect[0] + total.rect[2]) / 2.0)
-                        .abs()
-                        <= 8.0,
-                    "Transport and timeline must share a visual center"
+                    ((shuffle.rect[0] + repeat.rect[2]) / 2.0 - center).abs() <= 1.0,
+                    "Transport must be centered in the content column beside the cover"
                 );
                 assert_eq!(
                     app.model.as_ref().unwrap().queue.current().unwrap().media,

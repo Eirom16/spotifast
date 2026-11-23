@@ -96,11 +96,11 @@ def main():
         "mode": "music-showcase" if args.showcase else "product",
         "test_runner_sha256": hashlib.sha256((args.runner or args.artifact / "app-debug-androidTest.apk").read_bytes()).hexdigest(), "private_profile": args.profile, "captures": len(captures),
         "normal_library_sha256": normal_after,
-        "checks": ["no internal controls", "four musical filters", "portrait and landscape",
+        "checks": ["live provider Home and artwork", "save exact provider identities", "player controls visible", "mini-player", "portrait and landscape", "light and dark", "normal library preserved"] if args.showcase else ["no internal controls", "four musical filters", "portrait and landscape",
                    "light and dark", "physical IME resize",
                    "library field stays visible and unscrolled under the IME",
                    "no fake playback"],
-        "audio": False, "search_requests": False,
+        "audio_verified": False, "audio_requested": args.showcase, "search_requests": args.showcase,
     }, indent=2) + "\n")
     print(output)
 
