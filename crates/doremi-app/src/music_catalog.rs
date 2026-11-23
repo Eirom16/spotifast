@@ -849,7 +849,15 @@ impl DoremiApp {
                                             &format!("catalog-open:{}", entry.media.id.local()),
                                             &card.response,
                                         );
-                                        if card.clicked || card.play {
+                                        let model = self.model.as_ref().unwrap();
+                                        if card.play
+                                            && model.queue.playback() == Playback::Playing
+                                            && model.queue.current().is_some_and(|current| {
+                                                current.media.id == entry.media.id
+                                            })
+                                        {
+                                            self.model.as_mut().unwrap().command(Command::Pause);
+                                        } else if card.clicked || card.play {
                                             if entry.kind == EntityKind::Recording {
                                                 let (tracks, selected) = page.play_context(index);
                                                 self.model
