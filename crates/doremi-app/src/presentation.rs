@@ -856,6 +856,13 @@ impl DoremiApp {
         let caption = playback_caption(model);
         let byline = self.music_byline(&current.media);
         let failed = model.queue.playback() == Playback::Failed;
+        let caption = if !byline.is_empty()
+            && !matches!(model.queue.playback(), Playback::Loading | Playback::Failed)
+        {
+            byline.as_str()
+        } else {
+            caption
+        };
         // Worker notices are already typed, user-facing errors without URLs or secrets.
         // Keep provider refusals visible on mobile just as on the desktop player.
         let notice = model.notice.clone();
@@ -881,16 +888,6 @@ impl DoremiApp {
             text.wrap.max_rows = 2;
             text.halign = Align::Center;
             ui.add(egui::Label::new(text));
-            if !byline.is_empty() {
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(&byline)
-                            .font(theme::regular(15.0))
-                            .color(palette.secondary),
-                    )
-                    .truncate(),
-                );
-            }
             ui.label(
                 RichText::new(caption)
                     .font(theme::regular(13.0))

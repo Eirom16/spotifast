@@ -50,10 +50,7 @@ impl DoremiApp {
                         180.0,
                         false,
                     ) {
-                        self.model
-                            .as_mut()
-                            .unwrap()
-                            .youtube_page(doremi_youtube::Request::Home);
+                        self.model.as_mut().unwrap().refresh_music_home();
                     }
                 },
             );
