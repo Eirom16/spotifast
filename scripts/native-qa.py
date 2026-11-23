@@ -21,6 +21,7 @@ def main():
     parser.add_argument('--catalog-library',action='store_true',help='Opt-in saved artist/album restoration by ID; no audio')
     parser.add_argument('--history-layout',type=Path,help='Offline geometry QA from an actual listening-history fixture directory')
     parser.add_argument('--close-helper',type=Path,help='Optional owned-window WM_DELETE_WINDOW helper; required by history QA')
+    parser.add_argument('--home-catalog',action='store_true',help='Opt-in public YouTube Music Home, artwork and saved shelves')
     args=parser.parse_args()
     output=args.output.resolve(); output.mkdir(parents=True,exist_ok=True)
     (output/'qa-script.py').write_bytes(Path(__file__).read_bytes())
@@ -103,6 +104,13 @@ def main():
             time.sleep(.2)
             subprocess.run(['import','-window',window,str(output/f'{name}.png')],check=True)
             (output/f'{name}.json').write_text(json.dumps(state(),indent=2,ensure_ascii=False))
+        if args.home_catalog:
+            tap('youtube-home')
+            wait(lambda s:not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0,60)
+            time.sleep(12);capture('home-catalog-dark')
+            tap('settings');tap('light');tap('home');time.sleep(8);capture('home-catalog-light')
+            (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'network':True,'audio':False,'catalog':'public YouTube Music Home'}))
+            return
         if args.catalog_library:
             assert args.close_helper and args.close_helper.is_file()
             artist='artist:b7ffd2af-418f-4be2-bdd1-22f8b48613da';album='release:12b57d46-a192-499e-a91f-7da66790a1c1'

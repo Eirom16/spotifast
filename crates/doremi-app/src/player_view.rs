@@ -2,7 +2,6 @@
 use super::*;
 use doremi_ui::{
     self as theme, Icon,
-    collection::{Hero, HeroSlot},
     feedback::{self, Kind},
 };
 
@@ -71,93 +70,84 @@ impl DoremiApp {
             self.go_back();
             return;
         }
-        let source = match media.id.provider.as_str() {
-            _ if !self.internal_ui => "Tu música",
-            "youtube-music" => "YouTube Music",
-            "wikimedia-commons" => "Commons · CC0",
-            "doremi-demo" => "Demostración · sin audio",
-            _ if demo_candidate(&media.id) => "Demostración · sin audio",
-            _ => "Audio en este dispositivo",
-        };
-        // The existing collection hero supplies the artwork and typography.
-        // A bounded surface groups the musical identity separately from actions.
-        egui::Frame::new()
-            .fill(palette.surface)
-            .corner_radius(16)
-            .inner_margin(egui::Margin::same(20))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                theme::collection::hero(
-                    ui,
-                    &palette,
-                    Hero {
-                        kind: "REPRODUCTOR",
-                        title: &media.title,
-                        description: Some(source),
-                        round: false,
-                        cover_clickable: false,
-                    },
-                    |ui, slot| match slot {
-                        HeroSlot::Cover {
-                            rect,
-                            radius,
-                            response,
-                        } => {
-                            theme::cover_placeholder(ui, &palette, rect, radius, Icon::Music);
-                            self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
-                            self.record("player-art", response);
-                        }
-                        HeroSlot::Text { text, font, color } => {
-                            let mut job = egui::text::LayoutJob::simple(
-                                text.into(),
-                                font,
-                                color,
-                                ui.available_width(),
-                            );
-                            job.wrap.max_rows = if text == media.title { 3 } else { 2 };
-                            ui.add(egui::Label::new(job)).on_hover_text(text);
-                        }
-                        HeroSlot::Byline => {
-                            if let Some(ms) = media.duration_ms {
-                                let seconds = ms / 1000;
-                                ui.weak(format!(
-                                    "{}:{:02} · {caption}",
-                                    seconds / 60,
-                                    seconds % 60
-                                ));
-                            } else {
-                                ui.weak(caption);
-                            }
-                        }
-                    },
-                );
+        ui.add_space(20.0);
+        let width = ui.available_width();
+        let height = (self.page_rect[3] - self.page_rect[1] - 100.0).max(160.0);
+        let art = (width * 0.44).min(height - 40.0).clamp(140.0, 380.0);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 32.0;
+            ui.vertical(|ui| {
+                ui.set_width(art);
+                let (rect, response) =
+                    ui.allocate_exact_size(egui::Vec2::splat(art), egui::Sense::hover());
+                theme::cards::shadow(ui, &palette, rect, 16.0);
+                theme::cover_placeholder(ui, &palette, rect, 16.0, Icon::Music);
+                self.media_artwork(ui, &media.id, rect, 16);
+                self.record("player-art", &response);
             });
-        ui.add_space(16.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::Vec2::splat(GAP);
-            let saved = self.model.as_ref().unwrap().library.contains(&media.id);
-            let writable = self.model.as_ref().unwrap().write_library;
-            if ui
-                .add_enabled_ui(writable, |ui| {
-                    self.choice_button(
+            ui.vertical(|ui| {
+                ui.set_width(ui.available_width().max(0.0));
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new("AHORA SUENA")
+                        .font(theme::semibold(11.0))
+                        .color(palette.accent),
+                );
+                ui.add_space(12.0);
+                let mut text = egui::text::LayoutJob::simple(
+                    media.title.clone(),
+                    theme::bold(if width > 800.0 { 36.0 } else { 28.0 }),
+                    palette.text,
+                    ui.available_width(),
+                );
+                text.wrap.max_rows = 2;
+                ui.add(egui::Label::new(text)).on_hover_text(&media.title);
+                let byline = self.music_byline(&media);
+                if !byline.is_empty() {
+                    ui.label(
+                        egui::RichText::new(byline)
+                            .font(theme::regular(16.0))
+                            .color(palette.secondary),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(caption)
+                        .font(theme::regular(12.0))
+                        .color(palette.secondary),
+                );
+                ui.add_space(16.0);
+                self.progress(ui);
+                ui.add_space(12.0);
+                self.transport(ui, &palette, ui.available_width() >= 320.0);
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    self.player_favorite(ui, &palette);
+                    if self.icon_control(
                         ui,
-                        "player-save",
-                        if saved {
-                            "Quitar de biblioteca"
-                        } else {
-                            "Guardar canción"
-                        },
-                        200.0,
-                        saved,
-                    )
-                })
-                .inner
-            {
-                self.toggle_player_saved(&media);
-            }
-            if self.choice_button(ui, "player-queue", "Ver cola", 140.0, false) {
-                self.navigate(Page::Queue);
-            }
+                        &palette,
+                        "player-queue",
+                        Icon::ListMusic,
+                        "Ver cola",
+                        true,
+                    ) {
+                        self.navigate(Page::Queue);
+                    }
+                    if self.icon_control(
+                        ui,
+                        &palette,
+                        "stop",
+                        Icon::Square,
+                        "Detener / cancelar descarga",
+                        true,
+                    ) {
+                        self.model.as_mut().unwrap().command(Command::Cancel);
+                    }
+                });
+                ui.horizontal(|ui| {
+                    self.volume_sized(ui, &palette, (ui.available_width() - 48.0).max(48.0));
+                });
+            });
         });
         ui.add_space(16.0);
         match playback {
@@ -333,7 +323,18 @@ mod tests {
                     .iter()
                     .find(|control| control.name == "repeat")
                     .unwrap();
-                assert!(((shuffle.rect[0] + repeat.rect[2]) / 2.0 - size[0] / 2.0).abs() <= 1.0);
+                assert!(
+                    ((shuffle.rect[0] + repeat.rect[2]) / 2.0
+                        - (app.page_rect[2]
+                            + app.page_rect[0]
+                            + ((app.page_rect[2] - app.page_rect[0]) * 0.44)
+                                .min(app.page_rect[3] - app.page_rect[1] - 140.0)
+                                .clamp(140.0, 380.0)
+                            + 32.0)
+                            / 2.0)
+                        .abs()
+                        <= 1.0
+                );
                 assert_eq!(
                     app.model.as_ref().unwrap().queue.current().unwrap().media,
                     media

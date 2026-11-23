@@ -100,15 +100,18 @@ pub fn card_sized(
     let mut play = false;
     if ui.is_rect_visible(rect) {
         let hovered = ui.rect_contains_pointer(rect);
-        if hovered {
-            ui.painter().rect_filled(
-                rect,
-                CornerRadius::same(crate::RADIUS),
-                palette
-                    .surface_hover
-                    .gamma_multiply(if palette.dark { 0.8 } else { 1.0 }),
-            );
-        }
+        let emphasis = ui.ctx().animate_bool_with_time(
+            response.id.with("card-emphasis"),
+            hovered || response.has_focus(),
+            ui.style().animation_time.min(0.18),
+        );
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(crate::RADIUS),
+            palette
+                .surface
+                .lerp_to_gamma(palette.surface_hover, emphasis),
+        );
         let image = Rect::from_min_size(rect.min + vec2(12.0, 12.0), Vec2::splat(art));
         slot(
             ui,

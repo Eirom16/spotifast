@@ -671,6 +671,30 @@ impl State {
     pub fn home_root(&self) -> bool {
         self.home_context && self.youtube && self.selected && self.detail.is_none()
     }
+    pub(super) fn byline(&self, id: &MediaId) -> Option<String> {
+        self.page
+            .iter()
+            .chain(self.home_cache.iter().map(|(page, _, _)| page))
+            .find_map(|page| {
+                page.items
+                    .iter()
+                    .enumerate()
+                    .find(|(_, item)| &item.media.id == id)
+                    .and_then(|(i, item)| {
+                        let artists = item
+                            .artists
+                            .iter()
+                            .map(|a| a.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        if !artists.is_empty() {
+                            Some(artists)
+                        } else {
+                            page.subtitles.get(i).filter(|s| !s.is_empty()).cloned()
+                        }
+                    })
+            })
+    }
     pub fn home_started(&self) -> bool {
         self.home_started
     }
@@ -791,7 +815,57 @@ impl DoremiApp {
                     .items
                     .iter()
                     .all(|item| item.kind != EntityKind::Recording);
-            if tiles {
+            if self.model.as_ref().unwrap().music.home_root() && !page.sections.is_empty() {
+                for (section_index, section) in page.sections.iter().enumerate() {
+                    ui.add_space(20.0);
+                    ui.label(egui::RichText::new(&section.title).font(doremi_ui::bold(22.0)));
+                    egui::ScrollArea::horizontal()
+                        .id_salt(("home-section", section_index))
+                        .show(ui, |ui| {
+                            ui.horizontal_top(|ui| {
+                                for index in section.rows.clone() {
+                                    let entry = &page.items[index];
+                                    ui.push_id((section_index, index), |ui| {
+                                        let subtitle =
+                                            page.subtitles.get(index).cloned().unwrap_or_default();
+                                        let card = self.music_card(
+                                            ui,
+                                            &entry.media,
+                                            &subtitle,
+                                            160.0,
+                                            if entry.kind == EntityKind::Artist {
+                                                doremi_ui::Icon::User
+                                            } else {
+                                                doremi_ui::Icon::Disc
+                                            },
+                                        );
+                                        self.record(
+                                            &format!("catalog-open:{}", entry.media.id.local()),
+                                            &card.response,
+                                        );
+                                        if card.clicked || card.play {
+                                            if entry.kind == EntityKind::Recording {
+                                                let (tracks, selected) = page.play_context(index);
+                                                self.model
+                                                    .as_mut()
+                                                    .unwrap()
+                                                    .start_context(tracks, selected);
+                                                self.navigate(Page::Player);
+                                            } else {
+                                                self.model
+                                                    .as_mut()
+                                                    .unwrap()
+                                                    .music
+                                                    .open(entry.clone());
+                                                self.navigate(Page::Search);
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                        });
+                }
+            } else if tiles {
                 if page.sections.is_empty() {
                     self.music_grid(ui, &page.items);
                 } else {

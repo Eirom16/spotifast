@@ -157,88 +157,6 @@ impl DoremiApp {
         response.clicked()
     }
 
-    pub(super) fn home_header(&mut self, ui: &mut egui::Ui) {
-        let prefs = &self.model.as_ref().unwrap().prefs;
-        let palette = theme::palette(prefs.light, prefs.green);
-        Frame::new()
-            .fill(palette.surface)
-            .corner_radius(16)
-            .inner_margin(Margin::same(20))
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(
-                    RichText::new("DOREMI")
-                        .font(theme::semibold(12.0))
-                        .color(palette.accent),
-                );
-                ui.add_space(8.0);
-                ui.label(
-                    RichText::new("Tu música, a tu ritmo")
-                        .font(theme::bold(if ui.available_width() < 400.0 {
-                            26.0
-                        } else {
-                            32.0
-                        }))
-                        .color(palette.text),
-                );
-                ui.label(
-                    RichText::new("Busca canciones, artistas y álbumes. Guarda tus descubrimientos en este dispositivo.")
-                        .font(theme::regular(14.0))
-                        .color(palette.secondary),
-                );
-                ui.add_space(16.0);
-                let width = ui.available_width();
-                // A disabled scope is one layout item, not a wrapping button.
-                // Choose the direction from the whole group's required width.
-                let inline = width >= 220.0 + GAP + 250.0;
-                let layout = if inline {
-                    Layout::left_to_right(Align::Center)
-                } else {
-                    Layout::top_down(Align::Min)
-                };
-                let height = if ui.ctx().content_rect().width() >= 760.0 {
-                    32.0
-                } else {
-                    TOUCH
-                };
-                let button_height = height;
-                let height = if inline { height } else { 2.0 * height + GAP };
-                ui.allocate_ui_with_layout(Vec2::new(width, height), layout, |ui| {
-                    ui.spacing_mut().item_spacing = Vec2::splat(GAP);
-                    let response = ui.add_sized(
-                        [width.min(220.0), button_height],
-                        egui::Button::new(RichText::new("Buscar música").color(palette.on_accent))
-                            .fill(palette.accent)
-                            .corner_radius(24),
-                    );
-                    self.record("browse-catalog", &response);
-                    if response.clicked() {
-                        self.navigate(Page::Search);
-                    }
-                    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-                    ui.add_enabled_ui(
-                        self.model.as_ref().unwrap().music.can_refresh_home(),
-                        |ui| {
-                            if self.button(
-                                ui,
-                                "youtube-home",
-                                if self.model.as_ref().unwrap().music.home_root() {
-                                    "Actualizar inicio"
-                                } else if !self.internal_ui {
-                                    "Explorar música"
-                                } else {
-                                    "Explorar YouTube Music"
-                                },
-                                width.min(250.0),
-                            ) {
-                                self.model.as_mut().unwrap().refresh_music_home();
-                            }
-                        },
-                    );
-                });
-            });
-    }
-
     pub(super) fn shell(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         let wide = ui.available_width() >= 760.0;
         let ctx = ui.ctx().clone();
@@ -290,7 +208,7 @@ impl DoremiApp {
                     });
                 });
         }
-        if wide {
+        if wide && self.model.as_ref().unwrap().page != Page::Player {
             self.player_bar(ui, palette);
         } else if self.model.as_ref().unwrap().page != Page::Player && self.current_visible() {
             self.mini_player(ui, palette);
@@ -308,6 +226,13 @@ impl DoremiApp {
                     bottom: 8,
                 }))
                 .show(ui, |ui| {
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("doremi")
+                            .font(theme::bold(28.0))
+                            .color(palette.accent),
+                    );
+                    ui.add_space(24.0);
                     for (page, name, label) in navigation() {
                         let icon = navigation_icon(page);
                         let response = theme::nav_row(
@@ -433,7 +358,7 @@ impl DoremiApp {
             });
     }
 
-    fn icon_control(
+    pub(super) fn icon_control(
         &mut self,
         ui: &mut egui::Ui,
         palette: &Palette,
@@ -455,7 +380,7 @@ impl DoremiApp {
         response.clicked()
     }
 
-    fn play_control(&mut self, ui: &mut egui::Ui, palette: &Palette, size: f32) {
+    pub(super) fn play_control(&mut self, ui: &mut egui::Ui, palette: &Palette, size: f32) {
         let playing = self.model.as_ref().unwrap().queue.playback() == Playback::Playing;
         let response = theme::circle_button_sized(
             ui,
@@ -480,14 +405,14 @@ impl DoremiApp {
         }
     }
 
-    fn transport(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
+    pub(super) fn transport(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
             ui.add_space(((ui.available_width() - transport_width(touch)) / 2.0).max(0.0));
             self.transport_controls(ui, palette, touch);
         });
     }
-    fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
+    pub(super) fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
         ui.add_enabled_ui(self.current_visible(), |ui| {
             self.transport_controls_inner(ui, palette, touch);
         });
@@ -570,7 +495,7 @@ impl DoremiApp {
         }
     }
 
-    fn progress(&mut self, ui: &mut egui::Ui) {
+    pub(super) fn progress(&mut self, ui: &mut egui::Ui) {
         self.progress_sized(ui, 20.0);
     }
     fn progress_sized(&mut self, ui: &mut egui::Ui, height: f32) {
@@ -625,10 +550,10 @@ impl DoremiApp {
         self.record("total-time", &total);
     }
 
-    fn volume(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+    pub(super) fn volume(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.volume_sized(ui, palette, 90.0);
     }
-    fn volume_sized(&mut self, ui: &mut egui::Ui, palette: &Palette, width: f32) {
+    pub(super) fn volume_sized(&mut self, ui: &mut egui::Ui, palette: &Palette, width: f32) {
         theme::icon(ui, Icon::Volume2, 18.0, palette.secondary);
         let model = self.model.as_mut().unwrap();
         let size = Vec2::new(
@@ -666,6 +591,10 @@ impl DoremiApp {
         } else {
             "Elige qué escuchar"
         };
+        let subtitle = current
+            .map(|entry| self.music_byline(&entry.media))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| caption.into());
         let title = model
             .queue
             .current()
@@ -685,7 +614,7 @@ impl DoremiApp {
                     egui::Label::new(RichText::new(&title).font(theme::semibold(14.0))).truncate(),
                 );
                 ui.add(
-                    egui::Label::new(RichText::new(caption).color(palette.secondary)).truncate(),
+                    egui::Label::new(RichText::new(&subtitle).color(palette.secondary)).truncate(),
                 );
             });
         });
@@ -750,7 +679,7 @@ impl DoremiApp {
             .show_separator_line(false)
             .frame(
                 Frame::new()
-                    .fill(palette.surface)
+                    .fill(palette.surface.lerp_to_gamma(palette.accent, 0.07))
                     .stroke(egui::Stroke::new(1.0, palette.outline))
                     .corner_radius(12)
                     .outer_margin(Margin::same(8))
@@ -760,6 +689,14 @@ impl DoremiApp {
                 let model = self.model.as_ref().unwrap();
                 let media = model.queue.current().unwrap().media.clone();
                 let caption = playback_caption(model);
+                let byline = self.music_byline(&media);
+                let caption = if !byline.is_empty()
+                    && !matches!(model.queue.playback(), Playback::Loading | Playback::Failed)
+                {
+                    byline.as_str()
+                } else {
+                    caption
+                };
                 let position = model.queue.position_ms();
                 let failed = model.queue.playback() == Playback::Failed;
                 let (rect, _) = ui.allocate_exact_size(
@@ -788,8 +725,8 @@ impl DoremiApp {
                         .rect_filled(body, 6, palette.surface_hover.gamma_multiply(hover));
                 }
                 let cover = egui::Rect::from_center_size(
-                    egui::pos2(body.left() + 20.0, body.center().y),
-                    Vec2::splat(40.0),
+                    egui::pos2(body.left() + 24.0, body.center().y),
+                    Vec2::splat(48.0),
                 );
                 theme::cover_placeholder(ui, palette, cover, 6.0, Icon::Music);
                 self.media_artwork(ui, &media.id, cover, 6);
@@ -882,6 +819,11 @@ impl DoremiApp {
                     "Volver",
                     true,
                 );
+            ui.label(
+                RichText::new("AHORA SUENA")
+                    .font(theme::semibold(11.0))
+                    .color(palette.secondary),
+            );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.player_favorite(ui, palette);
             });
@@ -912,6 +854,7 @@ impl DoremiApp {
         let title = current.media.title.clone();
         let id = current.media.id.clone();
         let caption = playback_caption(model);
+        let byline = self.music_byline(&current.media);
         let failed = model.queue.playback() == Playback::Failed;
         // Worker notices are already typed, user-facing errors without URLs or secrets.
         // Keep provider refusals visible on mobile just as on the desktop player.
@@ -920,13 +863,14 @@ impl DoremiApp {
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
         // Reserve the header, two title lines, timeline, transport and footer.
         // Tall phones can devote spare height to art without pushing controls away.
-        let art = (height - 380.0)
-            .clamp(96.0, 320.0)
+        let art = (height - 350.0)
+            .clamp(96.0, 360.0)
             .min(ui.available_width());
         ui.vertical_centered(|ui| {
             let (rect, response) = ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
-            theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
-            self.media_artwork(ui, &id, rect, 8);
+            theme::cards::shadow(ui, palette, rect, 16.0);
+            theme::cover_placeholder(ui, palette, rect, 16.0, Icon::Music);
+            self.media_artwork(ui, &id, rect, 16);
             self.record("player-art", &response);
             let mut text = egui::text::LayoutJob::simple(
                 title,
@@ -937,6 +881,16 @@ impl DoremiApp {
             text.wrap.max_rows = 2;
             text.halign = Align::Center;
             ui.add(egui::Label::new(text));
+            if !byline.is_empty() {
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&byline)
+                            .font(theme::regular(15.0))
+                            .color(palette.secondary),
+                    )
+                    .truncate(),
+                );
+            }
             ui.label(
                 RichText::new(caption)
                     .font(theme::regular(13.0))
@@ -1040,7 +994,7 @@ impl DoremiApp {
         }
     }
 
-    fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
+    pub(super) fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.progress_sized(ui, TOUCH);
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = GAP;
@@ -1049,7 +1003,17 @@ impl DoremiApp {
             self.transport_controls(ui, palette, true);
         });
         ui.horizontal(|ui| {
-            let width = (ui.available_width() - TOUCH - 18.0 - 24.0).max(48.0);
+            if self.icon_control(
+                ui,
+                palette,
+                "player-queue",
+                Icon::ListMusic,
+                "Ver cola",
+                true,
+            ) {
+                self.navigate(Page::Queue);
+            }
+            let width = (ui.available_width() - TOUCH * 2.0 - 18.0 - 24.0).max(48.0);
             self.volume_sized(ui, palette, width);
             if self.icon_control(ui, palette, "stop", Icon::Square, "Detener", true) {
                 self.model.as_mut().unwrap().command(Command::Cancel);
@@ -1572,8 +1536,8 @@ mod presentation_tests {
                     .iter()
                     .find(|c| c.name == "browse-catalog")
                     .unwrap();
-                assert!(search.rect[0] >= 20.0);
-                assert!(search.rect[2] <= width - 20.0);
+                assert!(search.rect[0] >= 0.0);
+                assert!(search.rect[2] <= width);
                 assert!(
                     search.rect[1] < 220.0,
                     "Actions must follow the text, not center in the remaining viewport"
@@ -1585,9 +1549,9 @@ mod presentation_tests {
                         .iter()
                         .find(|c| c.name == "youtube-home")
                         .unwrap();
-                    assert!(explore.rect[0] >= 20.0);
-                    assert!(explore.rect[2] <= width - 20.0);
-                    if width < 510.0 {
+                    assert!(explore.rect[0] >= 0.0);
+                    assert!(explore.rect[2] <= width);
+                    if width < 384.0 {
                         assert!(explore.rect[1] >= search.rect[3] + GAP);
                     } else {
                         assert_eq!(explore.rect[1], search.rect[1]);

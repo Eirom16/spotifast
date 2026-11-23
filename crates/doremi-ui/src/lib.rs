@@ -645,16 +645,31 @@ pub fn nav_row(
     let (rect, response) =
         ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     if ui.is_rect_visible(rect) {
-        if active || response.hovered() || response.has_focus() {
+        let emphasis = ui.ctx().animate_bool_with_time(
+            response.id.with("nav-emphasis"),
+            active || response.hovered() || response.has_focus(),
+            ui.style().animation_time.min(0.18),
+        );
+        if emphasis > 0.0 {
             ui.painter().rect_filled(
                 rect,
                 RADIUS,
-                if active {
-                    palette.accent.gamma_multiply(0.14)
-                } else {
-                    palette.surface_hover
-                },
+                palette.panel.lerp_to_gamma(
+                    if active {
+                        palette.surface_active
+                    } else {
+                        palette.surface_hover
+                    },
+                    emphasis,
+                ),
             );
+            if active {
+                ui.painter().rect_filled(
+                    Rect::from_min_size(pos2(rect.left(), rect.center().y - 9.0), vec2(3.0, 18.0)),
+                    2,
+                    palette.accent,
+                );
+            }
         }
         let color = if active {
             palette.accent

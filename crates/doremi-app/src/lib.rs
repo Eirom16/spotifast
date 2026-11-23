@@ -26,6 +26,7 @@ mod youtube_session;
 use doremi_library as persistence;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
+mod home_view;
 mod library_ui;
 mod listening;
 mod local_media;
@@ -1114,24 +1115,7 @@ impl DoremiApp {
                     ui.heading("Para descubrir");
                     self.music_results(ui);
                 }
-                ui.add_space(16.0);
-                ui.heading("Tu biblioteca");
-                let library: Vec<_> = self
-                    .model
-                    .as_ref()
-                    .unwrap()
-                    .library
-                    .items()
-                    .iter()
-                    .filter(|media| self.media_visible(media))
-                    .cloned()
-                    .collect();
-                if library.is_empty() {
-                    ui.weak("Guarda música desde Buscar para encontrarla aquí.");
-                } else {
-                    self.rows(ui, &library);
-                }
-                ui.add_space(16.0);
+                self.home_library(ui);
                 if self.internal_ui {
                     let response=egui::CollapsingHeader::new("Muestras originales y demostración").id_salt("demo-examples").show(ui,|ui| {
                     ui.small("Muestras de prueba CC0 y datos de demostración. No son resultados del catálogo musical.");
