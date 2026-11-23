@@ -1079,6 +1079,41 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(!data.isNull("current") || !data.isNull("audio_metrics"))
             throw new AssertionError("The empty product profile must not fabricate playback");
     }
+    // Visual QA uses live provider metadata and public thumbnails, never invented music.
+    private void musicShowcase() throws Exception {
+        tap("youtube-home");until(90000,"public musical Home",this::catalogLoaded);
+        SystemClock.sleep(8000);capture("qa-showcase-catalog-dark");
+        JSONArray controls=state().getJSONArray("controls");String collection=null;
+        for(int i=0;i<controls.length();i++) {String n=controls.getJSONObject(i).getString("name");if(n.startsWith("catalog-open:")) {collection=n;break;}}
+        if(collection==null) throw new AssertionError("Provider supplied no collection");
+        tap(collection);until(60000,"public collection tracks",this::catalogLoaded);
+        String detail=state().getJSONObject("music_catalog").getString("detail");
+        if(hasControl(state(),"catalog-save:"+detail)) tap("catalog-save:"+detail);
+        java.util.ArrayList<String> tracks=new java.util.ArrayList<>();
+        controls=state().getJSONArray("controls");
+        for(int i=0;i<controls.length();i++) {String n=controls.getJSONObject(i).getString("name");if(n.startsWith("catalog-open:") && n.substring(13).matches("[A-Za-z0-9_-]{11}")) tracks.add(n.substring(13));}
+        if(tracks.isEmpty()) throw new AssertionError("Provider supplied no songs");
+        for(String id:tracks.subList(0,Math.min(3,tracks.size()))) tap("catalog-save:"+id);
+        tap("catalog-open:"+tracks.get(0));until(s -> "Player".equals(s.optString("page")));
+        SystemClock.sleep(8000);if("Playing".equals(state().optString("playback"))) tap("pause");
+        int original=activity.getRequestedOrientation();
+        try {
+            for(boolean landscape:new boolean[]{false,true}) {
+                runOnMainSync(() -> activity.setRequestedOrientation(landscape?ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE:ActivityInfo.SCREEN_ORIENTATION_PORTRAIT));
+                until(s -> (s.optJSONArray("viewport").optDouble(0)>s.optJSONArray("viewport").optDouble(1))==landscape);settledForeground();
+                for(String theme:new String[]{"dark","light"}) {
+                    tap("settings");tap(theme);tap("home");SystemClock.sleep(3000);
+                    String suffix=theme+"-"+(landscape?"landscape":"portrait");
+                    capture("qa-showcase-home-"+suffix);
+                    tap("player");until(s -> "Player".equals(s.optString("page")));
+                    for(String name:new String[]{"previous","next","shuffle","repeat","seek","volume","stop"}) visibleRect(name);
+                    capture("qa-showcase-player-"+suffix);
+                    tap("library");capture("qa-showcase-mini-"+suffix);
+                }
+            }
+            tap("player");tap("stop");
+        } finally {runOnMainSync(() -> activity.setRequestedOrientation(original));}
+    }
     private void productUi() throws Exception {
         int originalOrientation=activity.getRequestedOrientation();
         try {
@@ -1147,6 +1182,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             capture("qa-startup");
             if("rescue-playback".equals(mode)) {
                 rescuePlayback();result.putString("stream","PASS: authorized corpus twice to natural EOF, native output, pause, resume, seek and cancel; isolated profile\n");finish(Activity.RESULT_OK,result);return;
+            }
+            if("music-showcase".equals(mode)) {
+                musicShowcase();result.putString("stream","PASS: live musical content, artwork, saved items, player controls and mini-player; both themes and orientations\n");finish(Activity.RESULT_OK,result);return;
             }
             if("product-ui".equals(mode)) {
                 productUi();

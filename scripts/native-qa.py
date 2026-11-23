@@ -109,6 +109,23 @@ def main():
             wait(lambda s:not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0,60)
             time.sleep(12);capture('home-catalog-dark')
             tap('settings');tap('light');tap('home');time.sleep(8);capture('home-catalog-light')
+            # Keep the provider's exact identities; browse the first real collection.
+            ids=[c['name'] for c in state()['controls'] if c['name'].startswith('catalog-open:')]
+            assert ids
+            tap(ids[0]);wait(lambda s:not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0,60)
+            detail=state()['music_catalog']['detail']
+            if any(c['name']=='catalog-save:'+detail for c in state()['controls']):tap('catalog-save:'+detail)
+            tracks=[c['name'].split(':',1)[1] for c in state()['controls'] if c['name'].startswith('catalog-open:') and len(c['name'].split(':',1)[1])==11]
+            assert tracks,'Collection supplied no playable track IDs'
+            for identity in tracks[:3]:tap('catalog-save:'+identity)
+            tap('catalog-open:'+tracks[0]);wait(lambda s:s['page']=='Player',15)
+            time.sleep(6)
+            if state()['playback']=='Playing':tap('pause')
+            capture('showcase-player-light')
+            tap('settings');tap('dark');tap('home');time.sleep(6);capture('showcase-home-dark')
+            tap('player');capture('showcase-player-dark')
+            tap('home');capture('showcase-mini-dark')
+            tap('settings');tap('light');tap('home');capture('showcase-home-light')
             (output/'report.json').write_text(json.dumps({'result':'pass','binary_sha256':binary_hash,'network':True,'audio':False,'catalog':'public YouTube Music Home'}))
             return
         if args.catalog_library:

@@ -32,6 +32,8 @@ def main():
     parser.add_argument("--commit", required=True)
     parser.add_argument("--profile", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--showcase", action="store_true", help="Opt-in live provider musical content and artwork")
+    parser.add_argument("--runner", type=Path, help="Explicit test-only APK, allows the same visual journey against a baseline app")
     args = parser.parse_args()
     assert re.fullmatch("[a-z0-9][a-z0-9-]{0,47}", args.profile)
     output = args.output.resolve()
@@ -51,15 +53,17 @@ def main():
     installed = adb("shell", "pm", "path", PACKAGE).decode().strip()
     assert installed.startswith("package:") and "\n" not in installed
     assert hashlib.sha256(adb("exec-out", "cat", installed.removeprefix("package:"))).digest() == hashlib.sha256(apk.read_bytes()).digest()
-    adb("install", "-r", "-t", str(args.artifact / "app-debug-androidTest.apk"))
+    adb("install", "-r", "-t", str(args.runner or args.artifact / "app-debug-androidTest.apk"))
     captures = ["qa-startup", "qa-product-ime", "qa-product-library-ime"] + [
         f"qa-product-{page}-{theme}-{orientation}"
         for orientation in ("portrait", "landscape")
         for theme in ("dark", "light")
         for page in ("home", "search", "library", "queue", "settings")
     ]
+    if args.showcase:
+        captures = ["qa-startup", "qa-showcase-catalog-dark"] + [f"qa-showcase-{page}-{theme}-{orientation}" for orientation in ("portrait", "landscape") for theme in ("dark", "light") for page in ("home", "player", "mini")]
     with verifier["qa_session"](args.profile):
-        log = adb("shell", "am", "instrument", "-w", "-e", "mode", "product-ui",
+        log = adb("shell", "am", "instrument", "-w", "-e", "mode", "music-showcase" if args.showcase else "product-ui",
                   "-e", "profile", args.profile,
                   f"{PACKAGE}.test/dev.eirom.doremi.DoremiInstrumentation")
         (output / "instrumentation.log").write_bytes(log)
@@ -89,7 +93,8 @@ def main():
         "result": "pass", "source_commit": args.commit, "physical_device": True,
         "device": {key: adb("shell", "getprop", key).decode().strip()
                    for key in ("ro.product.model", "ro.build.version.sdk", "ro.product.cpu.abilist")},
-        "mode": "product", "private_profile": args.profile, "captures": len(captures),
+        "mode": "music-showcase" if args.showcase else "product",
+        "test_runner_sha256": hashlib.sha256((args.runner or args.artifact / "app-debug-androidTest.apk").read_bytes()).hexdigest(), "private_profile": args.profile, "captures": len(captures),
         "normal_library_sha256": normal_after,
         "checks": ["no internal controls", "four musical filters", "portrait and landscape",
                    "light and dark", "physical IME resize",

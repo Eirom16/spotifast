@@ -151,17 +151,13 @@ impl DoremiApp {
                         for (i, media) in rows.iter().take(16).enumerate() {
                             ui.push_id(("home-saved", &media.id), |ui| {
                                 let subtitle = self.music_byline(media);
-                                let card = self.music_card(
-                                    ui,
-                                    media,
-                                    &subtitle,
-                                    if ui.ctx().content_rect().width() < 760.0 {
-                                        148.0
-                                    } else {
-                                        172.0
-                                    },
-                                    Icon::Music,
-                                );
+                                let card_width = if ui.ctx().content_rect().width() < 760.0 {
+                                    148.0
+                                } else {
+                                    172.0
+                                };
+                                let card =
+                                    self.music_card(ui, media, &subtitle, card_width, Icon::Music);
                                 self.record(
                                     &format!("home-select:{}", media.id.local()),
                                     &card.response,

@@ -119,7 +119,8 @@ impl DoremiApp {
                 ui.add_space(16.0);
                 self.progress(ui);
                 ui.add_space(12.0);
-                self.transport(ui, &palette, ui.available_width() >= 320.0);
+                let large_controls = ui.available_width() >= 320.0;
+                self.transport(ui, &palette, large_controls);
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
                     self.player_favorite(ui, &palette);
@@ -145,7 +146,8 @@ impl DoremiApp {
                     }
                 });
                 ui.horizontal(|ui| {
-                    self.volume_sized(ui, &palette, (ui.available_width() - 48.0).max(48.0));
+                    let slider_width = (ui.available_width() - 48.0).max(48.0);
+                    self.volume_sized(ui, &palette, slider_width);
                 });
             });
         });
