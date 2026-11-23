@@ -675,6 +675,12 @@ impl State {
         self.page
             .iter()
             .chain(self.home_cache.iter().map(|(page, _, _)| page))
+            .chain(
+                self.history
+                    .iter()
+                    .rev()
+                    .filter_map(|entry| entry.page.as_ref()),
+            )
             .find_map(|page| {
                 page.items
                     .iter()

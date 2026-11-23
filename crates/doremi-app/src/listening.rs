@@ -78,8 +78,6 @@ impl DoremiApp {
         if recent.is_empty() {
             return;
         }
-        let prefs = &self.model.as_ref().unwrap().prefs;
-        let palette = doremi_ui::palette(prefs.light, prefs.green);
         ui.add_space(16.0);
         let title = ui.add(
             egui::Button::new(
@@ -116,63 +114,22 @@ impl DoremiApp {
                                 .is_some_and(|entry| entry.media.id == media.id)
                                 && self.model.as_ref().unwrap().queue.playback()
                                     == Playback::Playing;
-                            let response = doremi_ui::cards::card(
+                            let subtitle = self.music_byline(media);
+                            let card_width = if ui.ctx().content_rect().width() < 760.0 {
+                                148.0
+                            } else {
+                                172.0
+                            };
+                            let response = self.music_card(
                                 ui,
-                                &palette,
-                                doremi_ui::cards::Card {
-                                    title: &media.title,
-                                    subtitle: if !self.internal_ui {
-                                        "Escuchado recientemente"
-                                    } else if media.id.provider.as_str() == "wikimedia-commons" {
-                                        "Commons · CC0"
-                                    } else if media.id.provider.as_str() == "youtube-music" {
-                                        "YouTube Music"
-                                    } else {
-                                        "Audio en este dispositivo"
-                                    },
-                                    cover: doremi_ui::cards::CardCover::square(playing),
-                                    play_label: if playing { "Pausar" } else { "Reproducir" },
-                                    play_size: if ui.ctx().content_rect().width() < 760.0 {
-                                        TOUCH
-                                    } else {
-                                        44.0
-                                    },
+                                media,
+                                if subtitle.is_empty() {
+                                    "Escuchado recientemente"
+                                } else {
+                                    &subtitle
                                 },
-                                |ui, slot| match slot {
-                                    doremi_ui::cards::Slot::Cover { rect, radius } => {
-                                        doremi_ui::cards::shadow(ui, &palette, rect, radius);
-                                        doremi_ui::cover_placeholder(
-                                            ui,
-                                            &palette,
-                                            rect,
-                                            radius,
-                                            doremi_ui::Icon::Music,
-                                        );
-                                        self.media_artwork(
-                                            ui,
-                                            &media.id,
-                                            rect,
-                                            radius.min(127.0) as u8,
-                                        );
-                                    }
-                                    doremi_ui::cards::Slot::Text {
-                                        text,
-                                        rect,
-                                        font,
-                                        color,
-                                        rows,
-                                    } => {
-                                        let mut text = egui::text::LayoutJob::simple(
-                                            text.into(),
-                                            font,
-                                            color,
-                                            rect.width(),
-                                        );
-                                        text.wrap.max_rows = rows;
-                                        let galley = ui.painter().layout_job(text);
-                                        ui.painter().galley(rect.min, galley, color);
-                                    }
-                                },
+                                card_width,
+                                doremi_ui::Icon::Music,
                             );
                             self.record(
                                 &format!("history-play:{}", media.id.local()),

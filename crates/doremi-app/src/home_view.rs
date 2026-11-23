@@ -39,17 +39,17 @@ impl DoremiApp {
             ui.add_enabled_ui(
                 self.model.as_ref().unwrap().music.can_refresh_home(),
                 |ui| {
-                    if self.choice_button(
-                        ui,
-                        "youtube-home",
-                        if self.model.as_ref().unwrap().music.home_root() {
+                    let response = ui.add_sized(
+                        [if compact { 144.0 } else { 180.0 }, 48.0],
+                        egui::Button::new(if self.model.as_ref().unwrap().music.home_root() {
                             "Actualizar inicio"
                         } else {
                             "Explorar música"
-                        },
-                        180.0,
-                        false,
-                    ) {
+                        })
+                        .corner_radius(24),
+                    );
+                    self.record("youtube-home", &response);
+                    if response.clicked() {
                         self.model.as_mut().unwrap().refresh_music_home();
                     }
                 },
@@ -97,7 +97,9 @@ impl DoremiApp {
                 title: &media.title,
                 subtitle,
                 cover: cards::CardCover {
-                    playable: self.playable_media(media),
+                    playable: self.playable_media(media) && !matches!(icon, Icon::ListMusic),
+                    circular: presentation::metadata_kind(&media.id)
+                        == Some(doremi_core::media::EntityKind::Artist),
                     ..cards::CardCover::square(playing)
                 },
                 play_label: if playing { "Pausar" } else { "Reproducir" },
@@ -162,7 +164,19 @@ impl DoremiApp {
                                     &format!("home-select:{}", media.id.local()),
                                     &card.response,
                                 );
-                                if card.clicked || card.play {
+                                if card.play
+                                    && self
+                                        .model
+                                        .as_ref()
+                                        .unwrap()
+                                        .queue
+                                        .current()
+                                        .is_some_and(|entry| entry.media.id == media.id)
+                                    && self.model.as_ref().unwrap().queue.playback()
+                                        == Playback::Playing
+                                {
+                                    self.model.as_mut().unwrap().command(Command::Pause);
+                                } else if card.clicked || card.play {
                                     self.open_library_entry(&rows, i);
                                 }
                             });
@@ -224,5 +238,81 @@ impl DoremiApp {
                 self.navigate(Page::Library);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn home_favorites_and_playlists_keep_the_existing_navigation_and_queue_intents() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/home-shelf-intents-test");
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
+        let media = songs()[0].clone();
+        let model = app.model.as_mut().unwrap();
+        model.save_media(media.clone());
+        let playlist = model.playlists.create("Playlist de demostración").unwrap();
+        model.playlists.append(playlist, media.clone()).unwrap();
+        let render = |app: &mut DoremiApp, events| {
+            app.controls.clear();
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(640.0, 900.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| app.home_library(ui),
+            );
+            output.textures_delta.clear();
+        };
+        for name in [
+            format!("home-select:{}", media.id.local()),
+            format!("home-playlist:{playlist}"),
+        ] {
+            render(&mut app, vec![]);
+            let rect = app.controls.iter().find(|c| c.name == name).unwrap().rect;
+            let pos = egui::pos2((rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0);
+            for pressed in [true, false] {
+                render(
+                    &mut app,
+                    vec![
+                        egui::Event::PointerMoved(pos),
+                        egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        },
+                    ],
+                );
+            }
+            assert_eq!(
+                app.model
+                    .as_ref()
+                    .unwrap()
+                    .queue
+                    .current()
+                    .unwrap()
+                    .media
+                    .id,
+                media.id
+            );
+            assert!(app.model.as_ref().unwrap().library.contains(&media.id));
+        }
+        assert_eq!(app.model.as_ref().unwrap().page, Page::Playlist);
+        assert_eq!(
+            app.model.as_ref().unwrap().selected_playlist,
+            Some(playlist)
+        );
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
     }
 }

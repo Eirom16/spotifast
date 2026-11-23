@@ -1109,13 +1109,34 @@ impl DoremiApp {
             Page::Home => {
                 self.home_header(ui);
                 self.recent_shelf(ui);
+                let has_collection = self
+                    .model
+                    .as_ref()
+                    .unwrap()
+                    .library
+                    .items()
+                    .iter()
+                    .any(|media| self.media_visible(media))
+                    || self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .playlists
+                        .lists()
+                        .iter()
+                        .any(|list| self.collection_visible(&list.entries));
+                if has_collection {
+                    self.home_library(ui);
+                }
                 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
                 if self.model.as_ref().unwrap().music.home_root() {
                     ui.add_space(16.0);
                     ui.heading("Para descubrir");
                     self.music_results(ui);
                 }
-                self.home_library(ui);
+                if !has_collection {
+                    self.home_library(ui);
+                }
                 if self.internal_ui {
                     let response=egui::CollapsingHeader::new("Muestras originales y demostración").id_salt("demo-examples").show(ui,|ui| {
                     ui.small("Muestras de prueba CC0 y datos de demostración. No son resultados del catálogo musical.");

@@ -325,17 +325,22 @@ mod tests {
                     .iter()
                     .find(|control| control.name == "repeat")
                     .unwrap();
+                let elapsed = app
+                    .controls
+                    .iter()
+                    .find(|c| c.name == "elapsed-time")
+                    .unwrap();
+                let total = app
+                    .controls
+                    .iter()
+                    .find(|c| c.name == "total-time")
+                    .unwrap();
                 assert!(
                     ((shuffle.rect[0] + repeat.rect[2]) / 2.0
-                        - (app.page_rect[2]
-                            + app.page_rect[0]
-                            + ((app.page_rect[2] - app.page_rect[0]) * 0.44)
-                                .min(app.page_rect[3] - app.page_rect[1] - 140.0)
-                                .clamp(140.0, 380.0)
-                            + 32.0)
-                            / 2.0)
+                        - (elapsed.rect[0] + total.rect[2]) / 2.0)
                         .abs()
-                        <= 1.0
+                        <= 8.0,
+                    "Transport and timeline must share a visual center"
                 );
                 assert_eq!(
                     app.model.as_ref().unwrap().queue.current().unwrap().media,

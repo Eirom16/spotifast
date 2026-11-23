@@ -466,7 +466,7 @@ impl DoremiApp {
         ) {
             self.model.as_mut().unwrap().command(Command::Previous);
         }
-        self.play_control(ui, palette, if touch { 64.0 } else { 32.0 });
+        self.play_control(ui, palette, if touch { 64.0 } else { 40.0 });
         if self.icon_control(
             ui,
             palette,
@@ -603,10 +603,10 @@ impl DoremiApp {
             .unwrap_or("Ninguna canción seleccionada")
             .to_owned();
         let row = ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(Vec2::splat(48.0), egui::Sense::hover());
-            theme::cover_placeholder(ui, palette, rect, 4.0, Icon::Music);
+            let (rect, _) = ui.allocate_exact_size(Vec2::splat(56.0), egui::Sense::hover());
+            theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
             if let Some(id) = &id {
-                self.media_artwork(ui, id, rect, 4);
+                self.media_artwork(ui, id, rect, 8);
             }
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width().max(0.0));
@@ -650,7 +650,7 @@ impl DoremiApp {
                 egui::Rect::from_min_max(egui::pos2(rect.right() - side, rect.top()), rect.max),
             ];
             let mut left = ui.new_child(egui::UiBuilder::new().max_rect(bands[0]));
-            left.add_space(18.0);
+            left.add_space(14.0);
             self.now_playing(&mut left, palette);
             let mut center = ui.new_child(egui::UiBuilder::new().max_rect(bands[1]));
             center.add_space(8.0);
@@ -870,7 +870,7 @@ impl DoremiApp {
         let height = (self.page_rect[3] - self.page_rect[1]).max(0.0);
         // Reserve the header, two title lines, timeline, transport and footer.
         // Tall phones can devote spare height to art without pushing controls away.
-        let art = (height - 350.0)
+        let art = (height - 360.0)
             .clamp(96.0, 360.0)
             .min(ui.available_width());
         ui.vertical_centered(|ui| {
@@ -879,25 +879,28 @@ impl DoremiApp {
             theme::cover_placeholder(ui, palette, rect, 16.0, Icon::Music);
             self.media_artwork(ui, &id, rect, 16);
             self.record("player-art", &response);
-            let mut text = egui::text::LayoutJob::simple(
-                title,
-                theme::bold(23.0),
-                palette.text,
-                ui.available_width(),
-            );
-            text.wrap.max_rows = 2;
-            text.halign = Align::Center;
-            ui.add(egui::Label::new(text));
-            ui.label(
+        });
+        ui.add_space(8.0);
+        let mut text = egui::text::LayoutJob::simple(
+            title,
+            theme::bold(24.0),
+            palette.text,
+            ui.available_width(),
+        );
+        text.wrap.max_rows = 2;
+        ui.add(egui::Label::new(text));
+        ui.add(
+            egui::Label::new(
                 RichText::new(caption)
-                    .font(theme::regular(13.0))
+                    .font(theme::regular(14.0))
                     .color(if failed {
                         palette.danger
                     } else {
                         palette.secondary
                     }),
-            );
-        });
+            )
+            .truncate(),
+        );
         if failed {
             ui.colored_label(palette.danger, notice);
         }
@@ -1271,7 +1274,7 @@ impl DoremiApp {
 }
 
 fn transport_width(touch: bool) -> f32 {
-    4.0 * if touch { TOUCH } else { 32.0 } + if touch { 64.0 } else { 32.0 } + 4.0 * GAP
+    4.0 * if touch { TOUCH } else { 32.0 } + if touch { 64.0 } else { 40.0 } + 4.0 * GAP
 }
 
 fn repeat_presentation(repeat: Repeat) -> (Icon, &'static str) {
