@@ -406,11 +406,16 @@ impl DoremiApp {
     }
 
     pub(super) fn transport(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            ui.add_space(((ui.available_width() - transport_width(touch)) / 2.0).max(0.0));
-            self.transport_controls(ui, palette, touch);
-        });
+        let width = ui.available_width();
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, if touch { 64.0 } else { 40.0 }),
+            Layout::left_to_right(Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                ui.add_space(((width - transport_width(touch)) / 2.0).max(0.0));
+                self.transport_controls(ui, palette, touch);
+            },
+        );
     }
     pub(super) fn transport_controls(&mut self, ui: &mut egui::Ui, palette: &Palette, touch: bool) {
         ui.add_enabled_ui(self.current_visible(), |ui| {
@@ -996,12 +1001,7 @@ impl DoremiApp {
 
     pub(super) fn mobile_player_controls(&mut self, ui: &mut egui::Ui, palette: &Palette) {
         self.progress_sized(ui, TOUCH);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = GAP;
-            let width = transport_width(true);
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            self.transport_controls(ui, palette, true);
-        });
+        self.transport(ui, palette, true);
         ui.horizontal(|ui| {
             if self.icon_control(
                 ui,

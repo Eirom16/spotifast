@@ -1751,10 +1751,18 @@ mod tests {
                     .filter(|control| control.name.starts_with("catalog-open:"))
                     .collect();
                 assert_eq!(rows.len(), 4);
+                // Home is now a horizontal shelf: later cards intentionally
+                // lie outside its viewport. Painting must stay clipped, while
+                // each card and the first action remain usable on a phone.
+                assert!(rows.iter().all(|row| row.rect[2] - row.rect[0] <= width));
+                assert!(rows[0].rect[0] >= 0.0 && rows[0].rect[2] <= width);
                 assert!(
-                    rows.iter()
-                        .all(|row| row.rect[0] >= 0.0 && row.rect[2] <= width)
+                    output
+                        .shapes
+                        .iter()
+                        .all(|shape| shape.clip_rect.right() <= width)
                 );
+                assert!(rows[0].rect[0] < rows[1].rect[0] && rows[1].rect[0] < rows[2].rect[0]);
                 assert!(app.model.as_ref().unwrap().music.worker.is_none());
             }
         }

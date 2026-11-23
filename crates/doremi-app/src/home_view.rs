@@ -23,38 +23,50 @@ impl DoremiApp {
             })),
         );
         ui.add_space(12.0);
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = Vec2::splat(8.0);
-            let response = ui.add_sized(
-                [180.0, 48.0],
-                egui::Button::new(RichText::new("Buscar música").color(palette.on_accent))
-                    .fill(palette.accent)
-                    .corner_radius(24),
-            );
-            self.record("browse-catalog", &response);
-            if response.clicked() {
-                self.navigate(Page::Search);
-            }
-            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-            ui.add_enabled_ui(
-                self.model.as_ref().unwrap().music.can_refresh_home(),
-                |ui| {
-                    let response = ui.add_sized(
-                        [if compact { 144.0 } else { 180.0 }, 48.0],
-                        egui::Button::new(if self.model.as_ref().unwrap().music.home_root() {
-                            "Actualizar inicio"
-                        } else {
-                            "Explorar música"
-                        })
+        let width = ui.available_width();
+        let explore_width = if compact { 144.0 } else { 180.0 };
+        let inline = width >= 180.0 + GAP + explore_width;
+        let layout = if inline {
+            egui::Layout::left_to_right(egui::Align::Center)
+        } else {
+            egui::Layout::top_down(egui::Align::Min)
+        };
+        ui.allocate_ui_with_layout(
+            Vec2::new(width, if inline { 48.0 } else { 104.0 }),
+            layout,
+            |ui| {
+                ui.spacing_mut().item_spacing = Vec2::splat(8.0);
+                let response = ui.add_sized(
+                    [180.0, 48.0],
+                    egui::Button::new(RichText::new("Buscar música").color(palette.on_accent))
+                        .fill(palette.accent)
                         .corner_radius(24),
-                    );
-                    self.record("youtube-home", &response);
-                    if response.clicked() {
-                        self.model.as_mut().unwrap().refresh_music_home();
-                    }
-                },
-            );
-        });
+                );
+                self.record("browse-catalog", &response);
+                if response.clicked() {
+                    self.navigate(Page::Search);
+                }
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                ui.add_enabled_ui(
+                    self.model.as_ref().unwrap().music.can_refresh_home(),
+                    |ui| {
+                        let response = ui.add_sized(
+                            [if compact { 144.0 } else { 180.0 }, 48.0],
+                            egui::Button::new(if self.model.as_ref().unwrap().music.home_root() {
+                                "Actualizar inicio"
+                            } else {
+                                "Explorar música"
+                            })
+                            .corner_radius(24),
+                        );
+                        self.record("youtube-home", &response);
+                        if response.clicked() {
+                            self.model.as_mut().unwrap().refresh_music_home();
+                        }
+                    },
+                );
+            },
+        );
         ui.add_space(16.0);
     }
 

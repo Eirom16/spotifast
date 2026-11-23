@@ -85,7 +85,7 @@ impl DoremiApp {
                 self.media_artwork(ui, &media.id, rect, 16);
                 self.record("player-art", &response);
             });
-            ui.vertical(|ui| {
+            let content = ui.vertical(|ui| {
                 ui.set_width(ui.available_width().max(0.0));
                 ui.add_space(8.0);
                 ui.label(
@@ -150,6 +150,7 @@ impl DoremiApp {
                     self.volume_sized(ui, &palette, slider_width);
                 });
             });
+            self.record("player-content", &content.response);
         });
         ui.add_space(16.0);
         match playback {
@@ -325,15 +326,23 @@ mod tests {
                     .iter()
                     .find(|control| control.name == "repeat")
                     .unwrap();
-                let cover = app
+                let content = app
                     .controls
                     .iter()
-                    .find(|c| c.name == "player-art")
+                    .find(|c| c.name == "player-content")
                     .unwrap();
-                let center = (cover.rect[2] + 32.0 + app.page_rect[2]) / 2.0;
+                let center = (content.rect[0] + content.rect[2]) / 2.0;
                 assert!(
                     ((shuffle.rect[0] + repeat.rect[2]) / 2.0 - center).abs() <= 1.0,
-                    "Transport must be centered in the content column beside the cover"
+                    "Transport must be centered in its content column: {:?}, {:?}, {:?}",
+                    shuffle.rect,
+                    repeat.rect,
+                    content.rect
+                );
+                assert!(
+                    ((shuffle.rect[1] + shuffle.rect[3]) - (repeat.rect[1] + repeat.rect[3])).abs()
+                        <= 1.0,
+                    "Secondary controls must share a vertical center"
                 );
                 assert_eq!(
                     app.model.as_ref().unwrap().queue.current().unwrap().media,

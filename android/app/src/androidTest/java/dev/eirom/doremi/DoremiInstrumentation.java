@@ -1084,7 +1084,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("youtube-home");until(90000,"public musical Home",this::catalogLoaded);
         SystemClock.sleep(8000);capture("qa-showcase-catalog-dark");
         JSONArray controls=state().getJSONArray("controls");String collection=null;
-        for(int i=0;i<controls.length();i++) {String n=controls.getJSONObject(i).getString("name");if(n.startsWith("catalog-open:")) {collection=n;break;}}
+        for(int i=0;i<controls.length();i++) {String n=controls.getJSONObject(i).getString("name");if(n.startsWith("catalog-open:") && n.substring(13).length()!=11) {collection=n;break;}}
         if(collection==null) throw new AssertionError("Provider supplied no collection");
         tap(collection);until(60000,"public collection tracks",this::catalogLoaded);
         String detail=state().getJSONObject("music_catalog").getString("detail");

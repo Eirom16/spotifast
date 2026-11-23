@@ -110,7 +110,7 @@ def main():
             time.sleep(12);capture('home-catalog-dark')
             tap('settings');tap('light');tap('home');time.sleep(8);capture('home-catalog-light')
             # Keep the provider's exact identities; browse the first real collection.
-            ids=[c['name'] for c in state()['controls'] if c['name'].startswith('catalog-open:')]
+            ids=[c['name'] for c in state()['controls'] if c['name'].startswith('catalog-open:') and len(c['name'].split(':',1)[1])!=11]
             assert ids
             tap(ids[0]);wait(lambda s:not s['music_catalog']['waiting'] and (s['music_catalog']['count'] or 0)>0,60)
             detail=state()['music_catalog']['detail']
