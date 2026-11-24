@@ -57,13 +57,23 @@ def main():
                         process.terminate()
                         raise TimeoutError('Bounded background QA expired')
                     time.sleep(5)
+                    if process.poll() is not None:
+                        break
                     data = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat', private + 'qa-state.json'], capture_output=True, timeout=30)
                     if data.returncode == 0:
                         state = json.loads(data.stdout)
                         # A stale document from a finished process must never
                         # satisfy the census or the playback assertions.
-                        live = adb('shell', 'pidof', PACKAGE).decode().split()
-                        assert str(state['pid']) in live, 'QA state belongs to a dead app process'
+                        live = subprocess.run(['adb', '-d', 'shell', 'pidof', PACKAGE], capture_output=True, timeout=30).stdout.decode().split()
+                        if str(state['pid']) not in live:
+                            # Instrumentation can finish between two reads. Its
+                            # final PASS/result is still required below; never
+                            # turn a dead process's document into a live sample.
+                            try:
+                                process.wait(timeout=1)
+                            except subprocess.TimeoutExpired:
+                                raise AssertionError('QA state belongs to a dead app process') from None
+                            break
                         sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus')}
                         power = adb('shell', 'dumpsys', 'power').decode()
                         sample['screen_off'] = 'Display Power: state=OFF' in power
@@ -73,11 +83,13 @@ def main():
                         if stats.returncode == 0:
                             fields = stats.stdout.decode().rsplit(')', 1)[1].split()
                             sample['cpu_ticks'] = int(fields[11]) + int(fields[12])
-                        command = f'for task_dir in /proc/{int(state["pid"])}/task/*; do cat "$task_dir/comm" 2>/dev/null; done'
+                        command = f'for task_dir in /proc/{int(state["pid"])}/task/*; do cat "$task_dir/comm" 2>/dev/null || true; done'
                         names = adb('shell', 'run-as ' + PACKAGE + ' sh -c ' + shlex.quote(command)).decode().splitlines()
                         sample['audio_owners'] = names.count('doremi-audio')
                         sample['playback_owners'] = names.count('doremi-playback')
-                        assert sample['audio_owners'] <= 1 and sample['playback_owners'] <= 1, 'Duplicate native music owner'
+                        if process.poll() is not None:
+                            break
+                        assert sample['audio_owners'] <= 1 and sample['playback_owners'] == 1, 'Missing or duplicate native music owner'
                         samples.append(sample)
                         if sample['screen_off']:
                             (output / 'screen-off-services.txt').write_bytes(adb('shell', 'dumpsys', 'activity', 'services', PACKAGE))
