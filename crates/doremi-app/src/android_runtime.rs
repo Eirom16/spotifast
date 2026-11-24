@@ -3,6 +3,34 @@
 use super::*;
 use std::sync::mpsc::{self, SyncSender};
 
+/// A GL surface may retire while its CPU frame is in flight. egui requires
+/// explicit acknowledgement before an unapplied texture delta is discarded.
+/// Owning that cleanup here covers both a queued frame and a failed send.
+pub(super) struct RenderedFrame {
+    pub output: egui::FullOutput,
+    pub primitives: Vec<egui::ClippedPrimitive>,
+    pub data: String,
+}
+impl RenderedFrame {
+    pub fn new(ctx: &egui::Context, output: egui::FullOutput) -> Self {
+        let mut frame = Self {
+            output,
+            primitives: Vec::new(),
+            data: String::new(),
+        };
+        frame.primitives =
+            ctx.tessellate(frame.output.shapes.clone(), frame.output.pixels_per_point);
+        frame
+    }
+}
+impl Drop for RenderedFrame {
+    fn drop(&mut self) {
+        // On a rendered frame the painter has already consumed these. On a
+        // retired surface its entire GL context is being discarded instead.
+        self.output.textures_delta.clear();
+    }
+}
+
 type Artwork = Option<(u64, Arc<egui::ColorImage>)>;
 type Job = Box<dyn FnOnce(&mut DoremiApp, &mut egui::Context) + Send>;
 pub(super) struct Runtime {
@@ -154,6 +182,64 @@ impl Drop for Runtime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replacing_the_surface_context_keeps_the_music_model_and_draws_again() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/background-context-recreate");
+        DoremiApp::shutdown();
+        let mut ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        app.internal_ui = true;
+        app.model
+            .as_mut()
+            .unwrap()
+            .start_context(songs()[..3].to_vec(), 0);
+        app.model.as_mut().unwrap().page = Page::Player;
+        let instance = app.instance;
+        for replacement in 0..3 {
+            for frame_index in 0..3 {
+                let output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(384.0, 658.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| app.draw(ui),
+                );
+                let mut frame = RenderedFrame::new(&ctx, output);
+                frame.data = "retired surface".into();
+                assert_eq!(frame.data, "retired surface");
+                assert!(!frame.primitives.is_empty());
+                let (send, receive) = mpsc::sync_channel(1);
+                if frame_index == 0 {
+                    assert!(!frame.output.textures_delta.is_empty());
+                }
+                if replacement % 2 == 0 {
+                    // Renderer went away before the worker could send.
+                    drop(receive);
+                    assert!(send.send(frame).is_err());
+                } else {
+                    // Renderer went away after a frame had been queued.
+                    assert!(send.send(frame).is_ok());
+                    drop(receive);
+                }
+            }
+            ctx = egui::Context::default();
+            doremi_ui::install(&ctx);
+            app.artwork_textures = artwork::Textures::default();
+            assert_eq!(app.instance, instance);
+            assert_eq!(
+                app.model.as_ref().unwrap().queue.playback(),
+                Playback::Playing
+            );
+        }
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
     #[test]
     fn music_actor_serializes_transport_and_keeps_one_instance_without_frames() {
         let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();

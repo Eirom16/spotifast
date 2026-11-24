@@ -19,7 +19,7 @@ unsafe extern "C" {
     fn eglGetProcAddress(name: *const c_char) -> *const c_void;
 }
 
-type RenderedFrame = (egui::FullOutput, Vec<egui::ClippedPrimitive>, String);
+use super::android_runtime::RenderedFrame;
 struct Renderer {
     pending: Option<std::sync::mpsc::Receiver<RenderedFrame>>,
     painter: Painter,
@@ -180,18 +180,19 @@ pub extern "system" fn native_draw(
         let (send, receive) = std::sync::mpsc::sync_channel(1);
         let text_generation = renderer.text_generation;
         if !post(move |app, ctx| {
-            let output = ctx.run_ui(input, |ui| app.draw(ui));
-            let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+            let mut frame = RenderedFrame::new(ctx,ctx.run_ui(input, |ui| app.draw(ui)));
+            let output=&frame.output;
             let model = app.model.as_ref().unwrap();
             let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v|v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
             let data = serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":app.can_go_back(), "editor_target":app.editor.key(), "editor_text":app.editor_text(), "input_generation":text_generation, "file_request":model.local_files.selector.unwrap_or(0), "session_request":model.music.session.picker_request(), "auth_request":model.music.session.authorization_request(), "playback_active":model.real_audio() && model.queue.play_requested() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading), "next_ms":delay}).to_string();
-            let _ = send.send((output, primitives, data));
+            frame.data=data;
+            let _ = send.send(frame);
         }) { return r#"{"next_ms":16}"#.into(); }
         receive
         };
         // Only the GL thread waits for a CPU frame; the Android main thread and
         // audio callback never wait for this mailbox. No network runs on owner.
-        let (mut output, primitives, data) = match receive.recv_timeout(Duration::from_millis(100)) {
+        let mut frame = match receive.recv_timeout(Duration::from_millis(100)) {
             Ok(frame)=>frame,
             Err(std::sync::mpsc::RecvTimeoutError::Timeout)=>{
                 // Preserve the texture delta and retry the SAME frame. Dropping
@@ -202,8 +203,8 @@ pub extern "system" fn native_draw(
             Err(_)=>return "{}".into(),
         };
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
-        renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
-        data
+        renderer.painter.paint_and_update_textures([width as u32,height as u32], frame.output.pixels_per_point,&frame.primitives,&mut frame.output.textures_delta);
+        std::mem::take(&mut frame.data)
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
