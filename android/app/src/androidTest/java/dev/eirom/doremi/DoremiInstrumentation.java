@@ -1177,6 +1177,15 @@ public final class DoremiInstrumentation extends Instrumentation {
         }
         throw new AssertionError("No real MediaSession");
     }
+    private void sessionState(android.media.session.MediaController controller,int expected) {
+        long deadline=SystemClock.uptimeMillis()+5000;
+        while(SystemClock.uptimeMillis()<deadline) {
+            android.media.session.PlaybackState state=controller.getPlaybackState();
+            if(state!=null && state.getState()==expected) return;
+            SystemClock.sleep(100);
+        }
+        throw new AssertionError("MediaSession state did not match "+expected);
+    }
     private void systemAction(int action) throws Exception {
         // Sends the actual notification PendingIntent, including its epoch.
         final android.app.PendingIntent[] pending={null};
@@ -1203,8 +1212,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         tap("demo-examples");tap("long-audio");
         until(20000,"local background output",s -> "Playing".equals(s.optString("playback")) && s.optLong("position_ms")>1000);
         android.media.session.MediaController controller=mediaController();
+        sessionState(controller,android.media.session.PlaybackState.STATE_PLAYING);
         long instance=state().getLong("instance"),occurrence=state().getLong("current_occurrence");
         systemAction(1);until(s -> "Paused".equals(s.optString("playback")));
+        sessionState(controller,android.media.session.PlaybackState.STATE_PAUSED);
         long position=state().getLong("position_ms");SystemClock.sleep(700);
         if(state().getLong("position_ms")!=position) throw new AssertionError("System pause advanced");
         systemAction(1);until(s -> "Playing".equals(s.optString("playback")));

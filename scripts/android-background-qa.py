@@ -62,6 +62,11 @@ def main():
                         sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus')}
                         power = adb('shell', 'dumpsys', 'power').decode()
                         sample['screen_off'] = 'mWakefulness=Asleep' in power
+                        sample['wake_lease'] = [line.strip() for line in power.splitlines() if 'Doremi:playback' in line]
+                        stats = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat', '/proc/' + str(state['pid']) + '/stat'], capture_output=True, timeout=30)
+                        if stats.returncode == 0:
+                            fields = stats.stdout.decode().rsplit(')', 1)[1].split()
+                            sample['cpu_ticks'] = int(fields[11]) + int(fields[12])
                         samples.append(sample)
                         if sample['screen_off']:
                             (output / 'screen-off-services.txt').write_bytes(adb('shell', 'dumpsys', 'activity', 'services', PACKAGE))
