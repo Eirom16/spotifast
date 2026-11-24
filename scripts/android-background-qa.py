@@ -60,6 +60,10 @@ def main():
                     data = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat', private + 'qa-state.json'], capture_output=True, timeout=30)
                     if data.returncode == 0:
                         state = json.loads(data.stdout)
+                        # A stale document from a finished process must never
+                        # satisfy the census or the playback assertions.
+                        live = adb('shell', 'pidof', PACKAGE).decode().split()
+                        assert str(state['pid']) in live, 'QA state belongs to a dead app process'
                         sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus')}
                         power = adb('shell', 'dumpsys', 'power').decode()
                         sample['screen_off'] = 'Display Power: state=OFF' in power
