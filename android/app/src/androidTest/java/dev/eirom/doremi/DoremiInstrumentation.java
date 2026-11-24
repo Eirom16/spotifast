@@ -1206,6 +1206,14 @@ public final class DoremiInstrumentation extends Instrumentation {
         try(java.io.FileOutputStream out=new java.io.FileOutputStream(new File(profileDirectory(),name+".png"))) {bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}
         bitmap.recycle();
     }
+    private void returnToApp() throws Exception {
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+        Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dev.eirom.doremi.qa.profile",profile);
+        runOnMainSync(() -> getTargetContext().startActivity(intent));
+        Activity reopened=waitForMonitorWithTimeout(monitor,1200);removeMonitor(monitor);
+        if(reopened!=null) activity=reopened;
+        foreground();
+    }
     private void backgroundPlayback() throws Exception {
         JSONObject report=new JSONObject().put("acoustic_capture",false);
         // Same production engine, deterministic CC0 source for interruption tests.
@@ -1218,7 +1226,12 @@ public final class DoremiInstrumentation extends Instrumentation {
         sessionState(controller,android.media.session.PlaybackState.STATE_PAUSED);
         long position=state().getLong("position_ms");SystemClock.sleep(700);
         if(state().getLong("position_ms")!=position) throw new AssertionError("System pause advanced");
+        runOnMainSync(() -> activity.moveTaskToBack(true));shell("input keyevent 223");
+        long pauseCpu=android.os.Process.getElapsedCpuTime();SystemClock.sleep(32000);
+        if(state().getLong("position_ms")!=position) throw new AssertionError("Screen-off pause advanced");
+        report.put("screen_off_paused_cpu_ms",android.os.Process.getElapsedCpuTime()-pauseCpu).put("paused_wall_ms",32000);
         systemAction(1);until(s -> "Playing".equals(s.optString("playback")));
+        shell("input keyevent 224");shell("wm dismiss-keyguard");returnToApp();
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
         runOnMainSync(() -> activity.recreate());
         Activity replacement=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
@@ -1275,8 +1288,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         controller.getTransportControls().skipToPrevious();until(600000,"system previous",s -> onlinePlaying(s,"qQzdAsjWGPg"));
         controller.getTransportControls().skipToNext();until(600000,"system next",s -> onlinePlaying(s,"_d3SaQI_Ag4"));
         shell("input keyevent 224");shell("wm dismiss-keyguard");
-        Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dev.eirom.doremi.qa.profile",profile);
-        activity=startActivitySync(intent);foreground();
+        returnToApp();
         if(state().optLong("instance")!=liveInstance) throw new AssertionError("Second engine created on reopen");
         capture("qa-background-reopened");
         tap("library");tap("select:qQzdAsjWGPg");until(600000,"UI changes session",s -> onlinePlaying(s,"qQzdAsjWGPg"));SystemClock.sleep(800);
