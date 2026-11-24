@@ -154,6 +154,8 @@ jobs:
           retention-days: 7
 
   windows-host:
+    # Identical Rust has already passed this gate in the successful reused run.
+    if: ${{ !inputs.native_run }}
     runs-on: windows-latest
     timeout-minutes: 35
     env:
