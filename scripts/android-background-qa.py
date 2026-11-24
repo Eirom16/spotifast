@@ -61,7 +61,8 @@ def main():
                         state = json.loads(data.stdout)
                         sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus')}
                         power = adb('shell', 'dumpsys', 'power').decode()
-                        sample['screen_off'] = 'mWakefulness=Asleep' in power
+                        sample['screen_off'] = 'Display Power: state=OFF' in power
+                        sample['wakefulness'] = next((line.strip() for line in power.splitlines() if 'mWakefulness=' in line), '')
                         sample['wake_lease'] = [line.strip() for line in power.splitlines() if 'Doremi:playback' in line]
                         stats = subprocess.run(['adb', '-d', 'exec-out', 'run-as', PACKAGE, 'cat', '/proc/' + str(state['pid']) + '/stat'], capture_output=True, timeout=30)
                         if stats.returncode == 0:

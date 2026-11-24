@@ -98,8 +98,8 @@ public final class PlaybackService extends Service {
     private Notification notification() {
         boolean playing=snapshot.optBoolean("active");
         return new Notification.Builder(this,CHANNEL)
-            .setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(snapshot.optString("title","Doremi"))
-            .setContentText(snapshot.optString("artist","")).setContentIntent(openApp())
+            .setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(snapshot.isNull("title")?"Doremi":snapshot.optString("title"))
+            .setContentText(snapshot.isNull("artist")?"":snapshot.optString("artist")).setContentIntent(openApp())
             .setLargeIcon(artwork).setOnlyAlertOnce(true).setVisibility(Notification.VISIBILITY_PUBLIC)
             .setOngoing(playing).setCategory(Notification.CATEGORY_TRANSPORT)
             .addAction(new Notification.Action.Builder(android.R.drawable.ic_media_previous,"Anterior",action(3)).build())
