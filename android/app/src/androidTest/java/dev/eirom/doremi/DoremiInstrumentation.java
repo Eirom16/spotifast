@@ -1243,6 +1243,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         long home=state().getLong("position_ms");SystemClock.sleep(2000);
         if(state().getLong("position_ms")<=home+1000) throw new AssertionError("Home stopped audio");
         shell("input keyevent 223");
+        SystemClock.sleep(2000);shell("input keyevent 224");SystemClock.sleep(700);systemCapture("qa-background-lockscreen");shell("input keyevent 223");
         final long started=SystemClock.elapsedRealtime();final JSONObject[] last={first.getJSONObject("audio_metrics")};
         final android.media.session.MediaController live=controller;
         until(400000,"background natural EOF",s -> {

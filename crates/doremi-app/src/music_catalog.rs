@@ -701,6 +701,44 @@ impl State {
                     })
             })
     }
+    #[cfg(any(target_os = "android", test))]
+    pub(super) fn session_metadata(&self, id: &MediaId) -> (Option<String>, Option<String>) {
+        let pages = self
+            .page
+            .iter()
+            .chain(self.home_cache.iter().map(|(page, _, _)| page))
+            .chain(
+                self.history
+                    .iter()
+                    .rev()
+                    .filter_map(|entry| entry.page.as_ref()),
+            );
+        let artist = pages
+            .flat_map(|page| &page.items)
+            .find(|item| &item.media.id == id)
+            .and_then(|item| {
+                let credits = item
+                    .artists
+                    .iter()
+                    .map(|credit| credit.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                (!credits.is_empty()).then_some(credits)
+            });
+        let album = std::iter::once((self.detail.as_ref(), self.page.as_ref()))
+            .chain(
+                self.history
+                    .iter()
+                    .rev()
+                    .map(|entry| (entry.detail.as_ref(), entry.page.as_ref())),
+            )
+            .find_map(|(detail, page)| {
+                let detail = detail.filter(|detail| detail.kind == EntityKind::Release)?;
+                page.filter(|page| page.items.iter().any(|item| &item.media.id == id))
+                    .map(|_| detail.media.title.clone())
+            });
+        (artist, album)
+    }
     pub fn home_started(&self) -> bool {
         self.home_started
     }

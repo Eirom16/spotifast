@@ -3,13 +3,14 @@
 use super::*;
 use std::sync::mpsc::{self, SyncSender};
 
+type Artwork = Option<(u64, Arc<egui::ColorImage>)>;
 type Job = Box<dyn FnOnce(&mut DoremiApp, &mut egui::Context) + Send>;
 pub(super) struct Runtime {
     commands: Option<SyncSender<Job>>,
     #[cfg(test)]
     thread: Option<std::thread::JoinHandle<()>>,
     snapshot: Arc<Mutex<String>>,
-    pub(super) artwork: Arc<Mutex<Option<(u64, Arc<egui::ColorImage>)>>>,
+    pub(super) artwork: Arc<Mutex<Artwork>>,
 }
 impl Runtime {
     pub fn start(directory: PathBuf, normal: bool, internal: bool) -> Self {
@@ -20,6 +21,7 @@ impl Runtime {
         let published_artwork = artwork.clone();
         let thread = std::thread::Builder::new().name("doremi-playback".into()).spawn(move || {
             let mut ctx = egui::Context::default();
+            let profile = directory.parent().filter(|parent|parent.file_name().is_some_and(|name|name=="qa")).and_then(|_|directory.file_name()).map(|name|name.to_string_lossy().into_owned());
             let mut app = DoremiApp::new_context(&ctx, directory);
             app.internal_ui = internal;
             if normal {
@@ -53,19 +55,23 @@ impl Runtime {
                 let image = current.and_then(|entry|model.artwork.media_pixels(&entry.media.id));
                 let artwork_version = image.as_ref().map(|(version,_)|*version);
                 *published_artwork.lock().unwrap()=image;
+                let (artist, album)=current.map(|entry|model.music.session_metadata(&entry.media.id)).unwrap_or_default();
                 let state = serde_json::json!({
+                    "profile":profile,"internal_ui":internal,"album":album,
                     "artwork_version":artwork_version,
                     "epoch":epoch,"intent":model.transport_serial,"instance":app.instance,"state":format!("{:?}",model.queue.playback()),
                     "active":model.real_audio() && (wants_play || model.queue.playback()==Playback::Loading),
                     "position":model.queue.position_ms(),"duration":current.and_then(|e|e.media.duration_ms),
                     "title":current.map(|e|&e.media.title),
-                    "artist":current.and_then(|e|model.music.byline(&e.media.id)),
+                    "artist":artist,
                     "id":current.map(|e|e.media.id.local()),"occurrence":current.map(|e|e.id.as_u64()),
                     "notice":model.notice,
-                    "stopped":!matches!(model.queue.playback(),Playback::Loading|Playback::Playing) && model.audio.as_ref().and_then(Engine::current_request).is_none(),
+                    "stopped":model.queue.playback()==Playback::Stopped || !matches!(model.queue.playback(),Playback::Loading|Playback::Playing) && model.audio.as_ref().and_then(Engine::current_request).is_none(),
                 });
                 *published.lock().unwrap() = state.to_string();
-                app.persist(&ctx);
+                if active || app.pending || app.pending_write != 0 || app.saved_revision != model.revision {
+                    app.persist(&ctx);
+                }
             }
             drop(app);
             DoremiApp::shutdown();
@@ -87,6 +93,45 @@ impl Runtime {
         self.commands
             .as_ref()
             .is_some_and(|sender| sender.try_send(Box::new(job)).is_ok())
+    }
+    pub fn control(&self, command: i32, position: i64, epoch: i64) -> bool {
+        let snapshot = self.snapshot.clone();
+        self.post(move |app, _| {
+            // Reject transport actions from a retired notification/track. Focus
+            // revocation and shutdown always apply, including while loading.
+            let snapshot: serde_json::Value =
+                serde_json::from_str(&snapshot.lock().unwrap()).unwrap_or_default();
+            if epoch != 0 && snapshot["epoch"].as_i64() != Some(epoch) {
+                return;
+            }
+            let model = app.model.as_mut().unwrap();
+            match command {
+                0 => {
+                    model.enable_audio();
+                    model.command(Command::Play);
+                }
+                1 => model.command(Command::Pause),
+                2 => model.command(Command::Next),
+                3 => model.command(Command::Previous),
+                4 => {
+                    model.command(Command::Cancel);
+                    model.focus = false;
+                    model.audio.take();
+                }
+                5 => model.command(Command::Seek(position.max(0) as u64)),
+                6 => {
+                    model.focus = true;
+                    if let Some(engine) = &model.audio {
+                        engine.set_playing(model.queue.playback() == Playback::Playing);
+                    }
+                }
+                7 => {
+                    model.focus = false;
+                    model.command_with_import_policy(Command::Pause, false);
+                }
+                _ => {}
+            }
+        })
     }
     pub fn snapshot(&self) -> String {
         self.snapshot.lock().unwrap().clone()
@@ -147,6 +192,60 @@ mod tests {
         let state: serde_json::Value = serde_json::from_str(&runtime.snapshot()).unwrap();
         assert_eq!(state["instance"], instance);
         assert_eq!(state["state"], "Paused");
+        // A paused in-flight load stays paused when Ready eventually arrives.
+        let (send, receive) = mpsc::sync_channel(1);
+        runtime.post(move |app, _| {
+            let model = app.model.as_mut().unwrap();
+            let effects = model
+                .queue
+                .command(Command::StartContext {
+                    media: songs()[..2].to_vec(),
+                    start: 0,
+                    order: Order::Sequential,
+                })
+                .unwrap();
+            let request = effects
+                .into_iter()
+                .find_map(|effect| {
+                    if let Effect::Load { request, .. } = effect {
+                        Some(request)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            send.send(request).unwrap();
+        });
+        let request = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(runtime.control(1, 0, 0));
+        let (send, receive) = mpsc::sync_channel(1);
+        runtime.post(move |app, _| {
+            app.model.as_mut().unwrap().event(Event::Ready(request));
+            assert_eq!(
+                app.model.as_ref().unwrap().queue.playback(),
+                Playback::Paused
+            );
+            send.send(()).unwrap();
+        });
+        receive.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(runtime.control(0, 0, -999)); // a retired notification must do nothing
+        // Negative epochs are not accepted as a wildcard; only zero is internal.
+        let (send, receive) = mpsc::sync_channel(1);
+        runtime.post(move |app, _| {
+            send.send(app.model.as_ref().unwrap().queue.playback())
+                .unwrap();
+        });
+        assert_eq!(
+            receive.recv_timeout(Duration::from_secs(5)).unwrap(),
+            Playback::Paused
+        );
+        assert!(runtime.control(4, 0, 0));
+        let (send, receive) = mpsc::sync_channel(1);
+        runtime.post(move |app, _| {
+            send.send(app.model.as_ref().unwrap().audio.is_none())
+                .unwrap();
+        });
+        assert!(receive.recv_timeout(Duration::from_secs(5)).unwrap());
         drop(runtime);
         let _ = std::fs::remove_dir_all(directory);
     }

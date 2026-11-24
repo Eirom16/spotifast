@@ -329,6 +329,17 @@ impl Model {
         model
     }
     fn command(&mut self, command: Command) {
+        #[cfg(target_os = "android")]
+        if matches!(
+            &command,
+            Command::Play
+                | Command::Next
+                | Command::Previous
+                | Command::Seek(_)
+                | Command::StartContext { .. }
+        ) {
+            self.enable_audio();
+        }
         self.transport_serial += 1;
         self.command_with_import_policy(command, true);
     }

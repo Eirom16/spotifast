@@ -84,6 +84,7 @@ public final class PlaybackService extends Service {
     }
     private PendingIntent openApp() {
         Intent intent=new Intent(this,MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        if(!snapshot.isNull("profile")) intent.putExtra("dev.eirom.doremi.qa.profile",snapshot.optString("profile")).putExtra("dev.eirom.doremi.qa.internalUi",snapshot.optBoolean("internal_ui"));
         // A QA notification must reconnect to its existing isolated owner.
         return PendingIntent.getActivity(this,0,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     }
@@ -187,6 +188,7 @@ public final class PlaybackService extends Service {
                 MediaMetadata.Builder metadata=new MediaMetadata.Builder();
                 if(!snapshot.isNull("title")) metadata.putString(MediaMetadata.METADATA_KEY_TITLE,snapshot.optString("title"));
                 if(!snapshot.isNull("artist")) metadata.putString(MediaMetadata.METADATA_KEY_ARTIST,snapshot.optString("artist"));
+                if(!snapshot.isNull("album")) metadata.putString(MediaMetadata.METADATA_KEY_ALBUM,snapshot.optString("album"));
                 if(!snapshot.isNull("duration")) metadata.putLong(MediaMetadata.METADATA_KEY_DURATION,snapshot.optLong("duration"));
                 int[] pixels=snapshot.isNull("artwork_version")?null:nativeArtwork(snapshot.optLong("artwork_version"));
                 artwork=pixels==null?null:android.graphics.Bitmap.createBitmap(pixels,2,pixels[0],pixels[0],pixels[1],android.graphics.Bitmap.Config.ARGB_8888);

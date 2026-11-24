@@ -19,7 +19,9 @@ unsafe extern "C" {
     fn eglGetProcAddress(name: *const c_char) -> *const c_void;
 }
 
+type RenderedFrame = (egui::FullOutput, Vec<egui::ClippedPrimitive>, String);
 struct Renderer {
+    pending: Option<std::sync::mpsc::Receiver<RenderedFrame>>,
     painter: Painter,
     events: Vec<egui::Event>,
     started: Instant,
@@ -146,6 +148,7 @@ pub extern "system" fn native_init(
         });
         *cell.borrow_mut() = Some(Renderer {
             painter,
+            pending: None,
             events: vec![],
             started: Instant::now(),
             text_generation: input_generation,
@@ -166,6 +169,7 @@ pub extern "system" fn native_draw(
         let mut held = cell.borrow_mut();
         let Some(renderer) = held.as_mut() else { return "{}".to_owned(); };
         if width <= 0 || height <= 0 || scale <= 0.0 { return "{}".to_owned(); }
+        let receive = if let Some(receive) = renderer.pending.take() {receive} else {
         let mut input = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width as f32 / scale,height as f32 / scale))),
             time: Some(renderer.started.elapsed().as_secs_f64()),
@@ -182,10 +186,21 @@ pub extern "system" fn native_draw(
             let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v|v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
             let data = serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":app.can_go_back(), "editor_target":app.editor.key(), "editor_text":app.editor_text(), "input_generation":text_generation, "file_request":model.local_files.selector.unwrap_or(0), "session_request":model.music.session.picker_request(), "auth_request":model.music.session.authorization_request(), "playback_active":model.real_audio() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading), "next_ms":delay}).to_string();
             let _ = send.send((output, primitives, data));
-        }) { return "{}".into(); }
+        }) { return r#"{"next_ms":16}"#.into(); }
+        receive
+        };
         // Only the GL thread waits for a CPU frame; the Android main thread and
         // audio callback never wait for this mailbox. No network runs on owner.
-        let Ok((mut output, primitives, data)) = receive.recv_timeout(Duration::from_millis(500)) else {return "{}".into();};
+        let (mut output, primitives, data) = match receive.recv_timeout(Duration::from_millis(100)) {
+            Ok(frame)=>frame,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)=>{
+                // Preserve the texture delta and retry the SAME frame. Dropping
+                // a late font upload would leave the replacement surface blank.
+                renderer.pending=Some(receive);
+                return r#"{"next_ms":16}"#.into();
+            }
+            Err(_)=>return "{}".into(),
+        };
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
         data
@@ -317,42 +332,7 @@ pub extern "system" fn native_command(
     let Some(runtime) = RUNTIME.get() else {
         return 0;
     };
-    let accepted = runtime.post(move |app, _| {
-        // Reject transport actions from a retired notification/track. Focus
-        // revocation and shutdown always apply, including while loading.
-        let snapshot: serde_json::Value =
-            serde_json::from_str(&RUNTIME.get().unwrap().snapshot()).unwrap_or_default();
-        if epoch > 0 && snapshot["epoch"].as_i64() != Some(epoch) {
-            return;
-        }
-        let model = app.model.as_mut().unwrap();
-        match command {
-            0 => {
-                model.enable_audio();
-                model.command(Command::Play);
-            }
-            1 => model.command(Command::Pause),
-            2 => model.command(Command::Next),
-            3 => model.command(Command::Previous),
-            4 => {
-                model.command(Command::Cancel);
-                model.focus = false;
-                model.audio.take();
-            }
-            5 => model.command(Command::Seek(position.max(0) as u64)),
-            6 => {
-                model.focus = true;
-                if let Some(engine) = &model.audio {
-                    engine.set_playing(model.queue.playback() == Playback::Playing);
-                }
-            }
-            7 => {
-                model.focus = false;
-                model.command_with_import_policy(Command::Pause, false);
-            }
-            _ => {}
-        }
-    });
+    let accepted = runtime.control(command, position, epoch);
     accepted as jboolean
 }
 
