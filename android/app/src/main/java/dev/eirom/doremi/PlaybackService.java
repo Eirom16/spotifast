@@ -154,7 +154,7 @@ public final class PlaybackService extends Service {
         return focusHeld;
     }
     private void focusChanged(int change) {
-        if(closing) return;
+        if(closing || !focusRegistered) return;
         refresh();
         if(change==AudioManager.AUDIOFOCUS_GAIN) {
             focusHeld=true;transientLoss=false;
