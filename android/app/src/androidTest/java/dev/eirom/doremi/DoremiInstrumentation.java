@@ -1275,7 +1275,9 @@ public final class DoremiInstrumentation extends Instrumentation {
         report.put("manual_pause_suppresses_resume",true);
         controller.getTransportControls().stop();until(s -> s.isNull("audio_metrics"));
         SystemClock.sleep(800);if(PlaybackService.controller()!=null) throw new AssertionError("Stopped service survived");
-        report.put("stop_releases_service",true);
+        controller.getTransportControls().play();SystemClock.sleep(300);
+        if(!state().isNull("audio_metrics") || PlaybackService.controller()!=null) throw new AssertionError("Retired controller restarted playback");
+        report.put("stop_releases_service",true).put("retired_controller_rejected",true);
         // Natural EOF with both the Activity and display inactive. No seek.
         tap("library");tap("select:qQzdAsjWGPg");
         JSONObject first=until(600000,"authorized native track",s -> {
