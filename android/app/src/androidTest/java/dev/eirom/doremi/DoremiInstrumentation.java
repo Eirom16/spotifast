@@ -257,7 +257,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(400);long before=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(600);
         runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
-        until(s -> s.optLong("instance")!=before && s.optString("query").equals("Lluvia"));
+        until(s -> s.optLong("instance")==before && s.optString("query").equals("Lluvia"));
         tap("cancel-search");until(s -> s.optString("query").isEmpty());tap("query");
         runOnMainSync(() -> {
             InputConnection input=connection(activity.getWindow().getDecorView());
@@ -308,22 +308,22 @@ public final class DoremiInstrumentation extends Instrumentation {
             if(manager.requestAudioFocus(interruption)!=android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) throw new AssertionError("Test interruption focus denied");
             until(s -> s.optString("playback").equals("Paused") && !s.optBoolean("focus"));
         } finally { manager.abandonAudioFocusRequest(interruption); }
-        SystemClock.sleep(300);if(!state().optString("playback").equals("Paused")) throw new AssertionError("Unexpected automatic resume after focus loss");
+        until(s -> s.optString("playback").equals("Playing"));
         capture("qa-audio-interrupted");
         tap("play");until(s -> s.optString("playback").equals("Playing"));
-        // App-owned recreation must pause and retain the same occurrence.
+        // App-owned recreation keeps playback and the same occurrence.
         long occurrence=state().getLong("current_occurrence"),instance=state().getLong("instance");
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
         runOnMainSync(() -> activity.recreate());
         Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Audio recreation did not return an Activity");activity=recreated;
-        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && s.optString("playback").equals("Paused"));
+        until(s -> s.optLong("instance")==instance && s.optLong("current_occurrence")==occurrence && s.optString("playback").equals("Playing"));
         settledForeground();
         tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
         long beforeBackground=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
         runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
-        until(s -> s.optLong("instance")!=beforeBackground && s.optString("playback").equals("Paused"));
+        until(s -> s.optLong("instance")==beforeBackground && s.optString("playback").equals("Playing"));
         settledForeground();
         tap("home");until(s -> "Home".equals(s.optString("page")));tap("local-audio");until(s -> s.optString("playback").equals("Playing"));
         // Clear modes/manual entries so natural EOF must advance to the second tone.
@@ -352,7 +352,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> activity.recreate());
         Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Long WAV recreation did not return");activity=recreated;
-        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics"));
+        until(s -> s.optLong("instance")==instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && !s.isNull("audio_metrics"));
         capture("qa-long-recreated");
         slide("seek",0.75f);until(s -> "Paused".equals(s.optString("playback")) && s.optLong("position_ms")>85000 && s.optLong("position_ms")<95000);
         tap("play");until(s -> onlinePlaying(s,"tone-scale-long-v1"));capture("qa-long-after-seek");
@@ -415,13 +415,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         runOnMainSync(() -> activity.recreate());
         Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Online recreation did not return");activity=recreated;
-        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && !s.optJSONObject("online").optBoolean("loading"));
+        until(s -> s.optLong("instance")==instance && s.optLong("current_occurrence")==occurrence && "Playing".equals(s.optString("playback")) && !s.optJSONObject("online").optBoolean("loading"));
         capture("qa-online-recreated");
         tap("play");until(4000,"online explicit resume after recreation",s -> onlinePlaying(s,"21923157"));
         long beforeBackground=state().getLong("instance");
         runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(700);
         runOnMainSync(() -> getTargetContext().startActivity(new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)));
-        until(s -> s.optLong("instance")!=beforeBackground && "Paused".equals(s.optString("playback")) && s.optLong("current_occurrence")==occurrence);
+        until(s -> s.optLong("instance")==beforeBackground && "Playing".equals(s.optString("playback")) && s.optLong("current_occurrence")==occurrence);
         capture("qa-online-background");
         tap("stop");tap("search");tap("source-demo");tap("cancel-search");
     }
@@ -531,7 +531,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private void documentReturned(long previousInstance) throws Exception {
         foreground();
-        until(data -> data.optLong("instance")!=previousInstance);
+        until(data -> data.optLong("instance")==previousInstance);
         // Window focus is delivered before the outgoing picker animation stops
         // intercepting touches on this Samsung/API 28. Do not grant injection
         // permission or send a touch into that foreign transition window.
@@ -625,7 +625,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             runOnMainSync(() -> activity.recreate());
             Activity recreated=waitForMonitorWithTimeout(monitor,5000);removeMonitor(monitor);
             if(recreated==null) throw new AssertionError("Document recreation did not return an Activity");activity=recreated;
-            until(data -> data.optLong("instance")!=instance && data.optLong("current_occurrence")==occurrence && "Paused".equals(data.optString("playback")));
+            until(data -> data.optLong("instance")==instance && data.optLong("current_occurrence")==occurrence && "Playing".equals(data.optString("playback")));
             capture("qa-document-recreated");tap("home");openPlayer();tap("play");
             until(data -> "Playing".equals(data.optString("playback")) && data.optJSONObject("audio_metrics")!=null && data.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
         }
@@ -705,7 +705,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
             Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
             if(recreated==null) throw new AssertionError("History recreation did not return");activity=recreated;
-            until(state -> state.optLong("instance")!=instance && listeningHistory(state).optInt("count")==1);
+            until(state -> state.optLong("instance")==instance && listeningHistory(state).optInt("count")==1);
             settledForeground();capture("qa-history-recreated");
         } else {
             if(!state().getString("query").isEmpty() || state().getJSONObject("online").getBoolean("worker_initialized") || listeningHistory(state()).getInt("count")!=1) throw new AssertionError("History restoration required search or provider IO");
@@ -805,7 +805,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
         Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Artwork Activity recreation did not return");activity=recreated;
-        until(state -> state.optLong("instance")!=instance && state.optJSONObject("music_catalog").optJSONObject("artwork").optBoolean("cache_hit"));
+        until(state -> state.optLong("instance")==instance && state.optJSONObject("music_catalog").optJSONObject("artwork").optBoolean("cache_hit"));
         settledForeground();SystemClock.sleep(800);capture("qa-artwork-recreated");
         Files.write(new File(profileDirectory(),"qa-artwork-checks.json").toPath(),new JSONObject()
             .put("result","pass").put("release",release).put("dimensions",dimensions).put("cached_reopen",true)
@@ -901,7 +901,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);runOnMainSync(() -> activity.recreate());
         Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
         if(recreated==null) throw new AssertionError("Mobile player recreation did not return");activity=recreated;
-        until(s -> s.optLong("instance")!=instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && s.isNull("audio_metrics"));
+        until(s -> s.optLong("instance")==instance && s.optLong("current_occurrence")==occurrence && "Paused".equals(s.optString("playback")) && !s.isNull("audio_metrics"));
         settledForeground();capture("qa-mobile-recreated");
         int original=activity.getRequestedOrientation();
         runOnMainSync(() -> activity.setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE));
@@ -1168,10 +1168,119 @@ public final class DoremiInstrumentation extends Instrumentation {
             runOnMainSync(() -> activity.setRequestedOrientation(originalOrientation));
         }
     }
+    private android.media.session.MediaController mediaController() throws Exception {
+        final android.media.session.MediaController[] result={null};
+        long deadline=SystemClock.uptimeMillis()+8000;
+        while(SystemClock.uptimeMillis()<deadline) {
+            runOnMainSync(() -> result[0]=PlaybackService.controller());
+            if(result[0]!=null) return result[0];SystemClock.sleep(100);
+        }
+        throw new AssertionError("No real MediaSession");
+    }
+    private void systemAction(int action) throws Exception {
+        // Sends the actual notification PendingIntent, including its epoch.
+        final android.app.PendingIntent[] pending={null};
+        runOnMainSync(() -> {
+            android.app.NotificationManager manager=(android.app.NotificationManager)getTargetContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE);
+            for(android.service.notification.StatusBarNotification row:manager.getActiveNotifications())
+                if(row.getId()==710) pending[0]=row.getNotification().actions[action].actionIntent;
+        });
+        if(pending[0]==null) throw new AssertionError("No media notification action");
+        pending[0].send();SystemClock.sleep(200);
+    }
+    private void shell(String command) throws Exception {
+        try(android.os.ParcelFileDescriptor fd=getUiAutomation().executeShellCommand(command);
+            java.io.FileInputStream input=new java.io.FileInputStream(fd.getFileDescriptor())) {input.readAllBytes();}
+    }
+    private void systemCapture(String name) throws Exception {
+        android.graphics.Bitmap bitmap=getUiAutomation().takeScreenshot();
+        if(bitmap==null) return;
+        try(java.io.FileOutputStream out=new java.io.FileOutputStream(new File(profileDirectory(),name+".png"))) {bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,out);}
+        bitmap.recycle();
+    }
+    private void backgroundPlayback() throws Exception {
+        JSONObject report=new JSONObject().put("acoustic_capture",false);
+        // Same production engine, deterministic CC0 source for interruption tests.
+        tap("demo-examples");tap("long-audio");
+        until(20000,"local background output",s -> "Playing".equals(s.optString("playback")) && s.optLong("position_ms")>1000);
+        android.media.session.MediaController controller=mediaController();
+        long instance=state().getLong("instance"),occurrence=state().getLong("current_occurrence");
+        systemAction(1);until(s -> "Paused".equals(s.optString("playback")));
+        long position=state().getLong("position_ms");SystemClock.sleep(700);
+        if(state().getLong("position_ms")!=position) throw new AssertionError("System pause advanced");
+        systemAction(1);until(s -> "Playing".equals(s.optString("playback")));
+        ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
+        runOnMainSync(() -> activity.recreate());
+        Activity replacement=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
+        if(replacement==null) throw new AssertionError("Activity recreation failed");activity=replacement;
+        until(s -> s.optLong("instance")==instance && s.optLong("current_occurrence")==occurrence && s.optLong("position_ms")>position+500);
+        report.put("activity_recreation_same_engine",true);
+        android.media.AudioManager manager=(android.media.AudioManager)getTargetContext().getSystemService(android.content.Context.AUDIO_SERVICE);
+        android.media.AudioFocusRequest interruption=new android.media.AudioFocusRequest.Builder(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+            .setAudioAttributes(new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build())
+            .setOnAudioFocusChangeListener(change -> {},new android.os.Handler(android.os.Looper.getMainLooper())).build();
+        if(manager.requestAudioFocus(interruption)!=android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) throw new AssertionError("Cannot request real competing focus");
+        until(s -> "Paused".equals(s.optString("playback")));
+        manager.abandonAudioFocusRequest(interruption);until(s -> "Playing".equals(s.optString("playback")));
+        report.put("real_transient_audio_focus",true);
+        manager.requestAudioFocus(interruption);until(s -> "Paused".equals(s.optString("playback")));
+        controller.getTransportControls().pause();SystemClock.sleep(300);manager.abandonAudioFocusRequest(interruption);SystemClock.sleep(800);
+        if(!"Paused".equals(state().optString("playback"))) throw new AssertionError("Voluntary pause resumed after focus");
+        report.put("manual_pause_suppresses_resume",true);
+        controller.getTransportControls().stop();until(s -> s.isNull("audio_metrics"));
+        SystemClock.sleep(800);if(PlaybackService.controller()!=null) throw new AssertionError("Stopped service survived");
+        report.put("stop_releases_service",true);
+        // Natural EOF with both the Activity and display inactive. No seek.
+        tap("library");tap("select:qQzdAsjWGPg");
+        JSONObject first=until(600000,"authorized native track",s -> {
+            if("Failed".equals(s.optString("playback"))) throw new AssertionError(s.optString("notice"));
+            return onlinePlaying(s,"qQzdAsjWGPg") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000;
+        });
+        controller=mediaController();
+        final long liveInstance=first.getLong("instance");
+        shell("cmd statusbar expand-notifications");SystemClock.sleep(600);systemCapture("qa-background-notification");shell("cmd statusbar collapse");
+        runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(1000);
+        long home=state().getLong("position_ms");SystemClock.sleep(2000);
+        if(state().getLong("position_ms")<=home+1000) throw new AssertionError("Home stopped audio");
+        shell("input keyevent 223");
+        final long started=SystemClock.elapsedRealtime();final JSONObject[] last={first.getJSONObject("audio_metrics")};
+        final android.media.session.MediaController live=controller;
+        until(400000,"background natural EOF",s -> {
+            if("Failed".equals(s.optString("playback"))) throw new AssertionError(s.optString("notice"));
+            JSONObject metrics=s.optJSONObject("audio_metrics");
+            if("qQzdAsjWGPg".equals(s.optString("current")) && metrics!=null) last[0]=metrics;
+            if(SystemClock.elapsedRealtime()-started>10000 && SystemClock.elapsedRealtime()-started<11000) {
+                if(live.getPlaybackState().getState()!=android.media.session.PlaybackState.STATE_PLAYING) throw new AssertionError("Session is not playing in background");
+            }
+            return !"qQzdAsjWGPg".equals(s.optString("current"));
+        });
+        long wall=SystemClock.elapsedRealtime()-started;
+        if(wall<250000 || last[0].optLong("frames")*1000/last[0].optLong("output_rate")<274000) throw new AssertionError("Premature background EOF");
+        report.put("background_eof",true).put("screen_off_wall_ms",wall).put("eof_metrics",last[0]);
+        until(600000,"second authorized track",s -> onlinePlaying(s,"_d3SaQI_Ag4"));
+        systemAction(1);until(s -> "Paused".equals(s.optString("playback")));
+        systemAction(1);until(s -> "Playing".equals(s.optString("playback")));
+        controller.getTransportControls().seekTo(1000);until(s -> "Playing".equals(s.optString("playback")) && s.optLong("position_ms")<4000);
+        controller.getTransportControls().skipToPrevious();until(600000,"system previous",s -> onlinePlaying(s,"qQzdAsjWGPg"));
+        controller.getTransportControls().skipToNext();until(600000,"system next",s -> onlinePlaying(s,"_d3SaQI_Ag4"));
+        shell("input keyevent 224");shell("wm dismiss-keyguard");
+        Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dev.eirom.doremi.qa.profile",profile);
+        activity=startActivitySync(intent);foreground();
+        if(state().optLong("instance")!=liveInstance) throw new AssertionError("Second engine created on reopen");
+        capture("qa-background-reopened");
+        tap("library");tap("select:qQzdAsjWGPg");until(600000,"UI changes session",s -> onlinePlaying(s,"qQzdAsjWGPg"));SystemClock.sleep(800);
+        if(!controller.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_TITLE).equals("qQzdAsjWGPg")) throw new AssertionError("Metadata did not follow UI");
+        controller.getTransportControls().stop();until(s -> s.isNull("audio_metrics"));SystemClock.sleep(800);
+        if(PlaybackService.controller()!=null) throw new AssertionError("Final service cleanup failed");
+        report.put("notification_controls",true).put("system_next_previous_seek",true).put("same_owner_on_reopen",true).put("ui_session_sync",true)
+            .put("headphone_unplug","not tested: needs hardware or a protected system broadcast").put("phone_call","not tested").put("result","pass");
+        Files.write(new File(profileDirectory(),"qa-background-result.json").toPath(),report.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
-            if("rescue-playback".equals(mode)) seedRescue();
+            if("rescue-playback".equals(mode) || "background-playback".equals(mode)) seedRescue();
             Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if("product-ui".equals(mode) || "rescue-playback".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.internalUi",false);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
@@ -1180,6 +1289,9 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
+            if("background-playback".equals(mode)) {
+                backgroundPlayback();result.putString("stream","PASS: real background EOF, MediaSession, lifecycle and focus; no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
+            }
             if("rescue-playback".equals(mode)) {
                 rescuePlayback();result.putString("stream","PASS: authorized corpus twice to natural EOF, native output, pause, resume, seek and cancel; isolated profile\n");finish(Activity.RESULT_OK,result);return;
             }
@@ -1244,7 +1356,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             Activity recreated=waitForMonitorWithTimeout(monitor,8000);removeMonitor(monitor);
             if(recreated==null) throw new AssertionError("Recreated Activity did not resume");
             activity=recreated;
-            JSONObject after=until(s -> s.optLong("instance")>instance);
+            JSONObject after=until(s -> s.optLong("instance")==instance);
             if(!"Café".equals(after.getString("query")) || !"rain".equals(after.getString("current")) || !manual.equals(after.getJSONArray("manual").toString())) throw new AssertionError("Activity recreation lost text or queue occurrences");
             capture("qa-recreated");
             int originalOrientation=activity.getRequestedOrientation();

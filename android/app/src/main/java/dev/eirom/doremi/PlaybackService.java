@@ -118,7 +118,7 @@ public final class PlaybackService extends Service {
     private void transport(int command,long position) {
         if(closing) return;
         refresh();resumeEpoch=0;transientLoss=false;
-        if(command==4) {nativeCommand(4,0,0);finishPlayback();return;}
+        if(command==4) {finishPlayback();return;}
         if(command==0 || command==2 || command==3) {
             promote();
             if(!requestFocus()) return;
@@ -172,7 +172,7 @@ public final class PlaybackService extends Service {
                 if(!transientLoss) releaseFocus();
                 if(pausedAt==0) pausedAt=now;
                 if(foreground && now-pausedAt>30000) {stopForeground(STOP_FOREGROUND_DETACH);foreground=false;}
-                if(now-pausedAt>300000) {nativeCommand(4,0,0);finishPlayback();return;}
+                if(now-pausedAt>300000) {finishPlayback();return;}
             }
             String state=snapshot.optString("state");
             int status="Playing".equals(state)?PlaybackState.STATE_PLAYING:"Loading".equals(state)?PlaybackState.STATE_BUFFERING:
@@ -200,13 +200,13 @@ public final class PlaybackService extends Service {
     };
     private void finishPlayback() {
         if(closing) return;
-        closing=true;handler.removeCallbacksAndMessages(null);resumeEpoch=0;
+        closing=true;nativeCommand(4,0,0);handler.removeCallbacksAndMessages(null);resumeEpoch=0;
         releaseFocus();releaseWake();session.setActive(false);
         stopForeground(STOP_FOREGROUND_REMOVE);((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).cancel(NOTIFICATION);
         stopSelf();
     }
     @Override public void onDestroy() {
-        finishPlayback();nativeCommand(4,0,0);
+        finishPlayback();
         session.setCallback(null);session.release();unregisterReceiver(noisy);
         running=null;super.onDestroy();
     }
