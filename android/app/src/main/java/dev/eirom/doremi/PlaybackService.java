@@ -24,7 +24,7 @@ public final class PlaybackService extends Service {
     private AudioFocusRequest focusRequest;
     private PowerManager.WakeLock wake;
     private boolean focusHeld,focusRegistered,foreground,closing,transientLoss;
-    private long resumeEpoch,resumeIntent,pausedAt,wakeAt,createdAt;
+    private long resumeEpoch,resumeIntent,pausedAt,wakeAt,createdAt,sessionEpoch;
     static MediaController controller() {return running==null?null:running.session.getController();}
     private JSONObject snapshot=new JSONObject();
     private String published="";
@@ -41,7 +41,7 @@ public final class PlaybackService extends Service {
     }
     private final BroadcastReceiver noisy=new BroadcastReceiver() {
         @Override public void onReceive(Context context,Intent intent) {
-            if(AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) transport(1,0);
+            if(AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) dispatch(1,0,0);
         }
     };
     @Override public void onCreate() {
@@ -57,12 +57,12 @@ public final class PlaybackService extends Service {
         session.setPlaybackToLocal(attributes);
         session.setSessionActivity(openApp());
         session.setCallback(new MediaSession.Callback() {
-            @Override public void onPlay() { transport(0,0); }
-            @Override public void onPause() { transport(1,0); }
-            @Override public void onSkipToNext() { transport(2,0); }
-            @Override public void onSkipToPrevious() { transport(3,0); }
-            @Override public void onStop() { transport(4,0); }
-            @Override public void onSeekTo(long position) { transport(5,position); }
+            @Override public void onPlay() { sessionTransport(0,0); }
+            @Override public void onPause() { sessionTransport(1,0); }
+            @Override public void onSkipToNext() { sessionTransport(2,0); }
+            @Override public void onSkipToPrevious() { sessionTransport(3,0); }
+            @Override public void onStop() { sessionTransport(4,0); }
+            @Override public void onSeekTo(long position) { sessionTransport(5,position); }
         },handler);
         session.setActive(true);
         ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(
@@ -117,15 +117,30 @@ public final class PlaybackService extends Service {
     private void refresh() {
         try {snapshot=new JSONObject(nativeSnapshot());} catch(Exception ignored) {snapshot=new JSONObject();}
     }
+    private void sessionTransport(int command,long position) {
+        long expected=sessionEpoch;
+        refresh();
+        // The controller owns the last published session, including retirement
+        // on Stop/sign-out. Never relabel an old callback with a fresh epoch.
+        if(expected==0 || expected!=snapshot.optLong("epoch")) return;
+        dispatch(command,position,expected);
+    }
     private void transport(int command,long position) {
+        refresh();dispatch(command,position,snapshot.optLong("epoch"));
+    }
+    private void dispatch(int command,long position,long epoch) {
         if(closing) return;
-        refresh();resumeEpoch=0;transientLoss=false;
-        if(command==4) {finishPlayback();return;}
+        resumeEpoch=0;transientLoss=false;
+        if(command==4) {
+            nativeCommand(4,0,epoch);
+            handler.removeCallbacks(poll);handler.postDelayed(poll,100);
+            return;
+        }
         if(command==0 || command==2 || command==3) {
             promote();
             if(!requestFocus()) return;
         }
-        if(!nativeCommand(command,position,snapshot.optLong("epoch",0))) {
+        if(!nativeCommand(command,position,epoch)) {
             android.util.Log.e("Doremi","Playback mailbox full");
         }
         if(command==1) {releaseFocus();releaseWake();}
@@ -183,6 +198,7 @@ public final class PlaybackService extends Service {
                 "Failed".equals(state)?PlaybackState.STATE_ERROR:"Stopped".equals(state)?PlaybackState.STATE_STOPPED:PlaybackState.STATE_PAUSED;
             long actions=PlaybackState.ACTION_PLAY|PlaybackState.ACTION_PAUSE|PlaybackState.ACTION_PLAY_PAUSE|PlaybackState.ACTION_STOP|
                 PlaybackState.ACTION_SKIP_TO_NEXT|PlaybackState.ACTION_SKIP_TO_PREVIOUS|PlaybackState.ACTION_SEEK_TO;
+            sessionEpoch=snapshot.optLong("epoch");
             session.setPlaybackState(new PlaybackState.Builder().setActions(actions)
                 .setState(status,snapshot.optLong("position"),status==PlaybackState.STATE_PLAYING?1f:0f,SystemClock.elapsedRealtime()).build());
             String key=snapshot.optLong("epoch")+":"+state+":"+snapshot.optString("artist")+":"+snapshot.optString("album")+":"+snapshot.optString("title")+":"+snapshot.optLong("duration")+":"+snapshot.optLong("artwork_version");
@@ -208,7 +224,7 @@ public final class PlaybackService extends Service {
     };
     private void finishPlayback() {
         if(closing) return;
-        closing=true;nativeCommand(4,0,0);handler.removeCallbacksAndMessages(null);resumeEpoch=0;
+        closing=true;nativeCommand(4,0,snapshot.optLong("epoch"));handler.removeCallbacksAndMessages(null);resumeEpoch=0;
         releaseFocus();releaseWake();session.setActive(false);
         stopForeground(STOP_FOREGROUND_REMOVE);((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).cancel(NOTIFICATION);
         stopSelf();
