@@ -242,6 +242,15 @@ impl Write {
         newer
     }
 }
+/// Names the persistence thread: Linux copies the spawning thread's name, so
+/// an unnamed writer would look like a second music owner to the Android QA
+/// thread census taken while playback runs.
+fn spawn_named(task: impl FnOnce() + Send + 'static) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name("doremi-persist".into())
+        .spawn(task)
+        .expect("persistence writer thread")
+}
 pub struct Writer {
     sender: mpsc::SyncSender<Write>,
     worker: std::thread::JoinHandle<()>,
@@ -263,7 +272,7 @@ impl Writer {
         let output = status.clone();
         let worker = {
             let directory = directory.clone();
-            std::thread::spawn(move || {
+            spawn_named(move || {
                 let mut previous = std::collections::BTreeMap::new();
                 let mut previous_library: Option<collection::Collection> = None;
                 let mut previous_files: Option<local_files::Index> = None;
