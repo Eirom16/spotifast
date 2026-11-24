@@ -5,7 +5,7 @@ use egui_glow::{Painter, ShaderVersion, glow};
 use jni::{
     JNIEnv, JavaVM,
     objects::{GlobalRef, JClass, JObject, JString, JValue},
-    sys::{jboolean, jfloat, jint, jlong, jstring},
+    sys::{jboolean, jfloat, jint, jintArray, jlong, jstring},
 };
 use std::{
     cell::RefCell,
@@ -20,13 +20,12 @@ unsafe extern "C" {
 }
 
 struct Renderer {
-    ctx: egui::Context,
-    app: DoremiApp,
     painter: Painter,
     events: Vec<egui::Event>,
     started: Instant,
     text_generation: jlong,
 }
+static RUNTIME: OnceLock<super::android_runtime::Runtime> = OnceLock::new();
 static APPLICATION: OnceLock<GlobalRef> = OnceLock::new();
 static VM: OnceLock<JavaVM> = OnceLock::new();
 static ACTIVITY_CLASS: OnceLock<GlobalRef> = OnceLock::new();
@@ -36,11 +35,9 @@ thread_local! { static RENDERER: RefCell<Option<Renderer>> = const { RefCell::ne
 // Java queues this intent on the existing GL owner; the main thread never waits.
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeBack")]
 pub extern "system" fn native_back(_: JNIEnv<'_>, _: JClass<'_>) {
-    RENDERER.with(|cell| {
-        if let Some(renderer) = cell.borrow_mut().as_mut() {
-            renderer.app.go_back();
-            renderer.ctx.request_repaint();
-        }
+    post(|app, ctx| {
+        app.go_back();
+        ctx.request_repaint();
     });
 }
 
@@ -138,18 +135,16 @@ pub extern "system" fn native_init(
                 .parent()
                 .and_then(|parent| parent.file_name())
                 .is_some_and(|name| name == "qa");
-        let mut app = DoremiApp::new_context(&ctx, directory);
-        app.internal_ui = qa_ui;
-        app.model.as_mut().unwrap().music.session.restore();
-        if normal_profile && !app.model.as_ref().unwrap().music.home_started() {
-            app.model
-                .as_mut()
-                .unwrap()
-                .youtube_page(doremi_youtube::Request::Home);
-        }
+        RUNTIME.get_or_init(|| {
+            super::android_runtime::Runtime::start(directory, normal_profile, qa_ui)
+        });
+        let attached = ctx.clone();
+        post(move |app, ctx| {
+            *ctx = attached;
+            doremi_ui::install(ctx);
+            app.artwork_textures = artwork::Textures::default();
+        });
         *cell.borrow_mut() = Some(Renderer {
-            ctx,
-            app,
             painter,
             events: vec![],
             started: Instant::now(),
@@ -178,12 +173,22 @@ pub extern "system" fn native_draw(
             ..Default::default()
         };
         input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(scale);
-        let mut output = renderer.ctx.run_ui(input, |ui| renderer.app.draw(ui));
-        let primitives = renderer.ctx.tessellate(output.shapes, output.pixels_per_point);
+        let (send, receive) = std::sync::mpsc::sync_channel(1);
+        let text_generation = renderer.text_generation;
+        if !post(move |app, ctx| {
+            let output = ctx.run_ui(input, |ui| app.draw(ui));
+            let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
+            let model = app.model.as_ref().unwrap();
+            let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v|v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
+            let data = serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":app.can_go_back(), "editor_target":app.editor.key(), "editor_text":app.editor_text(), "input_generation":text_generation, "file_request":model.local_files.selector.unwrap_or(0), "session_request":model.music.session.picker_request(), "auth_request":model.music.session.authorization_request(), "playback_active":model.real_audio() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading), "next_ms":delay}).to_string();
+            let _ = send.send((output, primitives, data));
+        }) { return "{}".into(); }
+        // Only the GL thread waits for a CPU frame; the Android main thread and
+        // audio callback never wait for this mailbox. No network runs on owner.
+        let Ok((mut output, primitives, data)) = receive.recv_timeout(Duration::from_millis(500)) else {return "{}".into();};
         renderer.painter.clear([width as u32,height as u32],[0.06,0.05,0.08,1.0]);
         renderer.painter.paint_and_update_textures([width as u32,height as u32], output.pixels_per_point,&primitives,&mut output.textures_delta);
-        let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-        serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":renderer.app.can_go_back(), "query":renderer.app.model.as_ref().unwrap().query, "editor_target":renderer.app.editor.key(), "editor_text":renderer.app.editor_text(), "input_generation":renderer.text_generation, "file_request":renderer.app.model.as_ref().unwrap().local_files.selector.unwrap_or(0), "session_request":renderer.app.model.as_ref().unwrap().music.session.picker_request(), "auth_request":renderer.app.model.as_ref().unwrap().music.session.authorization_request(), "needs_focus":renderer.app.model.as_ref().unwrap().needs_focus(), "loading_audio":renderer.app.model.as_ref().unwrap().real_audio() && renderer.app.model.as_ref().unwrap().queue.playback() == Playback::Loading, "next_ms":delay}).to_string()
+        data
     });
     env.new_string(output)
         .map_or(std::ptr::null_mut(), |text| text.into_raw())
@@ -253,7 +258,7 @@ pub extern "system" fn native_text(
                 return;
             }
             renderer.text_generation = generation;
-            renderer.app.receive_editor_text(&field, &text);
+            post(move |app, _| app.receive_editor_text(&field, &text));
         }
     });
 }
@@ -268,31 +273,87 @@ pub extern "system" fn native_destroy(_: JNIEnv<'_>, _: JClass<'_>) {
     });
 }
 
-#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeFocus")]
-pub extern "system" fn native_focus(_: JNIEnv<'_>, _: JClass<'_>, granted: jboolean) {
-    RENDERER.with(|cell| {
-        if let Some(renderer) = cell.borrow_mut().as_mut() {
-            let model = renderer.app.model.as_mut().unwrap();
-            model.focus = granted != 0;
-            if !model.focus
-                && model.real_audio()
-                && matches!(
-                    model.queue.playback(),
-                    Playback::Playing | Playback::Loading
-                )
-            {
-                if model.queue.playback() == Playback::Loading && model.online.phase() != "idle" {
-                    model.command_with_import_policy(Command::Cancel, false);
-                } else {
-                    model.command(Command::Pause);
-                }
-                model.notice =
-                    "Audio en pausa: foco no disponible o aplicación en segundo plano.".into();
-            } else if let Some(engine) = &model.audio {
-                engine.set_playing(model.needs_focus() && model.focus);
+fn post(job: impl FnOnce(&mut DoremiApp, &mut egui::Context) + Send + 'static) -> bool {
+    RUNTIME.get().is_some_and(|runtime| runtime.post(job))
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_PlaybackService_nativeSnapshot")]
+pub extern "system" fn native_snapshot(env: JNIEnv<'_>, _: JClass<'_>) -> jstring {
+    let snapshot = RUNTIME.get().map_or_else(|| "{}".into(), |r| r.snapshot());
+    env.new_string(snapshot)
+        .map_or(std::ptr::null_mut(), |s| s.into_raw())
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_PlaybackService_nativeArtwork")]
+pub extern "system" fn native_artwork(env: JNIEnv<'_>, _: JClass<'_>, version: jlong) -> jintArray {
+    let image = RUNTIME.get().and_then(|r| r.artwork.lock().ok()?.clone());
+    let Some((current, image)) = image.filter(|(current, _)| *current == version as u64) else {
+        return std::ptr::null_mut();
+    };
+    let _ = current;
+    let mut pixels = Vec::with_capacity(image.pixels.len() + 2);
+    pixels.extend([image.size[0] as i32, image.size[1] as i32]);
+    pixels.extend(image.pixels.iter().map(|pixel| {
+        let [r, g, b, a] = pixel.to_srgba_unmultiplied();
+        i32::from_be_bytes([a, r, g, b])
+    }));
+    let Ok(array) = env.new_int_array(pixels.len() as i32) else {
+        return std::ptr::null_mut();
+    };
+    if env.set_int_array_region(&array, 0, &pixels).is_err() {
+        return std::ptr::null_mut();
+    }
+    array.into_raw()
+}
+
+#[unsafe(export_name = "Java_dev_eirom_doremi_PlaybackService_nativeCommand")]
+pub extern "system" fn native_command(
+    _: JNIEnv<'_>,
+    _: JClass<'_>,
+    command: jint,
+    position: jlong,
+    epoch: jlong,
+) -> jboolean {
+    let Some(runtime) = RUNTIME.get() else {
+        return 0;
+    };
+    let accepted = runtime.post(move |app, _| {
+        // Reject transport actions from a retired notification/track. Focus
+        // revocation and shutdown always apply, including while loading.
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&RUNTIME.get().unwrap().snapshot()).unwrap_or_default();
+        if epoch > 0 && snapshot["epoch"].as_i64() != Some(epoch) {
+            return;
+        }
+        let model = app.model.as_mut().unwrap();
+        match command {
+            0 => {
+                model.enable_audio();
+                model.command(Command::Play);
             }
+            1 => model.command(Command::Pause),
+            2 => model.command(Command::Next),
+            3 => model.command(Command::Previous),
+            4 => {
+                model.command(Command::Cancel);
+                model.focus = false;
+                model.audio.take();
+            }
+            5 => model.command(Command::Seek(position.max(0) as u64)),
+            6 => {
+                model.focus = true;
+                if let Some(engine) = &model.audio {
+                    engine.set_playing(model.queue.playback() == Playback::Playing);
+                }
+            }
+            7 => {
+                model.focus = false;
+                model.command_with_import_policy(Command::Pause, false);
+            }
+            _ => {}
         }
     });
+    accepted as jboolean
 }
 
 /// Only the file worker calls these Android APIs. No URI is logged or persisted.
@@ -360,14 +421,11 @@ pub extern "system" fn native_document(
         return;
     };
     let uri = String::from(uri);
-    RENDERER.with(|cell| {
-        if let Some(renderer) = cell.borrow_mut().as_mut() {
-            renderer.app.model.as_mut().unwrap().selected_document(
-                generation as u64,
-                uri,
-                &renderer.ctx,
-            );
-        }
+    post(move |app, ctx| {
+        app.model
+            .as_mut()
+            .unwrap()
+            .selected_document(generation as u64, uri, ctx)
     });
 }
 
@@ -487,18 +545,14 @@ pub extern "system" fn native_session_document(
         return;
     };
     let uri = String::from(uri);
-    RENDERER.with(|cell| {
-        if let Some(renderer) = cell.borrow_mut().as_mut() {
-            renderer
-                .app
-                .model
-                .as_mut()
-                .unwrap()
-                .music
-                .session
-                .selected_document(generation as u64, uri);
-            renderer.ctx.request_repaint();
-        }
+    post(move |app, ctx| {
+        app.model
+            .as_mut()
+            .unwrap()
+            .music
+            .session
+            .selected_document(generation as u64, uri);
+        ctx.request_repaint();
     });
 }
 
@@ -514,17 +568,13 @@ pub extern "system" fn native_youtube_auth(
         return;
     };
     let cookie = String::from(cookie);
-    RENDERER.with(|cell| {
-        if let Some(renderer) = cell.borrow_mut().as_mut() {
-            renderer
-                .app
-                .model
-                .as_mut()
-                .unwrap()
-                .music
-                .session
-                .authorized(generation as u64, cookie, status);
-            renderer.ctx.request_repaint();
-        }
+    post(move |app, ctx| {
+        app.model
+            .as_mut()
+            .unwrap()
+            .music
+            .session
+            .authorized(generation as u64, cookie, status);
+        ctx.request_repaint();
     });
 }

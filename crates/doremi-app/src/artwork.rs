@@ -314,6 +314,22 @@ impl State {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
+    #[cfg(any(target_os = "android", test))]
+    pub(super) fn media_pixels(&self, id: &MediaId) -> Option<(u64, Arc<egui::ColorImage>)> {
+        self.cache
+            .iter()
+            .find(|item| &item.id == id && item.expires > Instant::now())
+            .map(|item| (item.version, item.image.clone()))
+            .or_else(|| {
+                (self.selected.as_ref() == Some(id))
+                    .then(|| {
+                        self.pixels
+                            .as_ref()
+                            .map(|pixels| (self.version, pixels.clone()))
+                    })
+                    .flatten()
+            })
+    }
     pub fn snapshot(&self) -> serde_json::Value {
         serde_json::json!({
             "id": self.selected.as_ref().map(MediaId::local), "generation": self.generation,

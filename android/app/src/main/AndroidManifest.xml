@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
     <queries>
         <intent>
@@ -14,6 +17,7 @@
         </intent>
     </queries>
     <application android:label="Doremi" android:icon="@drawable/doremi" android:theme="@style/DoremiTheme" android:allowBackup="false" android:hasCode="true" android:extractNativeLibs="false">
+        <service android:name="dev.eirom.doremi.PlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback" android:stopWithTask="false" />
         <activity android:name="dev.eirom.doremi.YoutubeAuthActivity" android:exported="false" android:process=":youtube_auth" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode" android:windowSoftInputMode="adjustResize" />
         <activity android:name="dev.eirom.doremi.MainActivity" android:exported="true" android:launchMode="singleTask" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode" android:windowSoftInputMode="adjustResize">
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>

@@ -7,6 +7,8 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
+#[cfg(any(target_os = "android", test))]
+mod android_runtime;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod artwork;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -144,6 +146,7 @@ struct Model {
     query: String,
     notice: String,
     revision: u64,
+    transport_serial: u64,
     write_prefs: bool,
     write_queue: bool,
     library: persistence::collection::Collection,
@@ -229,6 +232,7 @@ impl Model {
             query: String::new(),
             notice: "Demostración sin audio. No es reproducción real.".into(),
             revision: 0,
+            transport_serial: 0,
             write_prefs: true,
             write_queue: true,
             library,
@@ -325,6 +329,7 @@ impl Model {
         model
     }
     fn command(&mut self, command: Command) {
+        self.transport_serial += 1;
         self.command_with_import_policy(command, true);
     }
     fn command_with_import_policy(&mut self, command: Command, cancel_import: bool) {
@@ -375,10 +380,6 @@ impl Model {
                 || self.prepared.iter().any(|(id, _)| *id == entry.media.id)
                 || self.online_candidate(&entry.media.id)
         })
-    }
-    #[cfg(target_os = "android")]
-    fn needs_focus(&self) -> bool {
-        self.real_audio() && self.queue.playback() == Playback::Playing
     }
     fn event(&mut self, event: Event) {
         match self.queue.event(event) {
@@ -964,6 +965,15 @@ impl DoremiApp {
 }
 
 impl DoremiApp {
+    #[cfg(any(target_os = "android", test))]
+    fn poll_background(&mut self, ctx: &egui::Context) {
+        self.model.as_mut().unwrap().poll_local(ctx);
+        self.model.as_mut().unwrap().poll_online(ctx);
+        self.model.as_mut().unwrap().music.poll(ctx);
+        self.poll_artwork(ctx);
+        self.model.as_mut().unwrap().poll_audio();
+    }
+
     pub fn draw(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         #[cfg(target_os = "linux")]
