@@ -23,7 +23,7 @@ public final class PlaybackService extends Service {
     private AudioManager audio;
     private AudioFocusRequest focusRequest;
     private PowerManager.WakeLock wake;
-    private boolean focusHeld,foreground,closing,transientLoss;
+    private boolean focusHeld,focusRegistered,foreground,closing,transientLoss;
     private long resumeEpoch,resumeIntent,pausedAt,wakeAt,createdAt;
     static MediaController controller() {return running==null?null:running.session.getController();}
     private JSONObject snapshot=new JSONObject();
@@ -134,6 +134,7 @@ public final class PlaybackService extends Service {
     private boolean requestFocus() {
         if(focusHeld) return true;
         focusHeld=audio.requestAudioFocus(focusRequest)==AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        focusRegistered=focusHeld;
         nativeCommand(focusHeld?6:7,0,0);
         return focusHeld;
     }
@@ -155,7 +156,8 @@ public final class PlaybackService extends Service {
         }
     }
     private void releaseFocus() {
-        audio.abandonAudioFocusRequest(focusRequest);focusHeld=false;
+        if(focusRegistered) {audio.abandonAudioFocusRequest(focusRequest);nativeCommand(8,0,0);}
+        focusRegistered=false;focusHeld=false;
     }
     private void releaseWake() {if(wake.isHeld()) wake.release();wakeAt=0;}
     private final Runnable poll=new Runnable() {

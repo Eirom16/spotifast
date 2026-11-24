@@ -120,6 +120,14 @@ impl Runtime {
                         engine.set_playing(model.queue.playback() == Playback::Playing);
                     }
                 }
+                8 => {
+                    // Abandoning a grant must close the output gate without
+                    // overwriting a newer user intent queued by the UI.
+                    model.focus = false;
+                    if let Some(engine) = &model.audio {
+                        engine.set_playing(false);
+                    }
+                }
                 7 => {
                     model.focus = false;
                     model.command_with_import_policy(Command::Pause, false);
@@ -233,6 +241,16 @@ mod tests {
         assert_eq!(
             receive.recv_timeout(Duration::from_secs(5)).unwrap(),
             Playback::Paused
+        );
+        assert!(runtime.control(8, 0, 0));
+        let (send, receive) = mpsc::sync_channel(1);
+        runtime.post(move |app, _| {
+            let model = app.model.as_ref().unwrap();
+            send.send((model.focus, model.queue.playback())).unwrap();
+        });
+        assert_eq!(
+            receive.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (false, Playback::Paused)
         );
         assert!(runtime.control(4, 0, 0));
         let (send, receive) = mpsc::sync_channel(1);
