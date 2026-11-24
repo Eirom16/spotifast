@@ -1255,6 +1255,20 @@ public final class DoremiInstrumentation extends Instrumentation {
         until(s -> "Paused".equals(s.optString("playback")));
         manager.abandonAudioFocusRequest(interruption);until(s -> "Playing".equals(s.optString("playback")));
         report.put("real_transient_audio_focus",true);
+        android.media.AudioFocusRequest ducking=new android.media.AudioFocusRequest.Builder(interruption)
+            .setFocusGain(android.media.AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).build();
+        if(manager.requestAudioFocus(ducking)!=android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) throw new AssertionError("Ducking focus denied");
+        until(s -> "Paused".equals(s.optString("playback")));
+        manager.abandonAudioFocusRequest(ducking);until(s -> "Playing".equals(s.optString("playback")));
+        report.put("real_ducking_audio_focus",true);
+        android.media.AudioFocusRequest permanent=new android.media.AudioFocusRequest.Builder(interruption)
+            .setFocusGain(android.media.AudioManager.AUDIOFOCUS_GAIN).build();
+        if(manager.requestAudioFocus(permanent)!=android.media.AudioManager.AUDIOFOCUS_REQUEST_GRANTED) throw new AssertionError("Permanent focus denied");
+        until(s -> "Paused".equals(s.optString("playback")));
+        manager.abandonAudioFocusRequest(permanent);SystemClock.sleep(800);
+        if(!"Paused".equals(state().optString("playback"))) throw new AssertionError("Permanent focus loss resumed");
+        controller.getTransportControls().play();until(s -> "Playing".equals(s.optString("playback")));
+        report.put("real_permanent_audio_focus",true);
         manager.requestAudioFocus(interruption);until(s -> "Paused".equals(s.optString("playback")));
         controller.getTransportControls().pause();SystemClock.sleep(300);manager.abandonAudioFocusRequest(interruption);SystemClock.sleep(800);
         if(!"Paused".equals(state().optString("playback"))) throw new AssertionError("Voluntary pause resumed after focus");
