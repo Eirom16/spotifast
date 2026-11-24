@@ -316,12 +316,12 @@ public final class MainActivity extends Activity {
                 long delay=data.optLong("next_ms",10000);
                 long acknowledgedGeneration=data.optLong("input_generation",0);
                 runOnUiThread(() -> {
+                    if(playbackActive) PlaybackService.ensureStarted(MainActivity.this);
                     if(!resumed) return;
                     canGoBack=back;
                     requestDocument(requestedDocument);
                     requestSessionDocument(requestedSession);
                     requestYoutubeAuth(requestedAuth);
-                    if(playbackActive) PlaybackService.ensureStarted(MainActivity.this);
                     updatingInput=true;
                     if(!inputTarget.equals(target)) {
                         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|("session-cookie".equals(target)?android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD:android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));

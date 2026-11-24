@@ -27,7 +27,7 @@ def check(directory, create=False):
     permissions = re.findall(r"uses-permission: name='([^']+)'", badging)
     # AndroidX protects its own dynamic receivers with a signature permission.
     assert set(permissions) <= {PACKAGE + '.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION', 'android.permission.INTERNET', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK', 'android.permission.WAKE_LOCK'}, permissions
-    assert 'android.permission.INTERNET' in permissions
+    assert {'android.permission.INTERNET', 'android.permission.FOREGROUND_SERVICE', 'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK', 'android.permission.WAKE_LOCK'} <= set(permissions)
     assert "native-code: 'arm64-v8a' 'armeabi-v7a'" in badging
     subprocess.run([str(tools / 'apksigner'), 'verify', '--verbose', str(apk)], check=True)
     subprocess.run([str(tools / 'zipalign'), '-c', '-P', '16', '-v', '4', str(apk)], check=True, stdout=subprocess.DEVNULL)

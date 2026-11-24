@@ -183,7 +183,7 @@ public final class PlaybackService extends Service {
                 PlaybackState.ACTION_SKIP_TO_NEXT|PlaybackState.ACTION_SKIP_TO_PREVIOUS|PlaybackState.ACTION_SEEK_TO;
             session.setPlaybackState(new PlaybackState.Builder().setActions(actions)
                 .setState(status,snapshot.optLong("position"),status==PlaybackState.STATE_PLAYING?1f:0f,SystemClock.elapsedRealtime()).build());
-            String key=snapshot.optLong("epoch")+":"+state+":"+snapshot.optString("artist")+":"+snapshot.optLong("artwork_version");
+            String key=snapshot.optLong("epoch")+":"+state+":"+snapshot.optString("artist")+":"+snapshot.optString("album")+":"+snapshot.optString("title")+":"+snapshot.optLong("duration")+":"+snapshot.optLong("artwork_version");
             if(!key.equals(published)) {
                 published=key;
                 MediaMetadata.Builder metadata=new MediaMetadata.Builder();
