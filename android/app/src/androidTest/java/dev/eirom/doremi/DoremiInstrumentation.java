@@ -1287,9 +1287,10 @@ public final class DoremiInstrumentation extends Instrumentation {
         controller=mediaController();
         final long liveInstance=first.getLong("instance");
         shell("cmd statusbar expand-notifications");SystemClock.sleep(600);systemCapture("qa-background-notification");shell("cmd statusbar collapse");
-        runOnMainSync(() -> activity.moveTaskToBack(true));SystemClock.sleep(1000);
+        runOnMainSync(() -> activity.finishAndRemoveTask());SystemClock.sleep(1000);
         long home=state().getLong("position_ms");SystemClock.sleep(2000);
-        if(state().getLong("position_ms")<=home+1000) throw new AssertionError("Home stopped audio");
+        if(state().getLong("position_ms")<=home+1000) throw new AssertionError("Removing the Activity task stopped audio");
+        report.put("removed_from_recents_while_playing",true);
         shell("input keyevent 223");
         SystemClock.sleep(2000);shell("input keyevent 224");SystemClock.sleep(700);systemCapture("qa-background-lockscreen");shell("input keyevent 223");
         final long started=SystemClock.elapsedRealtime();final JSONObject[] last={first.getJSONObject("audio_metrics")};
