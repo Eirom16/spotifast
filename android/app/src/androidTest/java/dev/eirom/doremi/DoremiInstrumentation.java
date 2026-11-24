@@ -1223,7 +1223,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(reopened!=null) activity=reopened;
         foreground();
     }
-    private void backgroundPlayback() throws Exception {
+    private void backgroundPlayback(boolean prefetch) throws Exception {
         JSONObject report=new JSONObject().put("acoustic_capture",false);
         // Same production engine, deterministic CC0 source for interruption tests.
         tap("demo-examples");tap("long-audio");
@@ -1279,11 +1279,12 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(!state().isNull("audio_metrics") || PlaybackService.controller()!=null) throw new AssertionError("Retired controller restarted playback");
         report.put("stop_releases_service",true).put("retired_controller_rejected",true);
         // Natural EOF with both the Activity and display inactive. No seek.
-        tap("library");tap("select:qQzdAsjWGPg");
+        tap("library");long firstStarted=SystemClock.elapsedRealtime();tap("select:qQzdAsjWGPg");
         JSONObject first=until(600000,"authorized native track",s -> {
             if("Failed".equals(s.optString("playback"))) throw new AssertionError(s.optString("notice"));
             return onlinePlaying(s,"qQzdAsjWGPg") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>1000;
         });
+        report.put("first_pcm_ms",SystemClock.elapsedRealtime()-firstStarted);
         controller=mediaController();
         final long liveInstance=first.getLong("instance");
         shell("cmd statusbar expand-notifications");SystemClock.sleep(600);systemCapture("qa-background-notification");shell("cmd statusbar collapse");
@@ -1295,9 +1296,13 @@ public final class DoremiInstrumentation extends Instrumentation {
         SystemClock.sleep(2000);shell("input keyevent 224");SystemClock.sleep(700);systemCapture("qa-background-lockscreen");shell("input keyevent 223");
         final long started=SystemClock.elapsedRealtime();final JSONObject[] last={first.getJSONObject("audio_metrics")};
         final android.media.session.MediaController live=controller;
+        final JSONObject[] prepared={null};
         until(400000,"background natural EOF",s -> {
             if("Failed".equals(s.optString("playback"))) throw new AssertionError(s.optString("notice"));
             JSONObject metrics=s.optJSONObject("audio_metrics");
+            JSONObject online=s.optJSONObject("online");
+            JSONObject pending=online==null?null:online.optJSONObject("prefetch");
+            if(prepared[0]==null && pending!=null && pending.optBoolean("ready")) prepared[0]=new JSONObject(online.toString());
             if("qQzdAsjWGPg".equals(s.optString("current")) && metrics!=null) last[0]=metrics;
             if(SystemClock.elapsedRealtime()-started>10000 && SystemClock.elapsedRealtime()-started<11000) {
                 if(live.getPlaybackState().getState()!=android.media.session.PlaybackState.STATE_PLAYING) throw new AssertionError("Session is not playing in background");
@@ -1307,12 +1312,20 @@ public final class DoremiInstrumentation extends Instrumentation {
         long wall=SystemClock.elapsedRealtime()-started;
         if(wall<250000 || last[0].optLong("frames")*1000/last[0].optLong("output_rate")<274000) throw new AssertionError("Premature background EOF");
         report.put("background_eof",true).put("screen_off_wall_ms",wall).put("eof_metrics",last[0]);
-        until(600000,"second authorized track",s -> onlinePlaying(s,"_d3SaQI_Ag4"));
+        long changed=SystemClock.elapsedRealtime();
+        JSONObject second=until(600000,"second authorized track",s -> onlinePlaying(s,"_d3SaQI_Ag4") && s.optJSONObject("audio_metrics").optLong("nonzero_samples")>0);
+        report.put("queue_change_to_pcm_ms",SystemClock.elapsedRealtime()-changed).put("transition_source",second.optJSONObject("online")).put("prepared",prepared[0]);
+        if(prefetch) {
+            if(prepared[0]==null) throw new AssertionError("No complete prefetch before natural EOF");
+            if(second.getJSONObject("online").getJSONObject("source_cache").getLong("downloads")!=2) throw new AssertionError("Duplicate download during prepared transition");
+        }
         systemAction(1);until(s -> "Paused".equals(s.optString("playback")));
         systemAction(1);until(s -> "Playing".equals(s.optString("playback")));
         controller.getTransportControls().seekTo(1000);until(s -> "Playing".equals(s.optString("playback")) && s.optLong("position_ms")<4000);
         controller.getTransportControls().skipToPrevious();until(600000,"system previous",s -> onlinePlaying(s,"qQzdAsjWGPg"));
+        long nextStarted=SystemClock.elapsedRealtime();
         controller.getTransportControls().skipToNext();until(600000,"system next",s -> onlinePlaying(s,"_d3SaQI_Ag4"));
+        report.put("next_cached_ms",SystemClock.elapsedRealtime()-nextStarted);
         shell("input keyevent 224");shell("wm dismiss-keyguard");
         returnToApp();
         if(state().optLong("instance")!=liveInstance) throw new AssertionError("Second engine created on reopen");
@@ -1321,6 +1334,7 @@ public final class DoremiInstrumentation extends Instrumentation {
         if(!controller.getMetadata().getString(android.media.MediaMetadata.METADATA_KEY_TITLE).equals("qQzdAsjWGPg")) throw new AssertionError("Metadata did not follow UI");
         controller.getTransportControls().stop();until(s -> s.isNull("audio_metrics"));SystemClock.sleep(800);
         if(PlaybackService.controller()!=null) throw new AssertionError("Final service cleanup failed");
+        if(prefetch && !state().getJSONObject("online").isNull("prefetch")) throw new AssertionError("Stop retained prefetch");
         report.put("notification_controls",true).put("system_next_previous_seek",true).put("same_owner_on_reopen",true).put("ui_session_sync",true)
             .put("headphone_unplug","not tested: needs hardware or a protected system broadcast").put("phone_call","not tested").put("result","pass");
         Files.write(new File(profileDirectory(),"qa-background-result.json").toPath(),report.toString(2).getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -1329,7 +1343,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     @Override public void onStart() {
         Bundle result=new Bundle();
         try {
-            if("rescue-playback".equals(mode) || "background-playback".equals(mode)) seedRescue();
+            if("rescue-playback".equals(mode) || "background-playback".equals(mode) || "prefetch-playback".equals(mode)) seedRescue();
             Intent intent=new Intent(getTargetContext(),MainActivity.class).putExtra("dev.eirom.doremi.qa.profile",profile).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if("product-ui".equals(mode) || "rescue-playback".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.internalUi",false);
             if("document-import".equals(mode)) intent.putExtra("dev.eirom.doremi.qa.documentFolder",documentFolder);
@@ -1338,8 +1352,8 @@ public final class DoremiInstrumentation extends Instrumentation {
             // Diagnostics are published before GL finishes painting. PixelCopy
             // requires a real first swap before injecting the first touch.
             capture("qa-startup");
-            if("background-playback".equals(mode)) {
-                backgroundPlayback();result.putString("stream","PASS: real background EOF, MediaSession, lifecycle and focus; no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
+            if("background-playback".equals(mode) || "prefetch-playback".equals(mode)) {
+                backgroundPlayback("prefetch-playback".equals(mode));result.putString("stream","PASS: real background EOF, MediaSession, lifecycle and focus; no acoustic capture\n");finish(Activity.RESULT_OK,result);return;
             }
             if("rescue-playback".equals(mode)) {
                 rescuePlayback();result.putString("stream","PASS: authorized corpus twice to natural EOF, native output, pause, resume, seek and cancel; isolated profile\n");finish(Activity.RESULT_OK,result);return;

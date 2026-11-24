@@ -4,7 +4,6 @@ use doremi_commons as commons;
 use doremi_core::{
     catalog::{ProviderError, SearchRequest, Tick},
     media::{Media, MediaId},
-    queue::RequestId,
     requests::Ticket,
 };
 use doremi_player::{DecodeError, Pcm};
@@ -56,7 +55,6 @@ pub(super) enum Completion {
     },
     Prepared {
         generation: u64,
-        request: RequestId,
         media: MediaId,
         result: Result<Prepared, Error>,
     },
@@ -69,7 +67,6 @@ pub(super) enum Job {
     },
     Source {
         generation: u64,
-        request: RequestId,
         media: MediaId,
         context: egui::Context,
     },
@@ -93,6 +90,9 @@ struct Shared {
     events: Mutex<[Option<Completion>; 2]>,
     phase_generation: AtomicU64,
     phase: AtomicU8,
+    downloads: AtomicU64,
+    cache_hits: AtomicU64,
+    encoded_bytes: AtomicU64,
 }
 impl Shared {
     fn current(&self, lane: usize, generation: u64) -> bool {
@@ -130,6 +130,9 @@ impl Worker {
             events: Mutex::new([None, None]),
             phase_generation: AtomicU64::new(0),
             phase: AtomicU8::new(0),
+            downloads: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            encoded_bytes: AtomicU64::new(0),
         });
         let state = shared.clone();
         let thread = std::thread::Builder::new()
@@ -185,6 +188,11 @@ impl Worker {
             .map(|mut slots| [slots[0].take(), slots[1].take()])
             .unwrap_or([None, None])
     }
+    pub fn diagnostics(&self) -> serde_json::Value {
+        serde_json::json!({"downloads":self.shared.downloads.load(Ordering::Acquire),
+            "cache_hits":self.shared.cache_hits.load(Ordering::Acquire),
+            "encoded_bytes":self.shared.encoded_bytes.load(Ordering::Acquire)})
+    }
     pub fn phase(&self, generation: u64) -> &'static str {
         if self.shared.phase_generation.load(Ordering::Acquire) != generation {
             return "queued";
@@ -238,7 +246,6 @@ fn fail_jobs(mut receiver: mpsc::Receiver<Job>, shared: Arc<Shared>) {
             ),
             Job::Source {
                 generation,
-                request,
                 media,
                 context,
             } => shared.publish(
@@ -246,7 +253,6 @@ fn fail_jobs(mut receiver: mpsc::Receiver<Job>, shared: Arc<Shared>) {
                 generation,
                 Completion::Prepared {
                     generation,
-                    request,
                     media,
                     result: Err(Error::Provider(ProviderError::Transport)),
                 },
@@ -349,7 +355,6 @@ async fn actor(
                     }
                     Job::Source {
                         generation,
-                        request,
                         media,
                         context,
                     } => {
@@ -362,7 +367,6 @@ async fn actor(
                             generation,
                             Completion::Prepared {
                                 generation,
-                                request,
                                 media,
                                 result,
                             },
@@ -391,6 +395,7 @@ async fn source(
         // A queue seek reloads the current item; the whole encoded song is
         // already in memory, so reuse it instead of fetching it again.
         if !legacy && let Some(bytes) = cache.youtube.lock().unwrap().get(media) {
+            state.cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(Prepared::BufferedYouTube(bytes));
         }
         state.phase(generation, 1, ctx);
@@ -410,15 +415,19 @@ async fn source(
                         .map(|stream| Prepared::YouTube(Box::new(stream)))
                 } else {
                     state.phase(generation, 2, ctx);
+                    state.downloads.fetch_add(1, Ordering::Relaxed);
                     doremi_youtube::rescue::prepare(client, media)
                         .await
                         .map(|audio| {
                             let bytes: Arc<[u8]> = audio.bytes.into();
-                            cache
-                                .youtube
-                                .lock()
-                                .unwrap()
-                                .insert(media.clone(), bytes.clone());
+                            if state.current(1, generation) {
+                                let mut encoded = cache.youtube.lock().unwrap();
+                                encoded.insert(media.clone(), bytes.clone());
+                                state.encoded_bytes.store(
+                                    encoded.0.iter().map(|(_, b)| b.len() as u64).sum(),
+                                    Ordering::Release,
+                                );
+                            }
                             Prepared::BufferedYouTube(bytes)
                         })
                 };
@@ -543,6 +552,9 @@ mod cache_tests {
                 events: Mutex::new([None, None]),
                 phase_generation: AtomicU64::new(0),
                 phase: AtomicU8::new(0),
+                downloads: AtomicU64::new(0),
+                cache_hits: AtomicU64::new(0),
+                encoded_bytes: AtomicU64::new(0),
             };
             // Both transports fail if touched: the new load generation must
             // succeed solely from the previous load's prepared audio.
@@ -592,6 +604,9 @@ mod tests {
                 events: Mutex::new([None, None]),
                 phase_generation: AtomicU64::new(0),
                 phase: AtomicU8::new(0),
+                downloads: AtomicU64::new(0),
+                cache_hits: AtomicU64::new(0),
+                encoded_bytes: AtomicU64::new(0),
             });
             let mut catalog = Catalog::new(
                 SessionId(8),

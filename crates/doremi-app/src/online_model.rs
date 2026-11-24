@@ -18,14 +18,27 @@ struct LoadIntent {
     deadline: Instant,
     sent: bool,
 }
+struct PrefetchIntent {
+    generation: u64,
+    media: MediaId,
+    deadline: Instant,
+    started: Instant,
+    sent: bool,
+    result: Option<bool>,
+    elapsed_ms: Option<u64>,
+}
 pub(super) struct State {
     pub selected: bool,
+    pub(super) prefetch_enabled: bool,
+    pub(super) eof_at: Option<Instant>,
+    pub(super) transition_ms: Option<u64>,
     pub origin: Instant,
     session: u64,
     worker: Option<Worker>,
     debounce: Option<Instant>,
     search: Option<SearchIntent>,
     load: Option<LoadIntent>,
+    prefetch: Option<PrefetchIntent>,
     phase_seen: &'static str,
     network: Option<(RequestId, Arc<doremi_commons::progressive::Metrics>)>,
     retired_network: Option<Arc<doremi_commons::progressive::Metrics>>,
@@ -39,12 +52,16 @@ impl State {
     pub fn new() -> Self {
         Self {
             selected: false,
+            prefetch_enabled: true,
+            eof_at: None,
+            transition_ms: None,
             origin: Instant::now(),
             session: 1,
             worker: None,
             debounce: None,
             search: None,
             load: None,
+            prefetch: None,
             phase_seen: "idle",
             network: None,
             retired_network: None,
@@ -61,7 +78,18 @@ impl State {
             .unwrap_or("idle")
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":metrics.total_bytes.load(std::sync::atomic::Ordering::Acquire),"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})})
+        let mut value = serde_json::json!({"request_timeout_ms":doremi_commons::progressive::REQUEST_TIMEOUT_MS,"search_source":if self.selected {"commons"}else{"demo"},"phase":self.phase(),"loading":self.load.is_some(),"search_debounce":self.debounce.is_some(),"worker_initialized":self.worker.is_some(),"retired_network":self.retired_network.as_ref().map(|metrics|{let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests})}),"network":self.network.as_ref().map(|(_,metrics)| {let (bytes,requests)=metrics.snapshot();serde_json::json!({"received_bytes":bytes,"requests":requests,"total_bytes":metrics.total_bytes.load(std::sync::atomic::Ordering::Acquire),"encoded_buffers_bound_bytes":2*(doremi_commons::progressive::CHUNK+1)})})});
+        value["transition_ms"] = serde_json::json!(self.transition_ms);
+        value["source_cache"] = self
+            .worker
+            .as_ref()
+            .map(Worker::diagnostics)
+            .unwrap_or_default();
+        value["prefetch"] = self.prefetch.as_ref().map(|p| serde_json::json!({
+            "media":p.media.local(), "generation":p.generation, "sent":p.sent,
+            "ready":p.result==Some(true), "failed":p.result==Some(false), "elapsed_ms":p.elapsed_ms
+        })).unwrap_or_default();
+        value
     }
     pub fn feedback(&self, status: Status) -> Option<(bool, String)> {
         if !self.selected {
@@ -159,22 +187,42 @@ impl Model {
         if !candidate(id) {
             return false;
         }
-        match self.online_worker().and_then(|worker| worker.next(1)) {
+        // The single source lane can be adopted by a new queue request. Its
+        // generation/media identify the IO; only the current load owns playback.
+        let promoted = self
+            .online
+            .prefetch
+            .take()
+            .filter(|p| p.media == *id && p.result != Some(false));
+        let generation = if let Some(p) = &promoted {
+            Ok(p.generation)
+        } else {
+            self.online_worker().and_then(|worker| worker.next(1))
+        };
+        match generation {
             Ok(generation) => {
                 self.online.load = Some(LoadIntent {
                     generation,
                     request,
                     media: id.clone(),
                     position,
-                    deadline: Instant::now()
-                        + Duration::from_secs(
-                            if id.provider.as_str() == doremi_youtube::PROVIDER {
-                                600
-                            } else {
-                                12
-                            },
-                        ),
-                    sent: false,
+                    deadline: promoted
+                        .as_ref()
+                        .filter(|p| p.result.is_none())
+                        .map(|p| p.deadline)
+                        .unwrap_or_else(|| {
+                            Instant::now()
+                                + Duration::from_secs(
+                                    if id.provider.as_str() == doremi_youtube::PROVIDER {
+                                        600
+                                    } else {
+                                        12
+                                    },
+                                )
+                        }),
+                    sent: promoted
+                        .as_ref()
+                        .is_some_and(|p| p.sent && p.result.is_none()),
                 });
                 self.notice = if id.provider.as_str() == doremi_youtube::PROVIDER {
                     "Preparando audio de YouTube Music…"
@@ -191,6 +239,9 @@ impl Model {
         true
     }
     pub fn cancel_online_load(&mut self, request: Option<RequestId>) {
+        if request.is_none() {
+            self.cancel_prefetch();
+        }
         if self
             .online
             .network
@@ -211,7 +262,59 @@ impl Model {
             }
         }
     }
+    fn cancel_prefetch(&mut self) {
+        if self.online.prefetch.take().is_some()
+            && let Some(worker) = &self.online.worker
+        {
+            let _ = worker.next(1);
+        }
+    }
+    /// Called after queue effects and by the process-owned Android actor, never
+    /// by the renderer alone. One source lane, one bounded encoded cache.
+    pub(super) fn sync_prefetch(&mut self) {
+        // Prefetch only whole encoded YouTube audio. Other source contracts
+        // retain their existing loading behavior (no speculative PCM decode).
+        let target = (self.online.prefetch_enabled
+            && self.queue.playback() == Playback::Playing
+            && self.online.load.is_none()
+            && std::env::var("DOREMI_PLAYBACK_BACKEND").as_deref() != Ok("legacy"))
+        .then(|| self.queue.next_on_end())
+        .flatten()
+        .filter(|e| e.media.id.provider.as_str() == doremi_youtube::PROVIDER)
+        .map(|e| e.media.id.clone());
+        if self.online.prefetch.as_ref().map(|p| &p.media) == target.as_ref() {
+            return;
+        }
+        self.cancel_prefetch();
+        if let Some(media) = target
+            && let Ok(generation) = self.online_worker().and_then(|worker| worker.next(1))
+        {
+            let started = Instant::now();
+            self.online.prefetch = Some(PrefetchIntent {
+                generation,
+                media,
+                deadline: started + Duration::from_secs(600),
+                started,
+                sent: false,
+                result: None,
+                elapsed_ms: None,
+            });
+        }
+    }
     pub fn poll_online(&mut self, ctx: &egui::Context) {
+        self.sync_prefetch();
+        if let Some(p) = &mut self.online.prefetch {
+            if p.result.is_none() && Instant::now() >= p.deadline {
+                p.result = Some(false);
+                let _ = self.online.worker.as_ref().unwrap().next(1);
+            } else if !p.sent && p.result.is_none() {
+                p.sent = self.online.worker.as_ref().unwrap().send(Job::Source {
+                    generation: p.generation,
+                    media: p.media.clone(),
+                    context: ctx.clone(),
+                });
+            }
+        }
         if self.online.debounce.is_some_and(|at| Instant::now() >= at) {
             self.online.debounce = None;
             let result = self
@@ -274,7 +377,6 @@ impl Model {
         {
             load.sent = self.online.worker.as_ref().unwrap().send(Job::Source {
                 generation: load.generation,
-                request: load.request,
                 media: load.media.clone(),
                 context: ctx.clone(),
             });
@@ -305,20 +407,31 @@ impl Model {
                 }
                 Completion::Prepared {
                     generation,
-                    request,
                     media,
                     result,
                 } => {
                     if !self.online.worker.as_ref().unwrap().current(1, generation) {
                         continue;
                     }
-                    if !self.online.load.as_ref().is_some_and(|load| {
-                        load.generation == generation
-                            && load.request == request
-                            && load.media == media
-                    }) {
+                    if let Some(p) = &mut self.online.prefetch
+                        && p.generation == generation
+                        && p.media == media
+                    {
+                        p.result = Some(result.is_ok());
+                        p.elapsed_ms = Some(p.started.elapsed().as_millis() as u64);
+                        // The worker's existing cache retains the compressed
+                        // bytes. No decoder, PCM buffer, notice or queue event.
                         continue;
                     }
+                    if !self
+                        .online
+                        .load
+                        .as_ref()
+                        .is_some_and(|load| load.generation == generation && load.media == media)
+                    {
+                        continue;
+                    }
+                    let request = self.online.load.as_ref().unwrap().request;
                     if self
                         .online
                         .load
@@ -497,6 +610,147 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn playing_queue() -> Model {
+        let mut m = Model::new(Preferences::default());
+        let rows = ["qQzdAsjWGPg", "_d3SaQI_Ag4", "aaaaaaaaaaa"]
+            .into_iter()
+            .map(|id| Media {
+                id: doremi_youtube::id(id).unwrap(),
+                title: id.into(),
+                duration_ms: None,
+            })
+            .collect();
+        // Exercise real queue effects without touching the network/output device.
+        let effects = m
+            .queue
+            .command(Command::StartContext {
+                media: rows,
+                start: 0,
+                order: Order::Sequential,
+            })
+            .unwrap();
+        let request = effects
+            .iter()
+            .find_map(|e| {
+                if let Effect::Load { request, .. } = e {
+                    Some(*request)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        m.event(Event::Ready(request));
+        m
+    }
+    #[test]
+    fn in_flight_next_adopts_one_source_generation_and_the_new_queue_request() {
+        let mut m = playing_queue();
+        let p = m.online.prefetch.as_mut().unwrap();
+        p.sent = true;
+        let generation = p.generation;
+        let media = p.media.clone();
+        m.command(Command::Next);
+        let load = m.online.load.as_ref().unwrap();
+        assert_eq!(load.generation, generation);
+        assert!(load.sent && m.online.prefetch.is_none());
+        // Failure must address the new queue request, never the old occurrence.
+        m.online.worker.as_ref().unwrap().inject_completion(
+            1,
+            Completion::Prepared {
+                generation,
+                media,
+                result: Err(online::Error::YouTube(ProviderError::Unavailable)),
+            },
+        );
+        m.poll_online(&egui::Context::default());
+        assert_eq!(m.queue.playback(), Playback::Failed);
+    }
+    #[test]
+    fn failed_prefetch_is_silent_and_not_retried_but_next_can_load_normally() {
+        let mut m = playing_queue();
+        let p = m.online.prefetch.as_mut().unwrap();
+        p.sent = true;
+        let generation = p.generation;
+        let media = p.media.clone();
+        let notice = m.notice.clone();
+        m.online.worker.as_ref().unwrap().inject_completion(
+            1,
+            Completion::Prepared {
+                generation,
+                media,
+                result: Err(online::Error::YouTube(ProviderError::AccessDenied)),
+            },
+        );
+        for _ in 0..10 {
+            m.poll_online(&egui::Context::default());
+        }
+        assert_eq!(m.notice, notice);
+        assert_eq!(m.queue.playback(), Playback::Playing);
+        assert_eq!(m.online.prefetch.as_ref().unwrap().result, Some(false));
+        assert!(m.online.worker.as_ref().unwrap().current(1, generation));
+        m.command(Command::Next);
+        assert_ne!(m.online.load.as_ref().unwrap().generation, generation);
+    }
+    #[test]
+    fn queue_changes_fence_late_preparation_and_cancel_releases_the_lane() {
+        let mut m = playing_queue();
+        let p = m.online.prefetch.as_ref().unwrap();
+        let generation = p.generation;
+        let media = p.media.clone();
+        m.command(Command::SetOrder(Order::Shuffled(vec![0, 2, 1])));
+        assert_eq!(
+            m.online.prefetch.as_ref().unwrap().media.local(),
+            "aaaaaaaaaaa"
+        );
+        m.online.worker.as_ref().unwrap().inject_completion(
+            1,
+            Completion::Prepared {
+                generation,
+                media,
+                result: Ok(Prepared::BufferedYouTube(vec![1].into())),
+            },
+        );
+        // Do not dispatch network in this fixture.
+        m.online.prefetch.as_mut().unwrap().sent = true;
+        m.poll_online(&egui::Context::default());
+        assert_eq!(m.online.prefetch.as_ref().unwrap().result, None);
+        m.command(Command::Cancel);
+        assert!(m.online.prefetch.is_none() && m.online.load.is_none());
+        assert!(!m.online.worker.as_ref().unwrap().current(1, generation));
+    }
+    #[test]
+    fn ready_prefetch_retains_only_cache_bytes_and_deadline_never_fails_current_audio() {
+        let mut m = playing_queue();
+        let p = m.online.prefetch.as_mut().unwrap();
+        p.sent = true;
+        p.deadline = Instant::now();
+        m.poll_online(&egui::Context::default());
+        assert_eq!(m.online.prefetch.as_ref().unwrap().result, Some(false));
+        assert_eq!(m.queue.playback(), Playback::Playing);
+        m.command(Command::Pause);
+        assert!(m.online.prefetch.is_none());
+        m.command(Command::Play);
+        let p = m.online.prefetch.as_mut().unwrap();
+        p.sent = true;
+        let generation = p.generation;
+        let media = p.media.clone();
+        let bytes: Arc<[u8]> = vec![1, 2, 3].into();
+        m.online.worker.as_ref().unwrap().inject_completion(
+            1,
+            Completion::Prepared {
+                generation,
+                media,
+                result: Ok(Prepared::BufferedYouTube(bytes.clone())),
+            },
+        );
+        m.poll_online(&egui::Context::default());
+        assert_eq!(m.online.prefetch.as_ref().unwrap().result, Some(true));
+        assert_eq!(Arc::strong_count(&bytes), 1); // no extra host audio buffer
+        assert!(m.prepared.is_empty() && m.audio.is_none());
+        m.command(Command::Next);
+        assert_eq!(m.online.load.as_ref().unwrap().generation, generation);
+        assert!(!m.online.load.as_ref().unwrap().sent); // reuse worker cache
+    }
     #[test]
     fn suspension_preserves_completed_results_without_starting_a_worker() {
         let mut model = Model::new(Preferences::default());
@@ -526,13 +780,11 @@ mod tests {
         load.sent = true;
         load.deadline = Instant::now();
         let generation = load.generation;
-        let request = load.request;
         let pcm = Arc::new(doremi_player::decode_wav(Builtin::Scale.bytes()).unwrap());
         model.online.worker.as_ref().unwrap().inject_completion(
             1,
             Completion::Prepared {
                 generation,
-                request,
                 media: media.id,
                 result: Ok(Prepared::Pcm(pcm)),
             },
@@ -556,7 +808,6 @@ mod tests {
         model.start_context(vec![media.clone()], 0);
         let pending = model.online.load.as_ref().unwrap();
         let generation = pending.generation;
-        let request = pending.request;
         model.online.selected = true;
         model.query = "sine".into();
         model.schedule_online_search();
@@ -568,7 +819,6 @@ mod tests {
             1,
             Completion::Prepared {
                 generation,
-                request,
                 media: media.id,
                 result: Ok(Prepared::Pcm(pcm)),
             },

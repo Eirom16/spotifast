@@ -32,6 +32,8 @@ def main():
     parser.add_argument('--commit', required=True)
     parser.add_argument('--profile', required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--prefetch', action='store_true')
+    parser.add_argument('--instrumentation-artifact', type=Path, help='Use the same measurement APK against the prefetch baseline app')
     args = parser.parse_args()
     assert re.fullmatch('[a-z0-9][a-z0-9-]{0,47}', args.profile)
     output = args.output.resolve()
@@ -40,7 +42,7 @@ def main():
     verifier = runpy.run_path(str(ROOT / 'scripts/android-qa.py'))
     apk = verifier['verify_payload'](args.artifact, args.commit)
     adb('install', '-r', str(apk))
-    adb('install', '-r', '-t', str(args.artifact / 'app-debug-androidTest.apk'))
+    adb('install', '-r', '-t', str((args.instrumentation_artifact or args.artifact) / 'app-debug-androidTest.apk'))
     private = f'files/qa/{args.profile}/'
     exists = subprocess.run(['adb', '-d', 'shell', 'run-as', PACKAGE, 'test', '-e', private], capture_output=True, timeout=30)
     assert exists.returncode == 1, 'Use a new isolated profile'
@@ -50,7 +52,7 @@ def main():
     with verifier['qa_session'](args.profile):
         try:
             with (output / 'instrumentation.log').open('wb') as log:
-                process = subprocess.Popen(['adb', '-d', 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'background-playback', '-e', 'profile', args.profile, PACKAGE + '.test/dev.eirom.doremi.DoremiInstrumentation'], stdout=log, stderr=subprocess.STDOUT)
+                process = subprocess.Popen(['adb', '-d', 'shell', 'am', 'instrument', '-w', '-e', 'mode', 'prefetch-playback' if args.prefetch else 'background-playback', '-e', 'profile', args.profile, PACKAGE + '.test/dev.eirom.doremi.DoremiInstrumentation'], stdout=log, stderr=subprocess.STDOUT)
                 deadline = time.monotonic() + 1800
                 while process.poll() is None:
                     if time.monotonic() > deadline:
@@ -74,7 +76,9 @@ def main():
                             except subprocess.TimeoutExpired:
                                 raise AssertionError('QA state belongs to a dead app process') from None
                             break
-                        sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus')}
+                        sample = {k: state.get(k) for k in ('pid', 'instance', 'current', 'current_occurrence', 'playback', 'position_ms', 'audio_metrics', 'focus', 'online')}
+                        sample['at_monotonic'] = time.monotonic()
+                        (output / f'memory-{len(samples):04d}.txt').write_bytes(adb('shell', 'dumpsys', 'meminfo', PACKAGE))
                         power = adb('shell', 'dumpsys', 'power').decode()
                         sample['screen_off'] = 'Display Power: state=OFF' in power
                         sample['wakefulness'] = next((line.strip() for line in power.splitlines() if 'mWakefulness=' in line), '')

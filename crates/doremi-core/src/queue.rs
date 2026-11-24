@@ -287,6 +287,31 @@ impl Queue {
             .chain(s.order[start..].iter().map(|index| &s.context[*index]))
     }
 
+    /// Effective successor at natural EOF, including repeat and heard-forward
+    /// history. Reading this never consumes an occurrence or creates a request.
+    pub fn next_on_end(&self) -> Option<&Entry> {
+        let s = &self.snapshot;
+        if s.repeat == Repeat::Track && self.current().is_some() {
+            return self.current();
+        }
+        s.forward
+            .last()
+            .map(|c| &c.entry)
+            .or_else(|| s.manual.first())
+            .or_else(|| self.next_context_index().map(|index| &s.context[index]))
+    }
+
+    fn next_context_index(&self) -> Option<usize> {
+        let s = &self.snapshot;
+        let next = s.cursor.map_or(0, |cursor| cursor + 1);
+        let next = if next >= s.order.len() && s.repeat == Repeat::Context {
+            0
+        } else {
+            next
+        };
+        s.order.get(next).copied()
+    }
+
     pub fn playback(&self) -> Playback {
         self.playback
     }
@@ -405,15 +430,8 @@ impl Queue {
                 context_index: None,
             })
         } else {
-            let s = &mut self.snapshot;
-            let next = s.cursor.map_or(0, |cursor| cursor + 1);
-            let next = if next >= s.order.len() && s.repeat == Repeat::Context {
-                0
-            } else {
-                next
-            };
-            s.order.get(next).map(|&index| Current {
-                entry: s.context[index].clone(),
+            self.next_context_index().map(|index| Current {
+                entry: self.snapshot.context[index].clone(),
                 context_index: Some(index),
             })
         };
@@ -696,6 +714,57 @@ mod tests {
             title: "a".into(),
             duration_ms: None,
         }
+    }
+
+    #[test]
+    fn successor_prediction_matches_real_eof_after_queue_edits() {
+        let mut queue = Queue::default();
+        queue
+            .command(Command::StartContext {
+                media: vec![song(); 4],
+                start: 0,
+                order: Order::Sequential,
+            })
+            .unwrap();
+        let check = |q: &Queue| {
+            let expected = q.next_on_end().cloned();
+            let mut actual = q.clone();
+            let request = actual.request.unwrap();
+            actual.event(Event::Ready(request)).unwrap();
+            actual.event(Event::Ended(request)).unwrap();
+            assert_eq!(actual.current(), expected.as_ref());
+        };
+        check(&queue);
+        for command in [
+            Command::SetRepeat(Repeat::Track),
+            Command::SetRepeat(Repeat::Context),
+            Command::SetOrder(Order::Shuffled(vec![0, 3, 1, 2])),
+            Command::Append(vec![song(); 2]),
+            Command::Next,
+            Command::Previous,
+            Command::Next,
+            Command::ClearManual,
+        ] {
+            queue.command(command).unwrap();
+            check(&queue);
+        }
+        queue.command(Command::Append(vec![song(); 2])).unwrap();
+        let id = queue.manual()[1].id;
+        queue.command(Command::Move { entry: id, gap: 0 }).unwrap();
+        check(&queue);
+        queue.command(Command::Remove(id)).unwrap();
+        check(&queue);
+        queue.command(Command::ClearManual).unwrap();
+        for _ in 0..6 {
+            queue.command(Command::Next).unwrap();
+            check(&queue);
+        }
+        queue.command(Command::SetRepeat(Repeat::Off)).unwrap();
+        while queue.next_on_end().is_some() {
+            queue.command(Command::Next).unwrap();
+            check(&queue);
+        }
+        check(&queue);
     }
 
     #[test]

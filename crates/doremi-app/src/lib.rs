@@ -23,7 +23,11 @@ mod online_model;
 #[cfg(target_os = "linux")]
 mod online_probe;
 #[cfg(target_os = "linux")]
+mod prefetch_probe;
+#[cfg(target_os = "linux")]
 mod rescue_probe;
+#[cfg(target_os = "linux")]
+pub use prefetch_probe::run as prefetch_audio_probe;
 #[cfg(target_os = "linux")]
 pub use rescue_probe::run as rescue_audio_probe;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -502,6 +506,8 @@ impl Model {
                 Effect::ReadAppend(_) => {}
             }
         }
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        self.sync_prefetch();
     }
     fn poll_audio(&mut self) {
         self.note_history();
@@ -535,6 +541,14 @@ impl Model {
                         self.event(Event::Ready(r));
                     }
                     EngineEvent::Ended(r) => {
+                        #[cfg(any(
+                            target_os = "linux",
+                            target_os = "android",
+                            target_os = "windows"
+                        ))]
+                        {
+                            self.online.eof_at = Some(Instant::now());
+                        }
                         self.listening.reset();
                         self.listening_media = None;
                         self.event(Event::Ended(r));
@@ -564,6 +578,13 @@ impl Model {
             && let Some(request) = engine.current_request()
             && let Some(metrics) = engine.metrics()
         {
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            if self.queue.playback() == Playback::Playing
+                && metrics.nonzero_samples > 0
+                && let Some(at) = self.online.eof_at.take()
+            {
+                self.online.transition_ms = Some(at.elapsed().as_millis() as u64);
+            }
             let _ = self.queue.event(Event::Position {
                 request,
                 position_ms: metrics.position_ms,
