@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import re
 import runpy
+import shlex
 import subprocess
 import time
 
@@ -68,6 +69,11 @@ def main():
                         if stats.returncode == 0:
                             fields = stats.stdout.decode().rsplit(')', 1)[1].split()
                             sample['cpu_ticks'] = int(fields[11]) + int(fields[12])
+                        command = f'for task_dir in /proc/{int(state["pid"])}/task/*; do cat "$task_dir/comm" 2>/dev/null; done'
+                        names = adb('shell', 'run-as ' + PACKAGE + ' sh -c ' + shlex.quote(command)).decode().splitlines()
+                        sample['audio_owners'] = names.count('doremi-audio')
+                        sample['playback_owners'] = names.count('doremi-playback')
+                        assert sample['audio_owners'] <= 1 and sample['playback_owners'] <= 1, 'Duplicate native music owner'
                         samples.append(sample)
                         if sample['screen_off']:
                             (output / 'screen-off-services.txt').write_bytes(adb('shell', 'dumpsys', 'activity', 'services', PACKAGE))
