@@ -1302,7 +1302,7 @@ public final class DoremiInstrumentation extends Instrumentation {
             JSONObject metrics=s.optJSONObject("audio_metrics");
             JSONObject online=s.optJSONObject("online");
             JSONObject pending=online==null?null:online.optJSONObject("prefetch");
-            if(prepared[0]==null && pending!=null && pending.optBoolean("ready")) prepared[0]=new JSONObject(online.toString());
+            if(prepared[0]==null && pending!=null && pending.optBoolean("ready")) prepared[0]=online;
             if("qQzdAsjWGPg".equals(s.optString("current")) && metrics!=null) last[0]=metrics;
             if(SystemClock.elapsedRealtime()-started>10000 && SystemClock.elapsedRealtime()-started<11000) {
                 if(live.getPlaybackState().getState()!=android.media.session.PlaybackState.STATE_PLAYING) throw new AssertionError("Session is not playing in background");
