@@ -1207,6 +1207,15 @@ public final class DoremiInstrumentation extends Instrumentation {
         bitmap.recycle();
     }
     private void returnToApp() throws Exception {
+        android.app.KeyguardManager keyguard=(android.app.KeyguardManager)getTargetContext().getSystemService(android.content.Context.KEYGUARD_SERVICE);
+        File marker=new File(profileDirectory(),"qa-background-await-unlock.json");
+        if(keyguard.isKeyguardLocked()) {
+            Files.write(marker.toPath(),new JSONObject().put("waiting",true).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            long deadline=SystemClock.elapsedRealtime()+300000;
+            while(keyguard.isKeyguardLocked() && SystemClock.elapsedRealtime()<deadline) SystemClock.sleep(250);
+            if(keyguard.isKeyguardLocked()) throw new AssertionError("Physical device unlock required for UI verification");
+            Files.write(marker.toPath(),new JSONObject().put("waiting",false).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        }
         ActivityMonitor monitor=addMonitor(MainActivity.class.getName(),null,false);
         Intent intent=new Intent(getTargetContext(),MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("dev.eirom.doremi.qa.profile",profile);
         runOnMainSync(() -> getTargetContext().startActivity(intent));
