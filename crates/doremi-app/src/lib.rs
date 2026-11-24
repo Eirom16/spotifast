@@ -7,7 +7,10 @@ use doremi_core::{
 };
 #[cfg(target_os = "android")]
 mod android_native;
-#[cfg(any(target_os = "android", test))]
+#[cfg(any(
+    target_os = "android",
+    all(test, any(target_os = "linux", target_os = "windows"))
+))]
 mod android_runtime;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod artwork;
@@ -976,8 +979,12 @@ impl DoremiApp {
 }
 
 impl DoremiApp {
-    #[cfg(any(target_os = "android", test))]
+    #[cfg(any(
+        target_os = "android",
+        all(test, any(target_os = "linux", target_os = "windows"))
+    ))]
     fn poll_background(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_local(ctx);
         self.model.as_mut().unwrap().poll_online(ctx);
         self.model.as_mut().unwrap().music.poll(ctx);

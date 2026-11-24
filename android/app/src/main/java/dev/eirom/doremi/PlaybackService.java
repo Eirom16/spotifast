@@ -24,7 +24,7 @@ public final class PlaybackService extends Service {
     private AudioFocusRequest focusRequest;
     private PowerManager.WakeLock wake;
     private boolean focusHeld,foreground,closing,transientLoss;
-    private long resumeEpoch,resumeIntent,pausedAt,wakeAt;
+    private long resumeEpoch,resumeIntent,pausedAt,wakeAt,createdAt;
     static MediaController controller() {return running==null?null:running.session.getController();}
     private JSONObject snapshot=new JSONObject();
     private String published="";
@@ -45,7 +45,7 @@ public final class PlaybackService extends Service {
         }
     };
     @Override public void onCreate() {
-        super.onCreate();running=this;
+        super.onCreate();running=this;createdAt=SystemClock.elapsedRealtime();
         audio=(AudioManager)getSystemService(AUDIO_SERVICE);
         AudioAttributes attributes=new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build();
         focusRequest=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -197,7 +197,10 @@ public final class PlaybackService extends Service {
                 session.setMetadata(metadata.build());
                 ((NotificationManager)getSystemService(NOTIFICATION_SERVICE)).notify(NOTIFICATION,notification());
             }
-            if(snapshot.optBoolean("stopped")) {finishPlayback();return;}
+            // A user frame can reach Java just before its actor snapshot is
+            // published. Give that handoff one bounded poll before treating an
+            // initial stopped bookmark as a request to shut down.
+            if(snapshot.optBoolean("stopped") && now-createdAt>1000) {finishPlayback();return;}
             handler.postDelayed(this,active?500:1000);
         }
     };
