@@ -184,7 +184,7 @@ pub extern "system" fn native_draw(
             let primitives = ctx.tessellate(output.shapes.clone(), output.pixels_per_point);
             let model = app.model.as_ref().unwrap();
             let delay = output.viewport_output.get(&egui::ViewportId::ROOT).map(|v|v.repaint_delay.as_millis().min(10_000) as u64).unwrap_or(10_000);
-            let data = serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":app.can_go_back(), "editor_target":app.editor.key(), "editor_text":app.editor_text(), "input_generation":text_generation, "file_request":model.local_files.selector.unwrap_or(0), "session_request":model.music.session.picker_request(), "auth_request":model.music.session.authorization_request(), "playback_active":model.real_audio() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading), "next_ms":delay}).to_string();
+            let data = serde_json::json!({"ime":output.platform_output.ime.is_some(), "can_go_back":app.can_go_back(), "editor_target":app.editor.key(), "editor_text":app.editor_text(), "input_generation":text_generation, "file_request":model.local_files.selector.unwrap_or(0), "session_request":model.music.session.picker_request(), "auth_request":model.music.session.authorization_request(), "playback_active":model.real_audio() && model.queue.play_requested() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading), "next_ms":delay}).to_string();
             let _ = send.send((output, primitives, data));
         }) { return r#"{"next_ms":16}"#.into(); }
         receive

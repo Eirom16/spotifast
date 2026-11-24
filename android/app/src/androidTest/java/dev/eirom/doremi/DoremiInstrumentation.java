@@ -1190,7 +1190,7 @@ public final class DoremiInstrumentation extends Instrumentation {
     }
     private void shell(String command) throws Exception {
         try(android.os.ParcelFileDescriptor fd=getUiAutomation().executeShellCommand(command);
-            java.io.FileInputStream input=new java.io.FileInputStream(fd.getFileDescriptor())) {input.readAllBytes();}
+            java.io.FileInputStream input=new java.io.FileInputStream(fd.getFileDescriptor())) {byte[] buffer=new byte[1024];while(input.read(buffer)!=-1) { /* Drain the bounded shell result on the test thread. */ }}
     }
     private void systemCapture(String name) throws Exception {
         android.graphics.Bitmap bitmap=getUiAutomation().takeScreenshot();

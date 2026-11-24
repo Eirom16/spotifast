@@ -75,6 +75,7 @@ public final class PlaybackService extends Service {
     @Override public int onStartCommand(Intent intent,int flags,int id) {
         promote(); // Before focus: Android 15+ requires top app or foreground service.
         refresh();
+        if(!snapshot.has("epoch")) {finishPlayback();return START_NOT_STICKY;}
         if(intent!=null && intent.hasExtra("command")) {
             long epoch=intent.getLongExtra("epoch",-1);
             if(epoch==snapshot.optLong("epoch",0)) transport(intent.getIntExtra("command",1),0);
@@ -95,7 +96,7 @@ public final class PlaybackService extends Service {
         return PendingIntent.getForegroundService(this,command,intent,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
     }
     private Notification notification() {
-        boolean playing="Playing".equals(snapshot.optString("state")) || "Loading".equals(snapshot.optString("state"));
+        boolean playing=snapshot.optBoolean("active");
         return new Notification.Builder(this,CHANNEL)
             .setSmallIcon(android.R.drawable.ic_media_play).setContentTitle(snapshot.optString("title","Doremi"))
             .setContentText(snapshot.optString("artist","")).setContentIntent(openApp())
@@ -176,7 +177,7 @@ public final class PlaybackService extends Service {
                 if(now-pausedAt>300000) {finishPlayback();return;}
             }
             String state=snapshot.optString("state");
-            int status="Playing".equals(state)?PlaybackState.STATE_PLAYING:"Loading".equals(state)?PlaybackState.STATE_BUFFERING:
+            int status="Playing".equals(state)?PlaybackState.STATE_PLAYING:"Loading".equals(state) && active?PlaybackState.STATE_BUFFERING:
                 "Failed".equals(state)?PlaybackState.STATE_ERROR:"Stopped".equals(state)?PlaybackState.STATE_STOPPED:PlaybackState.STATE_PAUSED;
             long actions=PlaybackState.ACTION_PLAY|PlaybackState.ACTION_PAUSE|PlaybackState.ACTION_PLAY_PAUSE|PlaybackState.ACTION_STOP|
                 PlaybackState.ACTION_SKIP_TO_NEXT|PlaybackState.ACTION_SKIP_TO_PREVIOUS|PlaybackState.ACTION_SEEK_TO;

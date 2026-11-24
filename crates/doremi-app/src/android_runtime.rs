@@ -30,7 +30,6 @@ impl Runtime {
             }
             let mut epoch = 1_u64;
             let mut identity = String::new();
-            let mut wants_play = false;
             loop {
                 let active = matches!(app.model.as_ref().unwrap().queue.playback(),Playback::Playing|Playback::Loading);
                 match receive.recv_timeout(Duration::from_millis(if active {100} else {500})) {
@@ -41,15 +40,11 @@ impl Runtime {
                 // Completes downloads, Ready, position and EOF without a surface.
                 app.poll_background(&ctx);
                 let model = app.model.as_ref().unwrap();
-                let next_identity = format!("{:?}:{:?}", model.queue.current().map(|e|e.id), model.audio.as_ref().and_then(Engine::current_request));
+                let stopped = model.queue.playback()==Playback::Stopped || !matches!(model.queue.playback(),Playback::Loading|Playback::Playing) && model.audio.as_ref().and_then(Engine::current_request).is_none();
+                let next_identity = format!("{:?}:{}:{}", model.queue.current().map(|e|e.id), model.music.session.revision, stopped);
                 if identity != next_identity {
                     identity = next_identity;
                     epoch += 1;
-                }
-                match model.queue.playback() {
-                    Playback::Playing => wants_play = true,
-                    Playback::Paused | Playback::Stopped | Playback::Failed => wants_play = false,
-                    Playback::Loading => {},
                 }
                 let current = model.queue.current();
                 let image = current.and_then(|entry|model.artwork.media_pixels(&entry.media.id));
@@ -60,13 +55,13 @@ impl Runtime {
                     "profile":profile,"internal_ui":internal,"album":album,
                     "artwork_version":artwork_version,
                     "epoch":epoch,"intent":model.transport_serial,"instance":app.instance,"state":format!("{:?}",model.queue.playback()),
-                    "active":model.real_audio() && (wants_play || model.queue.playback()==Playback::Loading),
+                    "active":model.real_audio() && model.queue.play_requested() && matches!(model.queue.playback(),Playback::Playing|Playback::Loading),
                     "position":model.queue.position_ms(),"duration":current.and_then(|e|e.media.duration_ms),
                     "title":current.map(|e|&e.media.title),
                     "artist":artist,
                     "id":current.map(|e|e.media.id.local()),"occurrence":current.map(|e|e.id.as_u64()),
                     "notice":model.notice,
-                    "stopped":model.queue.playback()==Playback::Stopped || !matches!(model.queue.playback(),Playback::Loading|Playback::Playing) && model.audio.as_ref().and_then(Engine::current_request).is_none(),
+                    "stopped":stopped,
                 });
                 *published.lock().unwrap() = state.to_string();
                 if active || app.pending || app.pending_write != 0 || app.saved_revision != model.revision {

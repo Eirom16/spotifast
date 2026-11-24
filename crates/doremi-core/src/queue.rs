@@ -291,6 +291,11 @@ impl Queue {
         self.playback
     }
 
+    /// User transport intent remains meaningful while a load is in flight.
+    pub fn play_requested(&self) -> bool {
+        self.playing
+    }
+
     pub fn position_ms(&self) -> u64 {
         self.snapshot.position_ms
     }
@@ -563,11 +568,14 @@ impl Queue {
                 }
             }
             Command::Play => {
+                let was_playing = self.playing;
                 self.playing = true;
                 if self.loaded {
                     self.playback = Playback::Playing;
                     effects.push(Effect::SetPlaying(true));
-                } else if self.current().is_some() {
+                } else if self.current().is_some()
+                    && (self.playback != Playback::Loading || was_playing)
+                {
                     self.load(&mut effects);
                 }
             }
@@ -706,6 +714,37 @@ mod tests {
             assert_eq!(a, b);
         }
         assert_eq!(a.snapshot.history.len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn pause_and_play_during_loading_keep_the_same_request() {
+        let mut queue = Queue::default();
+        let effects = queue
+            .command(Command::StartContext {
+                media: vec![song()],
+                start: 0,
+                order: Order::Sequential,
+            })
+            .unwrap();
+        let request = effects
+            .iter()
+            .find_map(|effect| {
+                if let Effect::Load { request, .. } = effect {
+                    Some(*request)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        queue.command(Command::Pause).unwrap();
+        assert!(!queue.play_requested());
+        assert!(queue.command(Command::Play).unwrap().is_empty());
+        assert!(queue.play_requested());
+        assert_eq!(
+            queue.event(Event::Ready(request)).unwrap(),
+            vec![Effect::SetPlaying(true)]
+        );
+        assert_eq!(queue.playback(), Playback::Playing);
     }
 
     #[test]
