@@ -115,6 +115,11 @@ impl DoremiApp {
         }
     }
     pub(super) fn go_back(&mut self) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if self.lyrics.open {
+            self.lyrics.hide();
+            return;
+        }
         let model = self.model.as_mut().unwrap();
         if model.page == Page::Player {
             let page = model.player_return;

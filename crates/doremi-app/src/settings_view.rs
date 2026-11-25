@@ -47,20 +47,22 @@ impl DoremiApp {
                 });
             });
         ui.add_space(20.0);
-        self.equalizer_settings(ui);
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        self.youtube_account(ui);
+        ui.add_space(20.0);
+        let equalizer = ui.collapsing("Ecualizador", |ui| self.equalizer_settings(ui));
+        self.record("equalizer-settings", &equalizer.header_response);
         ui.add_space(20.0);
         ui.heading("Visualización");
         ui.horizontal_wrapped(|ui| {
-            let model = self.model.as_mut().unwrap();
-            for (mode, label) in [
-                (visualizer::Mode::Off, "Desactivada"),
-                (visualizer::Mode::Spectrum, "Espectro"),
-                (visualizer::Mode::Scope, "Osciloscopio"),
+            for (mode, key, label) in [
+                (visualizer::Mode::Off, "visual-off", "Desactivada"),
+                (visualizer::Mode::Spectrum, "visual-spectrum", "Espectro"),
+                (visualizer::Mode::Scope, "visual-scope", "Osciloscopio"),
             ] {
-                if ui
-                    .selectable_label(model.prefs.visualizer == mode, label)
-                    .clicked()
-                {
+                let selected = self.model.as_ref().unwrap().prefs.visualizer == mode;
+                if self.choice_button(ui, key, label, 0.0, selected) && !selected {
+                    let model = self.model.as_mut().unwrap();
                     model.prefs.visualizer = mode;
                     model.revision += 1;
                 }
@@ -71,31 +73,30 @@ impl DoremiApp {
         {
             ui.heading("Ventanas");
             let model = self.model.as_mut().unwrap();
-            if ui
-                .checkbox(
-                    &mut model.prefs.desktop.close_to_tray,
-                    "Mantener la reproducción al cerrar la ventana",
-                )
-                .changed()
-            {
+            let tray = ui.checkbox(
+                &mut model.prefs.desktop.close_to_tray,
+                "Mantener la reproducción al cerrar la ventana",
+            );
+            let above = ui.checkbox(
+                &mut model.prefs.desktop.mini_on_top,
+                "Mini reproductor siempre visible si el escritorio lo permite",
+            );
+            let controls = ui.checkbox(
+                &mut model.prefs.desktop.media_controls,
+                "Controles multimedia del sistema (al reiniciar)",
+            );
+            if tray.changed() || above.changed() || controls.changed() {
                 model.revision += 1;
             }
-            if ui
-                .checkbox(
-                    &mut model.prefs.desktop.mini_on_top,
-                    "Mini reproductor siempre visible si el escritorio lo permite",
-                )
-                .changed()
-            {
-                model.revision += 1;
-            }
+            self.record("close-to-tray", &tray);
+            self.record("mini-on-top", &above);
+            self.record("desktop-media-controls", &controls);
             if self.choice_button(ui, "open-mini", "Abrir mini reproductor", 208.0, false) {
                 self.open_mini = true;
             }
+            ui.weak("Ctrl+Mayús+M alterna entre la ventana principal y el mini reproductor.");
             ui.add_space(20.0);
         }
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        self.youtube_account(ui);
         ui.add_space(12.0);
         ui.weak("Tu biblioteca y tus preferencias se guardan en este dispositivo.");
     }
@@ -105,14 +106,20 @@ impl DoremiApp {
     fn equalizer_settings(&mut self, ui: &mut egui::Ui) {
         use doremi_player::equalizer::{BANDS, EqSettings, PRESETS, RANGE_DB};
 
-        let model = self.model.as_mut().unwrap();
+        let model = self.model.as_ref().unwrap();
         let mut settings = model.prefs.equalizer;
-        ui.heading("Ecualizador");
-        ui.checkbox(&mut settings.on, "Activar ecualizador");
+        let rate = model
+            .audio
+            .as_ref()
+            .and_then(Engine::metrics)
+            .map(|metrics| metrics.output_rate)
+            .filter(|rate| *rate != 0);
+        let enabled = ui.checkbox(&mut settings.on, "Activar ecualizador");
+        self.record("equalizer-enable", &enabled);
         let preset = PRESETS
             .iter()
             .find(|preset| preset.bands_db == settings.bands_db);
-        egui::ComboBox::from_id_salt("equalizer-preset")
+        let presets = egui::ComboBox::from_id_salt("equalizer-preset")
             .selected_text(preset.map_or("Personalizado", |preset| preset.name))
             .show_ui(ui, |ui| {
                 for preset in PRESETS {
@@ -126,7 +133,10 @@ impl DoremiApp {
                     }
                 }
             });
-        if ui.button("Restablecer ecualizador").clicked() {
+        self.record("equalizer-preset", &presets.response);
+        let reset = ui.button("Restablecer ecualizador");
+        self.record("equalizer-reset", &reset);
+        if reset.clicked() {
             settings = EqSettings {
                 on: settings.on,
                 ..EqSettings::default()
@@ -138,14 +148,21 @@ impl DoremiApp {
                 .suffix(" dB")
                 .text("Preamplificador"),
         );
-        for (hz, band) in BANDS.into_iter().zip(&mut settings.bands_db) {
-            ui.add(
-                egui::Slider::new(band, -RANGE_DB..=RANGE_DB)
-                    .step_by(0.2)
-                    .suffix(" dB")
-                    .text(format!("{hz:.0} Hz")),
-            );
+        for (index, (hz, band)) in BANDS.into_iter().zip(&mut settings.bands_db).enumerate() {
+            let supported =
+                rate.is_none_or(|rate| index < doremi_player::equalizer::supported_bands(rate));
+            let response = ui
+                .add_enabled(
+                    supported,
+                    egui::Slider::new(band, -RANGE_DB..=RANGE_DB)
+                        .step_by(0.2)
+                        .suffix(" dB")
+                        .text(format!("{hz:.0} Hz")),
+                )
+                .on_disabled_hover_text("Banda fuera del rango de la salida actual.");
+            self.record(&format!("equalizer-band-{index}"), &response);
         }
+        let model = self.model.as_mut().unwrap();
         if settings != model.prefs.equalizer {
             model.prefs.equalizer = settings;
             if let Some(engine) = &mut model.audio {

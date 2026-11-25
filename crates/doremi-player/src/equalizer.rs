@@ -59,12 +59,17 @@ fn band_widths() -> [f64; 10] {
     widths
 }
 
+/// Keep the bandwidth formula away from its Nyquist singularity.
+pub fn supported_bands(rate: u32) -> usize {
+    BANDS.partition_point(|hz| f64::from(*hz) < f64::from(rate) * 0.46)
+}
+
 /// Builds filters whose combined response matches each slider at its centre.
 /// Adjacent filters overlap, so their individual gains are solved together.
-fn chain(bands_db: &[f32; 10], rate: f64) -> Vec<Biquad> {
+fn chain(bands_db: &[f32; 10], rate: u32) -> Vec<Biquad> {
     let widths = band_widths();
-    // Keep the cookbook bandwidth term away from its Nyquist singularity.
-    let count = BANDS.partition_point(|hz| f64::from(*hz) < rate * 0.46);
+    let count = supported_bands(rate);
+    let rate = f64::from(rate);
     let mut target = bands_db.map(f64::from);
     target[count..].fill(0.0);
     if target.iter().all(|gain| gain.abs() <= f64::from(FLAT)) {
@@ -359,7 +364,7 @@ pub(crate) mod realtime {
 
         pub fn read(&self, known: u64) -> Option<(u64, [f64; N])> {
             let sequence = self.sequence.load(Ordering::SeqCst);
-            if sequence == known || sequence % 2 != 0 {
+            if sequence == known || sequence & 1 != 0 {
                 return None;
             }
             let values =
@@ -396,7 +401,7 @@ pub(crate) mod realtime {
             values[0] = 10f64.powf(f64::from(settings.preamp_db) / 20.0);
             for (slot, filter) in values[1..]
                 .chunks_exact_mut(5)
-                .zip(chain(&settings.bands_db, f64::from(rate)))
+                .zip(chain(&settings.bands_db, rate))
             {
                 slot.copy_from_slice(&filter.coefficients());
             }

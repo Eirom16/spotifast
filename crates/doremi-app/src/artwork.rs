@@ -325,7 +325,6 @@ impl State {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
-    #[cfg(any(target_os = "android", test))]
     pub(super) fn media_pixels(
         &self,
         id: &MediaId,

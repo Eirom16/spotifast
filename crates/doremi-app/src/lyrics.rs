@@ -416,6 +416,7 @@ impl Worker {
             .name("doremi-lyrics".into())
             .spawn(move || {
                 let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                    .max_blocking_threads(1)
                     .enable_all()
                     .build()
                 else {
@@ -442,13 +443,14 @@ impl Worker {
                         };
                         let path = cache_path(&directory, &query);
                         let cached = read_cache(&path);
+                        let backoff = retry_after;
                         let mut work = std::pin::pin!(async {
                             if let Some(found) = cached {
                                 return Ok((found, false));
                             }
                             let http = http.as_ref().map_err(|_| Failure::Network)?;
-                            if retry_after > tokio::time::Instant::now() {
-                                return Err(Failure::Limited(retry_after));
+                            if backoff > tokio::time::Instant::now() {
+                                return Err(Failure::Limited(backoff));
                             }
                             tokio::time::sleep(Duration::from_millis(250)).await;
                             lookup(http, &query).await.map(|found| (found, true))
@@ -487,6 +489,7 @@ impl Worker {
                         }
                     }
                 });
+                runtime.shutdown_timeout(Duration::from_millis(100));
             })
             .ok()?;
         Some(Self { request, result })
@@ -553,9 +556,27 @@ impl Panel {
         self.select(query, ctx);
     }
 
-    pub fn hide(&mut self, ctx: &egui::Context) {
+    pub fn diagnostics(&self) -> serde_json::Value {
+        let state = match &self.status {
+            Status::Loading => "loading",
+            Status::Unavailable => "unavailable",
+            Status::Error => "error",
+            Status::Ready(lyrics) if lyrics.instrumental => "instrumental",
+            Status::Ready(lyrics) if lyrics.synced => "synced",
+            Status::Ready(_) => "plain",
+        };
+        serde_json::json!({"open": self.open, "state": state, "active_line": self.last_line})
+    }
+
+    pub fn hide(&mut self) {
         self.open = false;
-        self.select(None, ctx);
+        self.query = None;
+        self.last_line = None;
+        self.status = Status::Unavailable;
+        self.generation += 1;
+        if let Some(worker) = &self.worker {
+            worker.request.send_replace(None);
+        }
     }
 }
 
@@ -571,7 +592,9 @@ impl DoremiApp {
             .unwrap_or_default();
         let seekable = model.real_audio();
         self.lyrics.select(query, ui.ctx());
-        if let Some(worker) = &mut self.lyrics.worker {
+        if self.lyrics.query.is_some()
+            && let Some(worker) = &mut self.lyrics.worker
+        {
             loop {
                 match worker.result.try_recv() {
                     Ok((generation, status)) if generation == self.lyrics.generation => {
@@ -588,11 +611,15 @@ impl DoremiApp {
         }
 
         if self.choice_button(ui, "lyrics-back", "Volver al reproductor", 205.0, false) {
-            self.lyrics.hide(ui.ctx());
+            self.lyrics.hide();
             return;
         }
         ui.heading(title);
+        if seekable {
+            self.progress(ui);
+        }
         let mut seek = None;
+        let mut time_controls = Vec::new();
         match &self.lyrics.status {
             Status::Loading => {
                 ui.spinner();
@@ -631,6 +658,9 @@ impl DoremiApp {
                                 if response.clicked() {
                                     seek = Some(time);
                                 }
+                                if self.internal_ui && ui.is_rect_visible(response.rect) {
+                                    time_controls.push((index, response.clone()));
+                                }
                                 response
                             } else {
                                 ui.add(egui::Label::new(text).wrap())
@@ -643,6 +673,9 @@ impl DoremiApp {
                     });
                 self.lyrics.last_line = active;
             }
+        }
+        for (index, response) in time_controls {
+            self.record(&format!("lyrics-line:{index}"), &response);
         }
         if let Some(position) = seek {
             self.model

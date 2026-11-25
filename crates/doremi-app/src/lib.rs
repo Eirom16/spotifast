@@ -35,6 +35,8 @@ mod youtube_session;
 use doremi_library as persistence;
 #[cfg(not(target_os = "android"))]
 mod desktop;
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+mod desktop_cover;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
 mod home_view;
@@ -130,12 +132,24 @@ struct Preferences {
     visualizer: visualizer::Mode,
 }
 
-#[derive(Clone, Default, Deserialize, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(default)]
 struct DesktopPreferences {
     close_to_tray: bool,
     mini_on_top: bool,
     mini_position: Option<[f32; 2]>,
+    media_controls: bool,
+}
+
+impl Default for DesktopPreferences {
+    fn default() -> Self {
+        Self {
+            close_to_tray: false,
+            mini_on_top: true,
+            mini_position: None,
+            media_controls: true,
+        }
+    }
 }
 
 impl Default for Preferences {
@@ -148,10 +162,7 @@ impl Default for Preferences {
             volume: 0.7,
             equalizer: Default::default(),
             visualizer: visualizer::Mode::Off,
-            desktop: DesktopPreferences {
-                mini_on_top: true,
-                ..Default::default()
-            },
+            desktop: DesktopPreferences::default(),
         }
     }
 }
@@ -864,6 +875,7 @@ pub struct DoremiApp {
     saved_revision: u64,
     saved_controls: Vec<Control>,
     spectrum: Option<visualizer::WideAnalyser>,
+    visual_rms: Option<f32>,
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     artwork_textures: artwork::Textures,
     #[cfg(not(target_os = "android"))]
@@ -908,6 +920,7 @@ impl DoremiApp {
             saved_revision: u64::MAX,
             saved_controls: vec![],
             spectrum: None,
+            visual_rms: None,
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             artwork_textures: artwork::Textures::default(),
             #[cfg(not(target_os = "android"))]
@@ -997,6 +1010,13 @@ impl DoremiApp {
             "pixels_per_point": ctx.pixels_per_point(), "viewport": [ctx.content_rect().width(), ctx.content_rect().height()],
         });
         state["listening_history"] = serde_json::json!({"count":model.history.plays().len(),"writable":model.write_history,"recent":model.history.recent(16).iter().map(|media|serde_json::json!({"provider":media.id.provider.as_str(),"id":media.id.local()})).collect::<Vec<_>>()});
+        state["equalizer"] = serde_json::json!(model.prefs.equalizer);
+        state["visualizer"] = serde_json::json!(model.prefs.visualizer);
+        state["visual_rms"] = serde_json::json!(self.visual_rms);
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        {
+            state["lyrics"] = self.lyrics.diagnostics();
+        }
         let state = serde_json::to_vec(&state).unwrap();
         if !self.pending && self.saved_state == state {
             return;
@@ -1080,6 +1100,11 @@ impl DoremiApp {
     }
 
     pub fn draw(&mut self, ui: &mut egui::Ui) {
+        self.poll_background(ui.ctx());
+        self.paint(ui);
+    }
+
+    fn paint(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         #[cfg(target_os = "linux")]
         {
@@ -1099,8 +1124,8 @@ impl DoremiApp {
                 }
             }
         }
-        self.poll_background(&ctx);
         self.controls.clear();
+        self.visual_rms = None;
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = doremi_ui::palette(prefs.light, prefs.green);
         let mut style = (*ctx.global_style()).clone();
@@ -1112,7 +1137,7 @@ impl DoremiApp {
         self.shell(ui, &palette);
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if self.model.as_ref().unwrap().page != Page::Player && self.lyrics.open {
-            self.lyrics.hide(&ctx);
+            self.lyrics.hide();
         }
         self.persist(&ctx);
     }

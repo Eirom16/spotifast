@@ -8,6 +8,7 @@ use raw_window_handle::HasWindowHandle;
 
 const SHOW: &str = "show";
 const HIDE: &str = "hide";
+const MINI: &str = "mini";
 const TOGGLE: &str = "play-pause";
 const NEXT: &str = "next";
 const PREVIOUS: &str = "previous";
@@ -26,6 +27,7 @@ enum Intent {
     #[default]
     None,
     Show,
+    Mini,
     Hide,
     Quit,
 }
@@ -33,7 +35,9 @@ enum Intent {
 struct Desktop {
     app: DoremiApp,
     tray: Option<Tray>,
-    media: media::NowPlaying,
+    media: Option<media::NowPlaying>,
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    cover: desktop_cover::Cover,
     mode: Mode,
     intent: Intent,
     after_close: Closed,
@@ -55,14 +59,24 @@ pub fn run_desktop(directory: PathBuf) -> eframe::Result {
         model.youtube_page(doremi_youtube::Request::Home);
     }
     let notify = waker.clone();
-    let media =
-        media::NowPlaying::start(media::App::new("doremi", "Doremi"), move || notify.wake());
+    let media = app
+        .model
+        .as_ref()
+        .unwrap()
+        .prefs
+        .desktop
+        .media_controls
+        .then(|| {
+            media::NowPlaying::start(media::App::new("doremi", "Doremi"), move || notify.wake())
+        });
     let notify = waker.clone();
     let tray = Tray::spawn(tray_config(), move || notify.wake());
     let desktop = Desktop {
         app,
         tray,
         media,
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        cover: desktop_cover::Cover::default(),
         mode: Mode::Main,
         intent: Intent::None,
         after_close: Closed::Quit,
@@ -152,7 +166,11 @@ impl Desktop {
 
     fn handle_commands(&mut self, window_open: bool) {
         use media::Command as MediaCommand;
-        for command in self.media.commands() {
+        for command in self
+            .media
+            .as_ref()
+            .map_or_else(Vec::new, media::NowPlaying::commands)
+        {
             let model = self.app.model.as_mut().unwrap();
             let real = model.real_audio();
             match command {
@@ -223,12 +241,14 @@ impl Desktop {
             }
         }
         if let Some(tray) = &self.tray {
+            let tray_visible = tray.is_shown();
             for event in tray.events() {
                 let model = self.app.model.as_mut().unwrap();
                 match event {
                     TrayEvent::Show | TrayEvent::Menu(SHOW) => self.request(Intent::Show),
+                    TrayEvent::Menu(MINI) => self.request(Intent::Mini),
                     TrayEvent::Toggle if !window_open => self.request(Intent::Show),
-                    TrayEvent::Toggle | TrayEvent::Menu(HIDE) if self.tray_visible() => {
+                    TrayEvent::Toggle | TrayEvent::Menu(HIDE) if tray_visible => {
                         self.request(Intent::Hide);
                     }
                     TrayEvent::Menu(TOGGLE) if model.real_audio() => toggle_play(model),
@@ -243,7 +263,24 @@ impl Desktop {
         }
     }
 
-    fn publish(&mut self) {
+    fn tick(&mut self, ctx: &egui::Context) {
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        if self.media.is_some() {
+            let model = self.app.model.as_mut().unwrap();
+            if let Some(entry) = model.queue.current() {
+                let url = entry
+                    .media
+                    .music
+                    .as_ref()
+                    .and_then(|data| data.artwork.clone());
+                model.artwork.request_thumbnail(&entry.media.id, url, ctx);
+            }
+        }
+        self.app.poll_background(ctx);
+        self.publish(ctx);
+    }
+
+    fn publish(&mut self, _ctx: &egui::Context) {
         let model = self.app.model.as_ref().unwrap();
         let queue = &model.queue;
         let track = queue.current().filter(|_| model.real_audio()).map(|entry| {
@@ -259,6 +296,18 @@ impl Desktop {
             {
                 artists.push(artist);
             }
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            let art_file = if self.media.is_some() {
+                self.cover.update(
+                    model.artwork.media_pixels(
+                        &song.id,
+                        metadata.and_then(|music| music.artwork.as_deref()),
+                    ),
+                    _ctx,
+                )
+            } else {
+                None
+            };
             media::Track {
                 id: id(entry),
                 title: song.title.clone(),
@@ -268,6 +317,8 @@ impl Desktop {
                     .map_or_else(String::new, |album| album.name.clone()),
                 duration: song.duration_ms.map(Duration::from_millis),
                 art_url: metadata.and_then(|music| music.artwork.clone()),
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                art_file,
                 ..Default::default()
             }
         });
@@ -276,40 +327,42 @@ impl Desktop {
         let next = queue.upcoming().next().is_some()
             || queue.repeat() == Repeat::Context && !queue.context().is_empty();
         let position = Duration::from_millis(queue.position_ms());
-        self.media.update(media::State {
-            playback: if playing {
-                media::Playback::Playing
-            } else if has_track
-                && queue.playback() != Playback::Stopped
-                && queue.playback() != Playback::Failed
-            {
-                media::Playback::Paused
-            } else {
-                media::Playback::Stopped
-            },
-            track,
-            position,
-            volume: Some(f64::from(model.prefs.volume)),
-            shuffle: Some(queue.shuffled()),
-            repeat: Some(match queue.repeat() {
-                Repeat::Off => media::Repeat::Off,
-                Repeat::Track => media::Repeat::Track,
-                Repeat::Context => media::Repeat::Playlist,
-            }),
-            controls: media::Controls {
-                play: has_track,
-                pause: has_track && queue.play_requested(),
-                next,
-                previous: has_track,
-                seek: has_track
-                    && queue
-                        .current()
-                        .is_some_and(|entry| entry.media.duration_ms.is_some()),
-            },
-        });
-        if self.seek_serial != model.seek_serial {
-            self.seek_serial = model.seek_serial;
-            self.media.seeked(position);
+        if let Some(media) = &mut self.media {
+            media.update(media::State {
+                playback: if playing {
+                    media::Playback::Playing
+                } else if has_track
+                    && queue.playback() != Playback::Stopped
+                    && queue.playback() != Playback::Failed
+                {
+                    media::Playback::Paused
+                } else {
+                    media::Playback::Stopped
+                },
+                track,
+                position,
+                volume: Some(f64::from(model.prefs.volume)),
+                shuffle: Some(queue.shuffled()),
+                repeat: Some(match queue.repeat() {
+                    Repeat::Off => media::Repeat::Off,
+                    Repeat::Track => media::Repeat::Track,
+                    Repeat::Context => media::Repeat::Playlist,
+                }),
+                controls: media::Controls {
+                    play: has_track,
+                    pause: has_track && queue.play_requested(),
+                    next,
+                    previous: has_track,
+                    seek: has_track
+                        && queue
+                            .current()
+                            .is_some_and(|entry| entry.media.duration_ms.is_some()),
+                },
+            });
+            if self.seek_serial != model.seek_serial {
+                self.seek_serial = model.seek_serial;
+                media.seeked(position);
+            }
         }
         if let Some(tray) = &mut self.tray
             && self.last_tray_controls != Some((playing, has_track, next))
@@ -334,13 +387,16 @@ impl Resident for Desktop {
 
     fn headless_frame(&mut self, ctx: &egui::Context) -> Headless {
         self.handle_commands(false);
-        self.app.poll_background(ctx);
-        self.publish();
+        self.tick(ctx);
         self.app.persist(ctx);
         match std::mem::take(&mut self.intent) {
             Intent::Quit => Headless::Quit,
-            Intent::Show => {
-                self.mode = Mode::Main;
+            intent @ (Intent::Show | Intent::Mini) => {
+                self.mode = if intent == Intent::Mini {
+                    Mode::Mini
+                } else {
+                    Mode::Main
+                };
                 Headless::Show
             }
             _ if !self.tray_visible() => {
@@ -361,6 +417,7 @@ impl Desktop {
     fn clean_window(&mut self) {
         self.app.controls.clear();
         self.app.spectrum = None;
+        self.app.visual_rms = None;
         if let Some(audio) = &self.app.model.as_ref().unwrap().audio {
             audio.stop_visual_samples();
         }
@@ -392,8 +449,7 @@ impl eframe::App for Window {
         }
         let desktop = &mut *self.desktop;
         desktop.handle_commands(true);
-        desktop.app.poll_background(ctx);
-        desktop.publish();
+        desktop.tick(ctx);
 
         if desktop.mode == Mode::Main {
             desktop.geometry.remember(ctx);
@@ -410,6 +466,17 @@ impl eframe::App for Window {
             }
         }
 
+        if !ctx.egui_wants_keyboard_input()
+            && ctx.input_mut(|input| {
+                input.consume_key(
+                    egui::Modifiers::COMMAND | egui::Modifiers::SHIFT,
+                    egui::Key::M,
+                )
+            })
+        {
+            desktop.app.open_mini = true;
+        }
+
         let closing = ctx.input(|input| input.viewport().close_requested());
         let intent = std::mem::take(&mut desktop.intent);
         let transition = match intent {
@@ -419,7 +486,11 @@ impl eframe::App for Window {
                 desktop.mode = Mode::Main;
                 Some(Closed::Reopen)
             }
-            Intent::Show => {
+            Intent::Mini if desktop.mode == Mode::Main => {
+                desktop.mode = Mode::Mini;
+                Some(Closed::Reopen)
+            }
+            Intent::Show | Intent::Mini => {
                 ctx.send_viewport_cmd(View::Minimized(false));
                 ctx.send_viewport_cmd(View::Focus);
                 None
@@ -456,7 +527,6 @@ impl eframe::App for Window {
             ctx.send_viewport_cmd(View::Close);
         }
         if transition.is_some()
-            || desktop.mode == Mode::Mini
             || ctx.input(|input| {
                 input.viewport().minimized == Some(true) || input.viewport().occluded == Some(true)
             })
@@ -467,7 +537,7 @@ impl eframe::App for Window {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         if self.desktop.mode == Mode::Main {
-            self.desktop.app.draw(ui);
+            self.desktop.app.paint(ui);
         } else {
             self.desktop.app.compact_player(ui);
             self.desktop.app.persist(ui.ctx());
@@ -558,6 +628,7 @@ fn tray_config() -> Config {
         menu: vec![
             MenuItem::action(SHOW, "Mostrar Doremi"),
             MenuItem::action(HIDE, "Ocultar Doremi"),
+            MenuItem::action(MINI, "Abrir mini reproductor"),
             MenuItem::Separator,
             MenuItem::action(TOGGLE, "Reproducir").enabled(false),
             MenuItem::action(NEXT, "Siguiente").enabled(false),

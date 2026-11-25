@@ -39,7 +39,7 @@ impl AudioTap {
         self.expires_ms
             .store(self.now_ms() + 175, Ordering::Release);
         let before = self.version.load(Ordering::Acquire);
-        if before % 2 != 0 || (self.count.load(Ordering::Relaxed) as usize) < target.len() {
+        if before & 1 != 0 || (self.count.load(Ordering::Relaxed) as usize) < target.len() {
             return false;
         }
         let end = self.end.load(Ordering::Relaxed);

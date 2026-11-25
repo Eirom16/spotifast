@@ -244,7 +244,7 @@ impl DoremiApp {
         if response.has_focus() {
             self.editor = field;
         }
-        let dropdown = egui::ComboBox::from_id_salt(field.key())
+        let dropdown = egui::ComboBox::from_id_salt((field.key(), "sort"))
             .selected_text(state.sort.label())
             .show_ui(ui, |ui| {
                 for sort in [

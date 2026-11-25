@@ -546,17 +546,17 @@ enum Step {
     Failed,
 }
 impl Input {
-    fn next_frame(&mut self) -> Step {
+    fn next_frame(&mut self, gain: f32) -> Step {
         match self {
             Self::Prepared { pcm, cursor } => {
-                cursor.next_frame(pcm, 1.0).map_or(Step::End, Step::Frame)
+                cursor.next_frame(pcm, gain).map_or(Step::End, Step::Frame)
             }
             Self::Streaming {
                 consumer, frames, ..
             } => match consumer.read() {
                 buffer::Read::Frame(frame) => {
                     *frames += 1;
-                    Step::Frame(frame)
+                    Step::Frame(frame.map(|sample| sample * gain))
                 }
                 buffer::Read::Pending => Step::Pending,
                 buffer::Read::End => Step::End,
@@ -765,7 +765,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                         frame.fill(silence);
                         continue;
                     }
-                    if let Step::Frame(sample) = match input.next_frame() {
+                    if let Step::Frame(sample) = match input.next_frame(1.0) {
                         Step::Pending => {
                             buffering = true;
                             stats.underruns.fetch_add(1, Ordering::Relaxed);
@@ -847,6 +847,84 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real native output device"]
+    fn live_equalizer_changes_the_pcm_consumed_by_the_native_device() {
+        use doremi_core::{
+            queue::{Command, Effect, Order, Queue},
+            requests::SessionId,
+        };
+
+        fn rms(engine: &Engine) -> f64 {
+            let mut frames = [0.0; 576];
+            let start = engine.metrics().unwrap().position_ms;
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                if engine.visual_samples(&mut frames)
+                    && engine.metrics().unwrap().position_ms > start + 220
+                {
+                    let power = frames
+                        .iter()
+                        .map(|&sample| f64::from(sample).powi(2))
+                        .sum::<f64>();
+                    return (power / frames.len() as f64).sqrt();
+                }
+                std::thread::sleep(Duration::from_millis(15));
+            }
+            panic!("No native PCM frames arrived: {:?}", engine.metrics());
+        }
+
+        let track = Builtin::Scale.media();
+        let mut queue = Queue::new(SessionId(1));
+        let request = queue
+            .command(Command::StartContext {
+                media: vec![track],
+                start: 0,
+                order: Order::Sequential,
+            })
+            .unwrap()
+            .into_iter()
+            .find_map(|effect| match effect {
+                Effect::Load { request, .. } => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let rate = 48_000;
+        let pcm = Pcm {
+            samples: (0..rate * 4)
+                .map(|index| {
+                    (std::f32::consts::TAU * 1000.0 * index as f32 / rate as f32).sin() * 0.05
+                })
+                .collect(),
+            rate,
+            channels: 1,
+        };
+        let mut engine = Engine::new().unwrap();
+        engine.set_volume(0.15);
+        engine.load_pcm(request, Arc::new(pcm), 0).unwrap();
+        engine.set_playing(true);
+        let flat = rms(&engine);
+        let mut settings = EqSettings {
+            on: true,
+            ..EqSettings::default()
+        };
+        settings.bands_db[4] = 12.0;
+        engine.set_equalizer(settings);
+        let boosted = rms(&engine);
+        engine.set_equalizer(EqSettings::default());
+        let bypass = rms(&engine);
+        let measured_db = 20.0 * (boosted / flat).log10();
+        let restored_db = 20.0 * (bypass / flat).log10();
+        let metrics = engine.metrics().unwrap();
+        eprintln!(
+            "Native callback: +{measured_db:.2} dB at 1 kHz, {restored_db:+.2} dB after bypass; {metrics:?}"
+        );
+        assert!((measured_db - 12.0).abs() < 0.7);
+        assert!(restored_db.abs() < 0.3);
+        assert!(metrics.nonzero_samples > 0);
+        assert_eq!(metrics.buffer_underruns, 0);
+    }
+
+    #[test]
     fn a_starved_stream_freezes_its_clock_without_announcing_eof() {
         let (mut producer, consumer) = buffer::channel(64).unwrap();
         let mut input = Input::Streaming {
@@ -879,6 +957,7 @@ mod tests {
             epoch: AtomicU64::new(1),
             playing: AtomicBool::new(false),
             gain: AtomicU32::new(0.08f32.to_bits()),
+            equalizer: realtime::Published::new([0.0; 12]),
         });
         let state = CallbackState {
             control,

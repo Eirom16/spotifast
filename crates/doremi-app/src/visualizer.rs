@@ -194,7 +194,7 @@ impl Default for WideAnalyser {
 
 impl WideAnalyser {
     /// Moves the bars towards the spectrum of `samples` (mono, -1 to 1,
-    /// `WIDE_SAMPLES` of them): up at once, as Winamp's, and down at its
+    /// 512 of them): up at once, as Winamp's, and down at its
     /// rate for the time since the last step.
     pub fn step(&mut self, samples: &[f32], now: Instant) -> [f32; WIDE_BANDS] {
         let elapsed = self
@@ -303,6 +303,11 @@ impl DoremiApp {
                 .is_some_and(|engine| engine.visual_samples(&mut samples));
         if !ready {
             samples.fill(0.0);
+        } else if self.internal_ui {
+            self.visual_rms = Some(
+                (samples.iter().map(|sample| sample * sample).sum::<f32>() / samples.len() as f32)
+                    .sqrt(),
+            );
         }
         if running {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
