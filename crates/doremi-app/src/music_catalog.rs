@@ -749,6 +749,11 @@ impl State {
                         Yt::Search { .. } | Yt::Continue { search: true, .. }
                     ))
                 );
+                if self.home_root() {
+                    let previous = self.page.clone();
+                    self.push_history();
+                    self.page = previous;
+                }
                 self.dispatch(
                     Some(Request::YouTube(Yt::Continue { token, search })),
                     Duration::ZERO,
