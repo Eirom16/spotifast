@@ -144,6 +144,11 @@ impl TryFrom<Record> for Media {
             id,
             title: record.title,
             duration_ms: record.duration_ms,
+            music: record
+                .music
+                .map(crate::music::Record::decode)
+                .transpose()
+                .map_err(|_| Error::InvalidMedia)?,
         };
         validate(&media)?;
         Ok(media)

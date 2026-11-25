@@ -142,9 +142,9 @@ struct Cached {
 }
 impl Cached {
     fn matches(&self, id: &MediaId, url: Option<&str>) -> bool {
-        match url {
-            Some(url) => self.url.as_deref() == Some(url),
-            None => &self.id == id,
+        match (self.url.as_deref(), url) {
+            (Some(known), Some(url)) => known == url,
+            _ => &self.id == id,
         }
     }
 }

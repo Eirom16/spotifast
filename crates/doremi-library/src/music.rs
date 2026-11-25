@@ -139,7 +139,10 @@ mod tests {
         let mut collection = Collection::decode(br#"{"schema":1,"items":[{"provider":"demo","id":"old","title":"Old","duration_ms":null}]}"#).unwrap();
         collection.save(track.clone()).unwrap();
         let stored = collection.encode().unwrap();
-        assert!(String::from_utf8_lossy(&stored).contains(""schema": 2"));
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&stored).unwrap()["schema"],
+            2
+        );
         assert_eq!(Collection::decode(&stored).unwrap(), collection);
 
         let mut history = History::default();

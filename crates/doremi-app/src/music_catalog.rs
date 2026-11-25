@@ -840,10 +840,12 @@ impl State {
         Some((action, tracks))
     }
     pub(super) fn resume_view(&mut self) {
-        if self.page.is_none() && self.error.is_none() && !self.waiting {
-            if let Some(request) = self.request.clone() {
-                self.dispatch(Some(request), Duration::ZERO);
-            }
+        if self.page.is_none()
+            && self.error.is_none()
+            && !self.waiting
+            && let Some(request) = self.request.clone()
+        {
+            self.dispatch(Some(request), Duration::ZERO);
         }
     }
     pub fn poll(&mut self, ctx: &egui::Context) {

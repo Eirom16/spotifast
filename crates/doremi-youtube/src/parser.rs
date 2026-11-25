@@ -310,7 +310,10 @@ fn details(node: &Value, byline: &Value, item: &mut Item) {
                     && !release_type(part)
                     && !matches!(*part, "Song" | "Video" | "Playlist")
                     && (*part != item.album_name
-                        || item.artists.iter().any(|(artist, _)| artist == part))
+                        || item
+                            .artists
+                            .iter()
+                            .any(|(artist, _)| artist.as_str() == *part))
             })
             .unwrap_or_default()
             .to_owned();
