@@ -86,24 +86,7 @@ fn main() -> eframe::Result {
             base.unwrap_or_else(std::env::temp_dir)
                 .join("doremi/native-dev")
         });
-    let result = eframe::run_native(
-        "Doremi",
-        eframe::NativeOptions {
-            viewport: eframe::egui::ViewportBuilder::default()
-                .with_inner_size([1240.0, 800.0])
-                .with_min_inner_size([360.0, 640.0])
-                .with_icon(
-                    eframe::icon_data::from_png_bytes(include_bytes!(
-                        "../../../assets/doremi/Doremi.png"
-                    ))
-                    .expect("original Doremi icon"),
-                ),
-            ..Default::default()
-        },
-        Box::new(move |cc| Ok(Box::new(doremi_app::DoremiApp::new(cc, directory)))),
-    );
-    doremi_app::DoremiApp::shutdown();
-    result
+    doremi_app::run_desktop(directory)
 }
 
 #[cfg(target_os = "android")]

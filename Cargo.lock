@@ -1885,13 +1885,20 @@ dependencies = [
  "eframe",
  "egui",
  "egui_glow",
+ "fastframe-now-playing",
+ "fastframe-shell",
+ "fastframe-tray",
  "image",
  "jni 0.21.1",
  "log",
  "ndk-context",
  "rand 0.9.5",
+ "raw-window-handle",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha1",
+ "tempfile",
  "tokio",
 ]
 
@@ -1947,6 +1954,7 @@ version = "0.1.0"
 dependencies = [
  "cpal",
  "doremi-core",
+ "serde",
  "symphonia",
 ]
 

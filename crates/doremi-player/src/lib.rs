@@ -2,6 +2,8 @@
 //! PCM; seekable PCM16 WAV and optional FLAC/MP3 files use a decode worker and fixed
 //! atomic PCM channel. No callback performs disk/network IO or takes a lock.
 pub mod buffer;
+#[cfg(any(feature = "native-output", test))]
+pub mod equalizer;
 #[cfg(feature = "local-flac")]
 pub mod flac;
 pub mod local_file;

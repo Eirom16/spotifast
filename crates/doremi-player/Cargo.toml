@@ -16,6 +16,7 @@ local-mp3 = ["dep:symphonia", "symphonia/mp3"]
 aac-mp4 = ["dep:symphonia", "symphonia/aac", "symphonia/isomp4"]
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 doremi-core = { path = "../doremi-core" }
 # Reuse the locked crates.io decoder, MPL-2.0; no external program or git source.
 symphonia = { version = "0.5.5", optional = true, default-features = false, features = ["ogg", "vorbis"] }

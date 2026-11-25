@@ -173,6 +173,8 @@ pub enum Command {
     Play,
     Pause,
     Seek(u64),
+    /// Stop audio and rewind the selected occurrence while preserving the queue.
+    Stop,
     /// Host starts an asynchronous, all-or-nothing album/context read.
     BeginAppend,
     /// Cancel outstanding work, stopping audio but retaining a paused resume point.
@@ -622,11 +624,14 @@ impl Queue {
                 self.append = Some(request);
                 effects.push(Effect::ReadAppend(request));
             }
-            Command::Cancel => {
+            Command::Cancel | Command::Stop => {
                 self.cancel_append(&mut effects);
                 self.cancel_load(&mut effects);
                 self.playing = false;
-                self.playback = if self.current().is_some() {
+                if matches!(command, Command::Stop) {
+                    self.snapshot.position_ms = 0;
+                }
+                self.playback = if matches!(command, Command::Cancel) && self.current().is_some() {
                     Playback::Paused
                 } else {
                     Playback::Stopped

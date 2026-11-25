@@ -33,13 +33,20 @@ pub use rescue_probe::run as rescue_audio_probe;
 #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
 mod youtube_session;
 use doremi_library as persistence;
+#[cfg(not(target_os = "android"))]
+mod desktop;
 #[cfg(any(target_os = "linux", target_os = "android"))]
 mod file_input;
 mod home_view;
 mod library_ui;
 mod listening;
 mod local_media;
+#[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+mod lyrics;
 mod player_view;
+mod visualizer;
+#[cfg(not(target_os = "android"))]
+pub use desktop::run_desktop;
 mod playlists;
 mod presentation;
 mod product_ui;
@@ -118,6 +125,17 @@ struct Preferences {
     light: bool,
     library: Vec<String>,
     volume: f32,
+    equalizer: doremi_player::equalizer::EqSettings,
+    desktop: DesktopPreferences,
+    visualizer: visualizer::Mode,
+}
+
+#[derive(Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+struct DesktopPreferences {
+    close_to_tray: bool,
+    mini_on_top: bool,
+    mini_position: Option<[f32; 2]>,
 }
 
 impl Default for Preferences {
@@ -128,6 +146,12 @@ impl Default for Preferences {
             light: false,
             library: vec![],
             volume: 0.7,
+            equalizer: Default::default(),
+            visualizer: visualizer::Mode::Off,
+            desktop: DesktopPreferences {
+                mini_on_top: true,
+                ..Default::default()
+            },
         }
     }
 }
@@ -154,6 +178,8 @@ struct Model {
     notice: String,
     revision: u64,
     transport_serial: u64,
+    #[cfg(not(target_os = "android"))]
+    seek_serial: u64,
     write_prefs: bool,
     write_queue: bool,
     library: persistence::collection::Collection,
@@ -241,6 +267,8 @@ impl Model {
             notice: "Demostración sin audio. No es reproducción real.".into(),
             revision: 0,
             transport_serial: 0,
+            #[cfg(not(target_os = "android"))]
+            seek_serial: 0,
             write_prefs: true,
             write_queue: true,
             library,
@@ -284,6 +312,7 @@ impl Model {
                     } else {
                         0.7
                     };
+                    prefs.equalizer = prefs.equalizer.clamped();
                     model.prefs = prefs;
                 }
                 _ => {
@@ -348,6 +377,12 @@ impl Model {
         ) {
             self.enable_audio();
         }
+        #[cfg(not(target_os = "android"))]
+        if matches!(&command, Command::Seek(_))
+            || matches!(&command, Command::Previous) && self.queue.position_ms() > 3_000
+        {
+            self.seek_serial += 1;
+        }
         self.transport_serial += 1;
         self.command_with_import_policy(command, true);
     }
@@ -379,12 +414,22 @@ impl Model {
     fn enable_audio(&mut self) {
         if self.audio.is_none() {
             match Engine::new() {
-                Ok(engine) => {
+                Ok(mut engine) => {
                     engine.set_volume(self.prefs.volume);
+                    engine.set_equalizer(self.prefs.equalizer);
                     self.audio = Some(engine);
                 }
                 Err(_) => self.notice = "No se pudo iniciar el worker de audio.".into(),
             }
+        }
+    }
+    fn set_volume(&mut self, value: f32) {
+        if value.is_finite() {
+            self.prefs.volume = value.clamp(0.0, 1.0);
+            if let Some(engine) = &self.audio {
+                engine.set_volume(self.prefs.volume);
+            }
+            self.revision += 1;
         }
     }
     fn real_audio(&self) -> bool {
@@ -812,35 +857,28 @@ pub struct DoremiApp {
     last_queue_persist: Instant,
     saved_revision: u64,
     saved_controls: Vec<Control>,
+    spectrum: Option<visualizer::WideAnalyser>,
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     artwork_textures: artwork::Textures,
+    #[cfg(not(target_os = "android"))]
+    open_mini: bool,
+    #[cfg(not(target_os = "android"))]
+    directory: PathBuf,
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+    lyrics: lyrics::Panel,
 }
 
 impl DoremiApp {
-    #[cfg(not(target_os = "android"))]
-    pub fn new(cc: &eframe::CreationContext<'_>, directory: PathBuf) -> Self {
-        let mut app = Self::new_context(&cc.egui_ctx, directory);
-        app.internal_ui = std::env::var("DOREMI_INTERNAL_QA").as_deref() == Ok("1")
-            && std::env::var_os("DOREMI_DATA_DIR").is_some();
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
-        if std::env::var_os("DOREMI_DATA_DIR").is_none() {
-            app.model.as_mut().unwrap().music.session.restore();
-            app.model
-                .as_mut()
-                .unwrap()
-                .youtube_page(doremi_youtube::Request::Home);
-        }
-        app
-    }
-
     pub fn new_context(ctx: &egui::Context, directory: PathBuf) -> Self {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        let lyrics = lyrics::Panel::new(&directory);
         let retained = RETAINED.lock().unwrap().take();
         let (mut model, writer) = if let Some(retained) = retained {
             (retained.model, retained.writer)
         } else {
             // Startup reads precede drawing. The writer does all durable I/O.
             let model = Model::load(&directory);
-            (model, persistence::Writer::new(directory))
+            (model, persistence::Writer::new(directory.clone()))
         };
         model.enable_audio();
         doremi_ui::install(ctx);
@@ -861,8 +899,15 @@ impl DoremiApp {
             last_queue_persist: Instant::now(),
             saved_revision: u64::MAX,
             saved_controls: vec![],
+            spectrum: None,
             #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
             artwork_textures: artwork::Textures::default(),
+            #[cfg(not(target_os = "android"))]
+            open_mini: false,
+            #[cfg(not(target_os = "android"))]
+            directory,
+            #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+            lyrics,
         }
     }
     fn button(&mut self, ui: &mut egui::Ui, name: &str, label: &str, width: f32) -> bool {
@@ -1008,17 +1053,22 @@ impl DoremiApp {
 }
 
 impl DoremiApp {
-    #[cfg(any(
-        target_os = "android",
-        all(test, any(target_os = "linux", target_os = "windows"))
-    ))]
     fn poll_background(&mut self, ctx: &egui::Context) {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_local(ctx);
-        self.model.as_mut().unwrap().poll_online(ctx);
-        self.poll_music_catalog(ctx);
-        self.poll_artwork(ctx);
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        {
+            self.model.as_mut().unwrap().poll_online(ctx);
+            self.poll_music_catalog(ctx);
+            self.poll_artwork(ctx);
+        }
         self.model.as_mut().unwrap().poll_audio();
+        let model = self.model.as_ref().unwrap();
+        if model.queue.playback() == Playback::Loading {
+            ctx.request_repaint_after(Duration::from_millis(50));
+        } else if model.real_audio() && model.queue.playback() == Playback::Playing {
+            ctx.request_repaint_after(Duration::from_millis(200));
+        }
     }
 
     pub fn draw(&mut self, ui: &mut egui::Ui) {
@@ -1041,22 +1091,7 @@ impl DoremiApp {
                 }
             }
         }
-        #[cfg(any(target_os = "linux", target_os = "android"))]
-        self.model.as_mut().unwrap().poll_local(&ctx);
-        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        {
-            self.model.as_mut().unwrap().poll_online(&ctx);
-            self.poll_music_catalog(&ctx);
-            self.poll_artwork(&ctx);
-        }
-        self.model.as_mut().unwrap().poll_audio();
-        let model = self.model.as_ref().unwrap();
-        if model.queue.playback() == Playback::Loading {
-            ctx.request_repaint_after(Duration::from_millis(50));
-        } else if model.real_audio() && model.queue.playback() == Playback::Playing {
-            // Audio runs independently. The position label needs only 5 updates/s.
-            ctx.request_repaint_after(Duration::from_millis(200));
-        }
+        self.poll_background(&ctx);
         self.controls.clear();
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = doremi_ui::palette(prefs.light, prefs.green);
@@ -1067,6 +1102,10 @@ impl DoremiApp {
         }
         ctx.set_global_style(style);
         self.shell(ui, &palette);
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if self.model.as_ref().unwrap().page != Page::Player && self.lyrics.open {
+            self.lyrics.hide(&ctx);
+        }
         self.persist(&ctx);
     }
 
@@ -1395,6 +1434,7 @@ impl DoremiApp {
                     let prefs = &self.model.as_ref().unwrap().prefs;
                     let palette = doremi_ui::palette(prefs.light, prefs.green);
                     self.mobile_player(ui, &palette);
+                    self.visualizer(ui);
                     return;
                 }
                 if !self.current_visible() {
@@ -1402,17 +1442,12 @@ impl DoremiApp {
                     return;
                 }
                 self.desktop_player(ui);
+                self.visualizer(ui);
             }
         }
     }
 }
 
-#[cfg(not(target_os = "android"))]
-impl eframe::App for DoremiApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        self.draw(ui);
-    }
-}
 impl Drop for DoremiApp {
     fn drop(&mut self) {
         if let Some(mut model) = self.model.take() {

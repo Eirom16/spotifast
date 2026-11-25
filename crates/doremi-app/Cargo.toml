@@ -35,15 +35,27 @@ doremi-youtube = { path = "../doremi-youtube" }
 doremi-commons = { path = "../doremi-commons" }
 doremi-player = { path = "../doremi-player", features = ["native-output", "ogg-vorbis", "local-flac", "local-mp3", "aac-mp4"] }
 tokio = { version = "1", features = ["rt", "time", "net", "sync", "macros"] }
+sha1 = "0.10"
+tempfile = "3"
+
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 
 [target.'cfg(not(target_os = "android"))'.dependencies]
 # Preserve the pinned eframe desktop host. Android owns EGL via GLSurfaceView
 # because the pinned winit/GameActivity loop cannot survive Activity recreation.
 eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "x11", "wayland"] }
+# The same platform surfaces and pins the original Spotifast host uses.
+fastframe-now-playing = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-shell = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+fastframe-tray = { git = "https://github.com/crmne/fastframe", tag = "v0.15.2" }
+raw-window-handle = "0.6"
+
 
 [target.'cfg(target_os = "android")'.dependencies]
 # Use the existing pinned renderer directly, without another Android event loop.
 egui_glow = { version = "0.36.2", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json"] }
 # JNI carries only EGL lifecycle, touch and Android's Unicode InputConnection.
 jni = "0.21"
 # CPAL/AAudio needs a process-lifetime application context, initialized once.

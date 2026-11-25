@@ -6,6 +6,16 @@ use doremi_ui::{
 };
 
 impl DoremiApp {
+    pub(super) fn lyrics_button(&mut self, ui: &mut egui::Ui) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if self.current_visible() && self.choice_button(ui, "player-lyrics", "Letras", 72.0, false)
+        {
+            self.lyrics.open = true;
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
+        let _ = ui;
+    }
+
     fn toggle_player_saved(&mut self, media: &Media) {
         let model = self.model.as_mut().unwrap();
         if model.library.contains(&media.id) {
@@ -66,7 +76,18 @@ impl DoremiApp {
         let playback = model.queue.playback();
         let real_audio = model.real_audio();
         let notice = model.notice.clone();
-        if self.choice_button(ui, "player-back", "Volver", 100.0, false) {
+        let back = ui
+            .horizontal(|ui| {
+                let back = self.choice_button(ui, "player-back", "Volver", 100.0, false);
+                self.lyrics_button(ui);
+                #[cfg(not(target_os = "android"))]
+                if self.choice_button(ui, "open-mini", "Mini reproductor", 150.0, false) {
+                    self.open_mini = true;
+                }
+                back
+            })
+            .inner;
+        if back {
             self.go_back();
             return;
         }

@@ -364,6 +364,11 @@ impl DoremiApp {
                 self.page_rect = [rect.left(), rect.top(), rect.right(), rect.bottom()];
                 let model = self.model.as_ref().unwrap();
                 let page = model.page;
+                #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+                if page == Page::Player && self.lyrics.open {
+                    self.show_lyrics(ui);
+                    return;
+                }
                 let scroll_id = egui::Id::new(format!("page:{page:?}"));
                 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
                 let scroll_id = if page == Page::Search {
@@ -600,11 +605,7 @@ impl DoremiApp {
             Some(0.05),
         );
         if let theme::SliderEvent::Dragging(value) | theme::SliderEvent::Committed(value) = event {
-            model.prefs.volume = value;
-            if let Some(engine) = &model.audio {
-                engine.set_volume(model.prefs.volume);
-            }
-            model.revision += 1;
+            model.set_volume(value);
         }
         self.record("volume", &response);
     }
@@ -856,6 +857,7 @@ impl DoremiApp {
             );
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 self.player_favorite(ui, palette);
+                self.lyrics_button(ui);
             });
         });
         back

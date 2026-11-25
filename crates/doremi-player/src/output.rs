@@ -2,8 +2,10 @@
 //! The callback reads a predecoded buffer (at most MAX_SAMPLES floats), atomics
 //! and its own cursor. It performs no allocation, I/O, locks or event delivery.
 mod feed;
+mod tap;
 use super::{
     Builtin, Cursor, DecodeError, Pcm, buffer, decode_wav,
+    equalizer::{EqSettings, realtime},
     local_file::LocalFile,
     wav_stream::{FrameReader, Wav},
 };
@@ -79,11 +81,13 @@ struct Stats {
     capacity: AtomicU64,
     underruns: AtomicU64,
     nonzero: AtomicU64,
+    tap: tap::AudioTap,
 }
 struct Control {
     epoch: AtomicU64,
     playing: AtomicBool,
     gain: AtomicU32,
+    equalizer: realtime::Published<12>,
 }
 struct Load {
     epoch: u64,
@@ -138,6 +142,8 @@ struct Active {
     stats: Arc<Stats>,
     running: bool,
     ended_sent: bool,
+    equalizer: Arc<realtime::Coefficients>,
+    rate: u32,
 }
 
 pub struct Engine {
@@ -154,6 +160,7 @@ impl Engine {
             epoch: AtomicU64::new(0),
             playing: AtomicBool::new(false),
             gain: AtomicU32::new(0.7_f32.to_bits()),
+            equalizer: realtime::Published::new([0.0; 12]),
         });
         let events = Arc::new(Mutex::new(None));
         let worker_control = control.clone();
@@ -302,6 +309,22 @@ impl Engine {
         };
         self.control.gain.store(gain.to_bits(), Ordering::Release);
     }
+    pub fn set_equalizer(&mut self, settings: EqSettings) {
+        self.control
+            .equalizer
+            .update(realtime::settings_data(settings));
+        self.wake();
+    }
+    pub fn visual_samples(&self, target: &mut [f32]) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|current| current.stats.tap.window(target))
+    }
+    pub fn stop_visual_samples(&self) {
+        if let Some(current) = &self.current {
+            current.stats.tap.stop();
+        }
+    }
     pub fn current_request(&self) -> Option<RequestId> {
         self.current.as_ref().map(|c| c.request)
     }
@@ -362,6 +385,8 @@ fn worker(
     events: Arc<Mutex<Option<EngineEvent>>>,
 ) {
     let mut active: Option<Active> = None;
+    let mut eq_settings = EqSettings::default();
+    let mut eq_version = 0;
     loop {
         let command = if active.as_ref().is_some_and(|a| a.running) {
             match receiver.recv_timeout(Duration::from_millis(50)) {
@@ -381,12 +406,21 @@ fn worker(
                 pending = Some(load);
             }
         }
+        if let Some((version, values)) = control.equalizer.read(eq_version) {
+            eq_version = version;
+            eq_settings = realtime::settings_from(values);
+            if let Some(current) = &active {
+                current
+                    .equalizer
+                    .update(realtime::design(eq_settings, current.rate));
+            }
+        }
         if let Some(load) = pending {
             active.take();
             if load.epoch == control.epoch.load(Ordering::Acquire) {
                 let epoch = load.epoch;
                 let request = load.request;
-                match prepare(load, control.clone()) {
+                match prepare(load, control.clone(), eq_settings) {
                     Ok(next) if epoch == control.epoch.load(Ordering::Acquire) => {
                         active = Some(next);
                         publish(&events, &control, epoch, EngineEvent::Ready(request));
@@ -512,17 +546,17 @@ enum Step {
     Failed,
 }
 impl Input {
-    fn next_frame(&mut self, gain: f32) -> Step {
+    fn next_frame(&mut self) -> Step {
         match self {
             Self::Prepared { pcm, cursor } => {
-                cursor.next_frame(pcm, gain).map_or(Step::End, Step::Frame)
+                cursor.next_frame(pcm, 1.0).map_or(Step::End, Step::Frame)
             }
             Self::Streaming {
                 consumer, frames, ..
             } => match consumer.read() {
                 buffer::Read::Frame(frame) => {
                     *frames += 1;
-                    Step::Frame([frame[0] * gain, frame[1] * gain])
+                    Step::Frame(frame)
                 }
                 buffer::Read::Pending => Step::Pending,
                 buffer::Read::End => Step::End,
@@ -543,7 +577,11 @@ impl Input {
         }
     }
 }
-fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
+fn prepare(
+    load: Load,
+    control: Arc<Control>,
+    eq_settings: EqSettings,
+) -> Result<Active, EngineError> {
     if load.epoch != control.epoch.load(Ordering::Acquire) {
         return Err(EngineError::Closed);
     }
@@ -656,9 +694,14 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         .position
         .store(input.position_ms(), Ordering::Release);
     load.stats.rate.store(config.sample_rate, Ordering::Release);
+    let rate = config.sample_rate;
+    let equalizer = Arc::new(realtime::Coefficients::new(realtime::design(
+        eq_settings,
+        rate,
+    )));
     macro_rules! build {
         ($sample:ty) => {
-            stream::<$sample>(&device, config, input, state)
+            stream::<$sample>(&device, config, input, state, equalizer.clone())
         };
     }
     let stream = match format {
@@ -678,6 +721,8 @@ fn prepare(load: Load, control: Arc<Control>) -> Result<Active, EngineError> {
         stats: load.stats,
         running: false,
         ended_sent: false,
+        equalizer,
+        rate,
     })
 }
 fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
@@ -685,6 +730,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
     config: cpal::StreamConfig,
     mut input: Input,
     state: CallbackState,
+    equalizer: Arc<realtime::Coefficients>,
 ) -> Result<cpal::Stream, EngineError> {
     let CallbackState {
         control,
@@ -695,6 +741,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
     let channels = usize::from(config.channels);
     let errors = stats.clone();
     let mut first_callback = true;
+    let mut processor = realtime::Processor::new(&equalizer, config.sample_rate);
     device
         .build_output_stream(
             config,
@@ -706,6 +753,8 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                     return;
                 }
                 let gain = f32::from_bits(control.gain.load(Ordering::Acquire));
+                processor.refresh(&equalizer);
+                let mut capture = stats.tap.block();
                 let mut delivered = 0_u64;
                 let mut nonzero = 0_u64;
                 let silence = T::from_sample(0.0);
@@ -716,7 +765,7 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                         frame.fill(silence);
                         continue;
                     }
-                    if let Step::Frame(sample) = match input.next_frame(gain) {
+                    if let Step::Frame(sample) = match input.next_frame() {
                         Step::Pending => {
                             buffering = true;
                             stats.underruns.fetch_add(1, Ordering::Relaxed);
@@ -735,6 +784,11 @@ fn stream<T: SizedSample + FromSample<f32> + PartialEq>(
                         }
                         frame => frame,
                     } {
+                        let sample = processor.shape(sample);
+                        if let Some(capture) = &mut capture {
+                            capture.push(sample);
+                        }
+                        let sample = processor.output(sample, gain);
                         for (channel, out) in frame.iter_mut().enumerate() {
                             let value = if channels == 1 {
                                 (sample[0] + sample[1]) * 0.5
