@@ -252,24 +252,6 @@ fn release_type(value: &str) -> bool {
 }
 
 fn details(node: &Value, byline: &Value, item: &mut Item) {
-    let parts: Vec<_> = item.subtitle.split(" • ").collect();
-    if item.duration.is_empty()
-        && let Some(time) = parts.iter().copied().find(|part| is_time(part))
-    {
-        item.duration = time.to_owned();
-    }
-    if item.browse_id.starts_with("MPRE") {
-        item.release_type = parts
-            .iter()
-            .copied()
-            .find(|part| release_type(part))
-            .map(str::to_owned);
-        item.year = parts
-            .iter()
-            .copied()
-            .find(|part| is_year(part))
-            .map(str::to_owned);
-    }
     let endpoint = |value: &Value| {
         first_str(
             value,
@@ -298,6 +280,24 @@ fn details(node: &Value, byline: &Value, item: &mut Item) {
             "",
             item,
         );
+    }
+    let parts: Vec<_> = item.subtitle.split(" • ").collect();
+    if item.duration.is_empty()
+        && let Some(time) = parts.iter().copied().find(|part| is_time(part))
+    {
+        item.duration = time.to_owned();
+    }
+    if item.browse_id.starts_with("MPRE") {
+        item.release_type = parts
+            .iter()
+            .copied()
+            .find(|part| release_type(part))
+            .map(str::to_owned);
+        item.year = parts
+            .iter()
+            .copied()
+            .find(|part| is_year(part))
+            .map(str::to_owned);
     }
     if item.is_song() || item.browse_id.starts_with("MPRE") || item.browse_id.starts_with("VL") {
         let byline = text(byline);
