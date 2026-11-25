@@ -111,13 +111,21 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-musicbrainz` | `path=../doremi-musicbrainz` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-player` | `features=['native-output', 'ogg-vorbis', 'local-flac', 'local-mp3', 'aac-mp4']; path=../doremi-player` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `doremi-youtube` | `path=../doremi-youtube` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `sha1` | `0.10` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `tempfile` | `3` |
 | `crates/doremi-app/cfg(any(target_os = "linux", target_os = "android", target_os = "windows")): dependencies` | `tokio` | `features=['rt', 'time', 'net', 'sync', 'macros']; version=1` |
+| `crates/doremi-app/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-native-roots', 'json']; version=0.12` |
 | `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `eframe` | `default-features=False; features=['glow', 'default_fonts', 'x11', 'wayland']; version=0.36.2` |
+| `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `fastframe-now-playing` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
+| `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `fastframe-shell` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
+| `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `fastframe-tray` | `git=https://github.com/crmne/fastframe; tag=v0.15.2` |
+| `crates/doremi-app/cfg(not(target_os = "android")): dependencies` | `raw-window-handle` | `0.6` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `android_logger` | `0.15` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `egui_glow` | `default-features=False; version=0.36.2` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `jni` | `0.21` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `log` | `0.4` |
 | `crates/doremi-app/cfg(target_os = "android"): dependencies` | `ndk-context` | `0.1` |
+| `crates/doremi-app/cfg(target_os = "android"): dependencies` | `reqwest` | `default-features=False; features=['rustls-tls-webpki-roots', 'json']; version=0.12` |
 | `crates/doremi-auth/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `doremi-core` | `path=../doremi-core` |
 | `crates/doremi-auth/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `doremi-youtube` | `path=../doremi-youtube` |
 | `crates/doremi-auth/cfg(any(target_os = "linux", target_os = "windows")): dependencies` | `tao` | `0.37` |
@@ -127,6 +135,7 @@ Se conservan las fuentes git heredadas; los nuevos paquetes usan paths y crates.
 | `crates/doremi-library: dependencies` | `serde_json` | `1` |
 | `crates/doremi-library: dependencies` | `sha2` | `0.10.9` |
 | `crates/doremi-player: dependencies` | `doremi-core` | `path=../doremi-core` |
+| `crates/doremi-player: dependencies` | `serde` | `features=['derive']; version=1` |
 | `crates/doremi-player: dependencies` | `symphonia` | `default-features=False; features=['ogg', 'vorbis']; optional=True; version=0.5.5` |
 | `crates/doremi-player/cfg(not(target_os = "linux")): dependencies` | `cpal` | `default-features=False; optional=True; version=0.18.2` |
 | `crates/doremi-player/cfg(target_os = "linux"): dependencies` | `cpal` | `default-features=False; features=['pipewire', 'pulseaudio']; optional=True; version=0.18.2` |

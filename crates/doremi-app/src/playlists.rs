@@ -66,6 +66,8 @@ impl DoremiApp {
             TextField::Search => &model.query,
             TextField::PlaylistName => &model.playlist_name,
             TextField::PlaylistRename => &model.playlist_edit_name,
+            TextField::LibraryFilter => &self.library_tracks.filter,
+            TextField::PlaylistFilter => &self.playlist_tracks.filter,
             TextField::SessionCookie => &model.music.session.pasted,
         }
     }
@@ -90,6 +92,12 @@ impl DoremiApp {
             (TextField::PlaylistRename, Page::Playlist) => {
                 model.playlist_edit_name = text.chars().take(64).collect();
                 model.revision += 1;
+            }
+            (TextField::LibraryFilter, Page::Library) => {
+                self.library_tracks.filter = text.chars().take(128).collect();
+            }
+            (TextField::PlaylistFilter, Page::Playlist) => {
+                self.playlist_tracks.filter = text.chars().take(128).collect();
             }
             (TextField::SessionCookie, Page::Settings) => {
                 model.music.session.pasted = text.chars().take(16384).collect();
@@ -155,6 +163,9 @@ impl DoremiApp {
     pub(super) fn open_playlist(&mut self, id: u64) {
         let model = self.model.as_mut().unwrap();
         if let Some(list) = model.playlists.get(id) {
+            if model.selected_playlist != Some(id) {
+                self.playlist_tracks = Default::default();
+            }
             model.playlist_edit_name = list.name.clone();
             model.selected_playlist = Some(id);
             model.playlist_delete_confirmation = false;
@@ -246,6 +257,10 @@ impl DoremiApp {
             self.navigate(Page::Library);
             return;
         }
+        if !list.entries.is_empty() {
+            self.collection_controls(ui, TextField::PlaylistFilter);
+        }
+        let view = self.playlist_tracks.indices(&list.entries);
         // Keep the rename field near the top, like creation in Biblioteca.
         // The mobile keyboard must not chase a focused field below the hero.
         let edit = ui.collapsing("Editar playlist", |ui| {
@@ -314,12 +329,14 @@ impl DoremiApp {
             },
         );
         ui.add_space(12.0);
-        let playable = list.entries.iter().any(|media| self.playable_media(media));
+        let playable = view
+            .iter()
+            .any(|&index| self.playable_media(&list.entries[index]));
         ui.add_enabled_ui(playable, |ui| {
             if self.button(ui, "playlist-play", "Reproducir playlist", 220.0) {
-                let rows: Vec<_> = list
-                    .entries
+                let rows: Vec<_> = view
                     .iter()
+                    .map(|&index| &list.entries[index])
                     .filter(|media| self.playable_media(media))
                     .cloned()
                     .collect();
@@ -327,7 +344,7 @@ impl DoremiApp {
                 self.navigate(Page::Player);
             }
         });
-        if !list.entries.is_empty() && !playable {
+        if !list.entries.is_empty() && !view.is_empty() && !playable {
             ui.weak("Esta lista contiene metadatos sin audio. Puedes explorar sus grabaciones.");
         }
         if let Some(notice) = &self.model.as_ref().unwrap().playlist_notice {
@@ -336,7 +353,10 @@ impl DoremiApp {
         if list.entries.is_empty() {
             ui.label("Añade canciones desde el menú de un resultado o de tu biblioteca.");
         }
-        self.rows(ui, &list.entries);
+        if !list.entries.is_empty() && view.is_empty() {
+            ui.weak("Ninguna canción coincide con el filtro.");
+        }
+        self.indexed_rows(ui, &list.entries, view, None);
     }
     pub(super) fn row_playlist_actions(&mut self, ui: &mut egui::Ui, media: &Media, index: usize) {
         let snapshot = self.model.as_ref().unwrap().playlists.clone();

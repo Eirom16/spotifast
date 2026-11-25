@@ -301,6 +301,9 @@ impl DoremiApp {
                 .audio
                 .as_ref()
                 .is_some_and(|engine| engine.visual_samples(&mut samples));
+        if !ready {
+            samples.fill(0.0);
+        }
         if running {
             ui.ctx().request_repaint_after(Duration::from_millis(33));
         }

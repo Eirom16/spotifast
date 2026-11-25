@@ -1114,14 +1114,23 @@ impl DoremiApp {
         rows: &[Media],
         prefix: Option<&str>,
     ) {
-        let visible: Vec<_> = rows
-            .iter()
-            .enumerate()
-            .filter(|(_, media)| self.media_visible(media))
-            .collect();
+        self.indexed_rows(ui, rows, (0..rows.len()).collect(), prefix);
+    }
+
+    pub(super) fn indexed_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        rows: &[Media],
+        view: Vec<usize>,
+        prefix: Option<&str>,
+    ) {
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        for (index, media) in visible {
+        for (offset, &index) in view.iter().enumerate() {
+            let media = &rows[index];
+            if !self.media_visible(media) {
+                continue;
+            }
             ui.push_id((&media.id, index), |ui| {
                 let subtitle = if !self.internal_ui {
                     match metadata_kind(media) {
@@ -1213,7 +1222,11 @@ impl DoremiApp {
                     self.record(&format!("playlist-select:{index}"), &row.body);
                 }
                 if row.body.clicked() {
-                    self.open_library_entry(rows, index);
+                    let displayed = view
+                        .iter()
+                        .map(|&source| rows[source].clone())
+                        .collect::<Vec<_>>();
+                    self.open_library_entry(&displayed, offset);
                 }
                 let saved = self.model.as_ref().unwrap().library.contains(&media.id);
                 let mut child = ui.new_child(

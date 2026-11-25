@@ -827,6 +827,8 @@ enum TextField {
     Search,
     PlaylistName,
     PlaylistRename,
+    LibraryFilter,
+    PlaylistFilter,
     SessionCookie,
 }
 impl TextField {
@@ -835,6 +837,8 @@ impl TextField {
             Self::Search => "search",
             Self::PlaylistName => "playlist-name",
             Self::PlaylistRename => "playlist-rename",
+            Self::LibraryFilter => "library-filter-text",
+            Self::PlaylistFilter => "playlist-filter-text",
             Self::SessionCookie => "session-cookie",
         }
     }
@@ -844,6 +848,8 @@ pub struct DoremiApp {
     /// Explicit, isolated development profiles only. Never a persisted preference.
     internal_ui: bool,
     library_filter: library_ui::Filter,
+    library_tracks: library_ui::TrackView,
+    playlist_tracks: library_ui::TrackView,
     editor: TextField,
     model: Option<Model>,
     writer: Option<persistence::Writer>,
@@ -886,6 +892,8 @@ impl DoremiApp {
             instance: NEXT_INSTANCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             internal_ui: false,
             library_filter: library_ui::Filter::default(),
+            library_tracks: library_ui::TrackView::default(),
+            playlist_tracks: library_ui::TrackView::default(),
             editor: TextField::Search,
             model: Some(model),
             writer: Some(writer),
