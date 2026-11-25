@@ -38,6 +38,7 @@ pub fn run() -> Result<String, String> {
             id: doremi_youtube::id(id).unwrap(),
             title: id.into(),
             duration_ms: Some(duration),
+            music: None,
         })
         .collect();
     let ctx = egui::Context::default();

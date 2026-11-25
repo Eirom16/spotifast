@@ -18,7 +18,7 @@ pub(super) enum Filter {
 impl Filter {
     fn includes(self, media: &Media) -> bool {
         use doremi_core::media::EntityKind;
-        let kind = presentation::metadata_kind(&media.id).unwrap_or(EntityKind::Recording);
+        let kind = presentation::metadata_kind(media).unwrap_or(EntityKind::Recording);
         match self {
             Self::All => true,
             Self::Songs => kind == EntityKind::Recording,

@@ -342,6 +342,7 @@ fn entry(value: &Value, kind: EntityKind) -> Result<CatalogEntry, Error> {
             id,
             title,
             duration_ms,
+            music: None,
         },
         kind,
         artists,

@@ -2,18 +2,24 @@
 //! Copyright (c) 2026 Yiğit Bozyaka; MIT (see ../LICENSE-TUBEFAST).
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-const THUMB_WIDTH: u64 = 700;
+const THUMB_WIDTH: u64 = 226;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Item {
     pub title: String,
     pub subtitle: String,
     pub extra: String,
+    pub summary: String,
     pub duration: String,
     pub thumb: String,
     pub video_id: String,
     pub browse_id: String,
     pub artist_id: String,
     pub album_id: String,
+    pub album_name: String,
+    pub byline: String,
+    pub release_type: Option<String>,
+    pub year: Option<String>,
+    pub page_type: String,
     pub is_artist: bool,
     #[serde(default)]
     pub artists: Vec<(String, String)>,
@@ -41,11 +47,19 @@ pub enum Layout {
     Top,
 }
 
+/// Opaque browse parameters supplied by a shelf's own navigation endpoint.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShelfLink {
+    pub id: String,
+    pub params: Option<String>,
+}
+
 #[derive(Clone, Debug)]
 pub struct Section {
     pub title: String,
     pub layout: Layout,
     pub items: Vec<Item>,
+    pub more: Option<ShelfLink>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -54,6 +68,8 @@ pub struct Page {
     pub header: Option<Item>,
     pub sections: Vec<Section>,
     pub partial: bool,
+    pub suggestions: Vec<String>,
+    pub spelling: Option<String>,
 }
 
 impl Page {
@@ -73,16 +89,20 @@ pub fn parse_page(response: &Value) -> Page {
     page.sections.retain(|s| !s.items.is_empty());
     page.continuation = page_continuation(response)
         .or_else(|| playlist_continuation(response))
-        .or_else(|| continuation(response));
+        .or_else(|| response_continuation(response));
     page
 }
 
-const SHELVES: [&str; 5] = [
+const SHELVES: [&str; 9] = [
     "musicCarouselShelfRenderer",
     "musicShelfRenderer",
     "musicPlaylistShelfRenderer",
     "musicCardShelfRenderer",
     "gridRenderer",
+    "gridContinuation",
+    "musicShelfContinuation",
+    "musicPlaylistShelfContinuation",
+    "appendContinuationItemsAction",
 ];
 const ITEMS: [&str; 3] = [
     "musicResponsiveListItemRenderer",
@@ -111,9 +131,17 @@ fn collect(node: &Value, page: &mut Page) {
                             title: String::new(),
                             layout: Layout::Tracks,
                             items: Vec::new(),
+                            more: None,
                         });
                     }
                     page.sections.last_mut().unwrap().items.extend(item(child));
+                } else if matches!(key, "didYouMeanRenderer" | "showingResultsForRenderer") {
+                    page.spelling = [
+                        text(&child["correctedQuery"]),
+                        text(&child["correctedQueryText"]),
+                    ]
+                    .into_iter()
+                    .find(|query| !query.trim().is_empty() && query.chars().count() <= 128);
                 } else if HEADERS.contains(&key) {
                     page.header = Some(header(child));
                 } else {
@@ -126,7 +154,10 @@ fn collect(node: &Value, page: &mut Page) {
 }
 
 fn shelf(kind: &str, node: &Value) -> Section {
-    let children = node["contents"].as_array().or(node["items"].as_array());
+    let children = node["contents"]
+        .as_array()
+        .or(node["items"].as_array())
+        .or(node["continuationItems"].as_array());
     let entries = || {
         children
             .into_iter()
@@ -144,12 +175,6 @@ fn shelf(kind: &str, node: &Value) -> Section {
     let (title, layout) = match kind {
         "musicCardShelfRenderer" => {
             let top = card(node);
-            for item in items
-                .iter_mut()
-                .filter(|item| top.is_artist && item.subtitle.is_empty())
-            {
-                item.subtitle = top.title.clone();
-            }
             items.insert(0, top);
             ("Top result".to_owned(), Layout::Top)
         }
@@ -167,10 +192,24 @@ fn shelf(kind: &str, node: &Value) -> Section {
         }
         _ => (text(&node["title"]), Layout::Tracks),
     };
+    let basic = &node["header"]["musicCarouselShelfBasicHeaderRenderer"];
+    let endpoint = [
+        &basic["moreContentButton"]["buttonRenderer"]["navigationEndpoint"]["browseEndpoint"],
+        &basic["title"]["runs"][0]["navigationEndpoint"]["browseEndpoint"],
+        &node["title"]["runs"][0]["navigationEndpoint"]["browseEndpoint"],
+    ]
+    .into_iter()
+    .find(|value| value["browseId"].is_string());
     Section {
         title,
         layout,
         items,
+        more: endpoint.and_then(|endpoint| {
+            Some(ShelfLink {
+                id: endpoint["browseId"].as_str()?.to_owned(),
+                params: endpoint["params"].as_str().map(str::to_owned),
+            })
+        }),
     }
 }
 
@@ -196,116 +235,91 @@ fn card(node: &Value) -> Item {
         ..Item::default()
     };
     it.is_artist = !it.is_song() && it.browse_id.starts_with("UC");
-    tidy(&mut it);
+    details(node, &node["subtitle"], &mut it);
     it
 }
 
-fn tidy(it: &mut Item) {
-    let mut parts: Vec<&str> = it.subtitle.split(" • ").collect();
-    if parts.first() == Some(&"Song") {
-        parts.remove(0);
-    }
-    let timed = parts.last().is_some_and(|last| {
-        last.contains(':') && last.chars().all(|c| c.is_ascii_digit() || c == ':')
-    });
-    if timed && it.duration.is_empty() {
-        it.duration = parts.pop().unwrap_or_default().to_owned();
-    }
-    let credited;
-    if it.is_song()
-        && let Some(slot) = parts.iter().position(|part| *part != "Video")
-    {
-        let (title, featured) = clean_title(&it.title);
-        let prefix = format!("{} - ", parts[slot]).to_ascii_lowercase();
-        it.title = match title.to_ascii_lowercase().starts_with(&prefix) {
-            true if title.len() > prefix.len() => title[prefix.len()..].to_owned(),
-            _ => title,
-        };
-        let first = featured.split([',', '&']).next().unwrap_or_default().trim();
-        if !first.is_empty() && !it.subtitle.contains(first) {
-            credited = format!("{}, {featured}", parts[slot]);
-            parts[slot] = &credited;
-        }
-    }
-    it.subtitle = parts.join(" • ");
+fn is_time(value: &str) -> bool {
+    value.contains(':') && value.chars().all(|c| c.is_ascii_digit() || c == ':')
 }
 
-/// Drops the "(Official Video)" style noise from a song title and returns the
-/// featured artists it named separately, so the byline can carry them.
-fn clean_title(title: &str) -> (String, String) {
-    let credit = |inner: &str| {
-        let inner = inner.trim();
-        let lower = inner.to_ascii_lowercase();
-        ["featuring ", "feat.", "feat ", "ft.", "ft "]
-            .into_iter()
-            .find(|mark| lower.starts_with(mark))
-            .map(|mark| inner[mark.len()..].trim().to_owned())
-    };
-    let noise = |inner: &str| {
-        let lower = inner.to_ascii_lowercase();
-        let tagged = ["official", "oficial", "officiel", "lyric"]
+fn is_year(value: &str) -> bool {
+    value.len() == 4 && value.bytes().all(|c| c.is_ascii_digit())
+}
+
+fn release_type(value: &str) -> bool {
+    matches!(value, "Album" | "Single" | "EP" | "Compilation")
+}
+
+fn details(node: &Value, byline: &Value, item: &mut Item) {
+    let parts: Vec<_> = item.subtitle.split(" • ").collect();
+    if item.duration.is_empty()
+        && let Some(time) = parts.iter().copied().find(|part| is_time(part))
+    {
+        item.duration = time.to_owned();
+    }
+    if item.browse_id.starts_with("MPRE") {
+        item.release_type = parts
             .iter()
-            .any(|word| lower.contains(word));
-        let words = [
-            "audio",
-            "video",
-            "music",
-            "visualizer",
-            "visualiser",
-            "hd",
-            "hq",
-            "4k",
-            "mv",
-            "clip",
-            "videoclip",
-        ];
-        let bare =
-            !lower.trim().is_empty() && lower.split_whitespace().all(|word| words.contains(&word));
-        let kept = [
-            "remix", "live", "version", "edit", "cover", "acoustic", "mix",
-        ]
-        .iter()
-        .any(|word| lower.contains(word));
-        (tagged || bare) && !kept
+            .copied()
+            .find(|part| release_type(part))
+            .map(str::to_owned);
+        item.year = parts
+            .iter()
+            .copied()
+            .find(|part| is_year(part))
+            .map(str::to_owned);
+    }
+    let endpoint = |value: &Value| {
+        first_str(
+            value,
+            &[
+                "/browseEndpoint/browseEndpointContextSupportedConfigs/browseEndpointContextMusicConfig/pageType",
+            ],
+        )
     };
-    let (mut kept, mut featured, mut rest) = (String::new(), String::new(), title);
-    while let Some(open) = rest.find(['(', '[']) {
-        let close = if rest.as_bytes()[open] == b'(' {
-            ')'
-        } else {
-            ']'
-        };
-        let Some(length) = rest[open..].find(close) else {
-            break;
-        };
-        let inner = &rest[open + 1..open + length];
-        kept.push_str(&rest[..open]);
-        match credit(inner) {
-            Some(names) if featured.is_empty() => featured = names,
-            Some(_) => {}
-            None if noise(inner) => {}
-            None => kept.push_str(&rest[open..=open + length]),
-        }
-        rest = &rest[open + length + 1..];
+    item.page_type = [
+        endpoint(&node["navigationEndpoint"]),
+        endpoint(&node["onTap"]),
+        endpoint(&node["title"]["runs"][0]["navigationEndpoint"]),
+        endpoint(
+            &node["flexColumns"][0]["musicResponsiveListItemFlexColumnRenderer"]["text"]["runs"][0]
+                ["navigationEndpoint"],
+        ),
+    ]
+    .into_iter()
+    .find(|kind| !kind.is_empty())
+    .unwrap_or_default();
+
+    links(byline, "", item);
+    for column in node["flexColumns"].as_array().into_iter().flatten().skip(1) {
+        links(
+            &column["musicResponsiveListItemFlexColumnRenderer"]["text"],
+            "",
+            item,
+        );
     }
-    kept.push_str(rest);
-    let lower = kept.to_ascii_lowercase();
-    let inline = [" featuring ", " feat. ", " ft. "]
-        .into_iter()
-        .filter_map(|mark| lower.find(mark).map(|at| (at, mark.len())))
-        .min();
-    if let Some((at, length)) = inline.filter(|_| featured.is_empty()) {
-        let tail = &kept[at + length..];
-        let end = tail.find(['(', '[']).unwrap_or(tail.len());
-        featured = tail[..end].trim().to_owned();
-        kept = format!("{} {}", &kept[..at], &tail[end..]);
-    }
-    let clean = kept.split_whitespace().collect::<Vec<_>>().join(" ");
-    let clean = clean.trim_end_matches([' ', '-', '|', '–']).to_owned();
-    if clean.is_empty() {
-        (title.to_owned(), String::new())
-    } else {
-        (clean, featured)
+    if item.is_song() || item.browse_id.starts_with("MPRE") || item.browse_id.starts_with("VL") {
+        let byline = text(byline);
+        item.byline = byline
+            .split(" • ")
+            .find(|part| {
+                !part.trim().is_empty()
+                    && !is_year(part)
+                    && !is_time(part)
+                    && !release_type(part)
+                    && !matches!(*part, "Song" | "Video" | "Playlist")
+                    && (*part != item.album_name
+                        || item.artists.iter().any(|(artist, _)| artist == part))
+            })
+            .unwrap_or_default()
+            .to_owned();
+        // Visible duration is rendered independently from the byline.
+        item.subtitle = parts
+            .into_iter()
+            .filter(|part| !is_time(part) && *part != "Song")
+            .collect::<Vec<_>>()
+            .join(" • ");
     }
 }
 
@@ -315,7 +329,7 @@ fn header(node: &Value) -> Item {
         text(&node["secondSubtitle"]),
         text(&node["monthlyListenerCount"]),
     ];
-    Item {
+    let mut item = Item {
         title: text(&node["title"]),
         subtitle: details
             .into_iter()
@@ -323,9 +337,44 @@ fn header(node: &Value) -> Item {
             .collect::<Vec<_>>()
             .join(" • "),
         extra: text(&node["straplineTextOne"]),
+        summary: [
+            text(&node["secondSubtitle"]),
+            text(&node["monthlyListenerCount"]),
+        ]
+        .into_iter()
+        .find(|value| !value.is_empty())
+        .unwrap_or_default(),
         thumb: thumb(&node["thumbnail"]),
         ..Item::default()
+    };
+    item.release_type = text(&node["subtitle"])
+        .split(" • ")
+        .find(|part| release_type(part))
+        .map(str::to_owned);
+    item.year = text(&node["subtitle"])
+        .split(" • ")
+        .find(|part| is_year(part))
+        .map(str::to_owned);
+    links(&node["straplineTextOne"], "", &mut item);
+    links(&node["subtitle"], "", &mut item);
+    let author = &node["facepile"]["avatarStackViewModel"];
+    item.byline = author["text"]["content"]
+        .as_str()
+        .unwrap_or(&item.extra)
+        .to_owned();
+    if item.byline.is_empty() {
+        item.byline = item
+            .artists
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
     }
+    if !item.byline.is_empty() {
+        let author = item.byline.clone();
+        links(&node["facepile"], &author, &mut item);
+    }
+    item
 }
 
 fn item(node: &Value) -> Option<Item> {
@@ -335,18 +384,23 @@ fn item(node: &Value) -> Option<Item> {
     let title = [text(&node["title"]), column(0)]
         .into_iter()
         .find(|s| !s.is_empty())?;
-    let bylines = [
-        text(&node["subtitle"]),
-        text(&node["shortBylineText"]),
-        text(&node["longBylineText"]),
-        column(1),
-    ];
-    let subtitle = bylines.into_iter().find(|s| !s.is_empty());
+    let byline = [
+        &node["subtitle"],
+        &node["longBylineText"],
+        &node["shortBylineText"],
+        &node["flexColumns"][1]["musicResponsiveListItemFlexColumnRenderer"]["text"],
+    ]
+    .into_iter()
+    .find(|node| !node.is_null())
+    .unwrap_or(&Value::Null);
     let fixed =
         text(&node["fixedColumns"][0]["musicResponsiveListItemFixedColumnRenderer"]["text"]);
+    if node["musicItemRendererDisplayPolicy"] == "MUSIC_ITEM_RENDERER_DISPLAY_POLICY_GREY_OUT" {
+        return None;
+    }
     let mut it = Item {
         title,
-        subtitle: subtitle.unwrap_or_default(),
+        subtitle: text(byline),
         extra: [column(2), column(3)]
             .into_iter()
             .filter(|s| !s.is_empty())
@@ -374,9 +428,9 @@ fn item(node: &Value) -> Option<Item> {
         ),
         ..Item::default()
     };
-    links(node, "", &mut it);
-    it.is_artist = !it.is_song() && it.browse_id.starts_with("UC");
-    tidy(&mut it);
+    it.is_artist =
+        !it.is_song() && (it.browse_id.starts_with("UC") || it.browse_id.starts_with("MPLA"));
+    details(node, byline, &mut it);
     (it.is_song() || !it.browse_id.is_empty()).then_some(it)
 }
 
@@ -395,13 +449,17 @@ fn links(node: &Value, run_text: &str, it: &mut Item) {
                                 it.artist_id = id.to_owned();
                             }
                             if !run_text.is_empty()
+                                && !id.is_empty()
                                 && it.artists.iter().all(|(_, known)| known != id)
                             {
                                 it.artists.push((run_text.to_owned(), id.to_owned()));
                             }
                         }
-                        Some("MUSIC_PAGE_TYPE_ALBUM") if it.album_id.is_empty() => {
-                            it.album_id = id.to_owned()
+                        Some("MUSIC_PAGE_TYPE_ALBUM")
+                            if it.album_id.is_empty() && !run_text.is_empty() =>
+                        {
+                            it.album_id = id.to_owned();
+                            it.album_name = run_text.to_owned();
                         }
                         _ => {}
                     }
@@ -415,6 +473,9 @@ fn links(node: &Value, run_text: &str, it: &mut Item) {
 }
 
 fn text(node: &Value) -> String {
+    if let Some(value) = node["simpleText"].as_str() {
+        return value.to_owned();
+    }
     node["runs"]
         .as_array()
         .into_iter()
@@ -480,15 +541,72 @@ fn continuation(node: &Value) -> Option<String> {
     }
 }
 
+// Read only list-level continuations. Menu, radio and secondary shelves may
+// contain tokens unrelated to the list being browsed.
+fn list_continuation(list: &Value) -> Option<String> {
+    continuation(&list["continuations"]).or_else(|| {
+        ["contents", "items", "continuationItems"]
+            .iter()
+            .filter_map(|key| list[key].as_array()?.last())
+            .find_map(|last| continuation(&last["continuationItemRenderer"]))
+    })
+}
+
 fn playlist_continuation(node: &Value) -> Option<String> {
     match node {
         Value::Object(map) => map
             .get("musicPlaylistShelfRenderer")
-            .and_then(continuation)
+            .and_then(list_continuation)
             .or_else(|| map.values().find_map(playlist_continuation)),
         Value::Array(list) => list.iter().find_map(playlist_continuation),
         _ => None,
     }
+}
+
+fn response_continuation(node: &Value) -> Option<String> {
+    match node {
+        Value::Object(map) => {
+            for key in SHELVES {
+                if let Some(list) = map.get(key)
+                    && let Some(token) = list_continuation(list)
+                {
+                    return Some(token);
+                }
+            }
+            map.iter()
+                .filter(|(key, _)| !ITEMS.contains(&key.as_str()) && key.as_str() != "menu")
+                .find_map(|(_, value)| response_continuation(value))
+        }
+        Value::Array(list) => list.iter().find_map(response_continuation),
+        _ => None,
+    }
+}
+
+pub(crate) fn suggestions(response: &Value) -> Vec<String> {
+    let mut suggestions = Vec::new();
+    for section in response["contents"].as_array().into_iter().flatten() {
+        for item in section["searchSuggestionsSectionRenderer"]["contents"]
+            .as_array()
+            .into_iter()
+            .flatten()
+        {
+            let suggestion = &item["searchSuggestionRenderer"];
+            let query = suggestion
+                .pointer("/navigationEndpoint/searchEndpoint/query")
+                .and_then(Value::as_str)
+                .map_or_else(|| text(&suggestion["suggestion"]), str::to_owned);
+            if !query.trim().is_empty()
+                && query.chars().count() <= 128
+                && !suggestions.contains(&query)
+            {
+                suggestions.push(query);
+                if suggestions.len() == 6 {
+                    return suggestions;
+                }
+            }
+        }
+    }
+    suggestions
 }
 
 // A home feed can contain a paged shelf of its own. Its token must not replace
@@ -498,7 +616,7 @@ fn page_continuation(node: &Value) -> Option<String> {
         Value::Object(map) => {
             for key in ["sectionListRenderer", "sectionListContinuation"] {
                 if let Some(list) = map.get(key)
-                    && let Some(token) = continuation(&list["continuations"])
+                    && let Some(token) = list_continuation(list)
                 {
                     return Some(token);
                 }

@@ -50,15 +50,25 @@ impl MediaId {
     }
 }
 
-/// Only metadata needed by F1A. Availability/streams belong to provider adapters.
+/// Stable display metadata. Availability and streams belong to provider adapters.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Media {
     pub id: MediaId,
     pub title: String,
     pub duration_ms: Option<u64>,
+    pub music: Option<std::sync::Arc<MusicMetadata>>,
 }
 
-/// Neutral catalog presentation, separate from the minimal persisted queue item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MusicMetadata {
+    pub kind: EntityKind,
+    pub byline: Option<String>,
+    pub artists: Vec<ArtistCredit>,
+    pub album: Option<MusicReference>,
+    pub artwork: Option<String>,
+}
+
+/// The kind identifies collections separately from individual recordings.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EntityKind {
     Recording,
@@ -68,10 +78,12 @@ pub enum EntityKind {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ArtistCredit {
+pub struct MusicReference {
     pub id: MediaId,
     pub name: String,
 }
+
+pub type ArtistCredit = MusicReference;
 
 /// Optional attributes identify different editions without changing their titles.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,7 +93,7 @@ pub struct ReleaseEdition {
     pub description: Option<String>,
 }
 
-/// Catalog-only metadata stays separate from the minimal persisted queue item.
+/// Catalog presentation can include edition details beyond persistent media metadata.
 /// A catalog result never implies that its provider supplies playable audio.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CatalogEntry {

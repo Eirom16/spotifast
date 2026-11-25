@@ -26,6 +26,7 @@ pub fn media(id: &str) -> Media {
         id: MediaId::new(ProviderId::new("fixture").unwrap(), id).unwrap(),
         title: id.into(),
         duration_ms: Some(60_000),
+        music: None,
     }
 }
 

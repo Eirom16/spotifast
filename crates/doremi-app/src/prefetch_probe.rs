@@ -49,6 +49,7 @@ pub fn run(prefetch: bool) -> Result<String, String> {
             id: doremi_youtube::id(id).unwrap(),
             title: id.into(),
             duration_ms: Some(ms),
+            music: None,
         })
         .collect();
     let mut m = Model::new(Preferences {

@@ -13,6 +13,7 @@ pub(super) fn legacy(prefs: &Preferences) -> Result<Collection, Error> {
                     .map_err(|_| Error::InvalidMedia)?,
                 title: format!("Guardada: {id}"),
                 duration_ms: None,
+                music: None,
             },
         };
         library.save(media)?;
@@ -151,6 +152,7 @@ mod tests {
             id: MediaId::new(ProviderId::new("unavailable-provider").unwrap(), "dawn").unwrap(),
             title: "Unavailable saved track".into(),
             duration_ms: None,
+            music: None,
         };
         model.save_media(media.clone());
         model.start_context(vec![media], 0);

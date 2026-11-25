@@ -198,6 +198,7 @@ impl FakeHttpWorker {
                     .map_err(|_| ProviderError::InvalidResponse)?,
                 title: title.into(),
                 duration_ms: None,
+                music: None,
             });
         }
         self.searches.insert(case.into(), items.clone());

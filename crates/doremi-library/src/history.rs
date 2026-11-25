@@ -54,7 +54,11 @@ impl History {
     }
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let document = Document {
-            schema: 1,
+            schema: if self.plays.iter().any(|play| play.media.music.is_some()) {
+                2
+            } else {
+                1
+            },
             plays: self
                 .plays
                 .iter()
@@ -75,7 +79,7 @@ impl History {
             return Err(Error::TooLarge);
         }
         let document: Document = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
-        if document.schema != 1 {
+        if !matches!(document.schema, 1 | 2) {
             return Err(Error::UnsupportedSchema);
         }
         if document.plays.len() > PLAY_LIMIT {
@@ -118,6 +122,7 @@ mod tests {
             id: MediaId::new(ProviderId::new(provider).unwrap(), id).unwrap(),
             title: "Café · 音楽".into(),
             duration_ms: Some(90_000),
+            music: None,
         }
     }
     #[test]

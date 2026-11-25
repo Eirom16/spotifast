@@ -273,6 +273,7 @@ impl Model {
             id: id.clone(),
             title: meta.title,
             duration_ms: Some(meta.duration_ms),
+            music: None,
         };
         let mut files = self.local_files.index.clone();
         let mut library = self.library.clone();
@@ -308,6 +309,7 @@ mod tests {
             .unwrap(),
             title: "Owned QA intent".into(),
             duration_ms: Some(10000),
+            music: None,
         };
         model.start_context(vec![media], 0);
         assert!(model.online.snapshot()["loading"].as_bool().unwrap());

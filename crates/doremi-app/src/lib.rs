@@ -206,6 +206,7 @@ fn songs() -> Vec<Media> {
             id: MediaId::new(ProviderId::new("demo").unwrap(), id).unwrap(),
             title: title.into(),
             duration_ms: Some(30_000),
+            music: None,
         })
         .chain([
             Builtin::Scale.media(),
@@ -603,6 +604,13 @@ impl Model {
             start,
             order,
         });
+    }
+    fn edit_query(&mut self) {
+        #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
+        if self.music.selected && self.music.youtube {
+            self.music.suggestions.edit(&self.query);
+        }
+        self.search();
     }
     fn search(&mut self) {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
@@ -1008,7 +1016,7 @@ impl DoremiApp {
         #[cfg(any(target_os = "linux", target_os = "android"))]
         self.model.as_mut().unwrap().poll_local(ctx);
         self.model.as_mut().unwrap().poll_online(ctx);
-        self.model.as_mut().unwrap().music.poll(ctx);
+        self.poll_music_catalog(ctx);
         self.poll_artwork(ctx);
         self.model.as_mut().unwrap().poll_audio();
     }
@@ -1038,7 +1046,7 @@ impl DoremiApp {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         {
             self.model.as_mut().unwrap().poll_online(&ctx);
-            self.model.as_mut().unwrap().music.poll(&ctx);
+            self.poll_music_catalog(&ctx);
             self.poll_artwork(&ctx);
         }
         self.model.as_mut().unwrap().poll_audio();
@@ -1065,6 +1073,8 @@ impl DoremiApp {
     pub(crate) fn search_field(&mut self, ui: &mut egui::Ui) {
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         self.ensure_product_search();
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        self.suggestion_keys(ui.ctx());
         let cancel = !self.internal_ui && self.search_active();
         let online = self.model.as_ref().unwrap().online_search_selected();
         let prefs = &self.model.as_ref().unwrap().prefs;
@@ -1143,8 +1153,10 @@ impl DoremiApp {
             self.editor = TextField::Search;
         }
         if response.changed() {
-            self.model.as_mut().unwrap().search();
+            self.model.as_mut().unwrap().edit_query();
         }
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+        self.search_suggestions(ui, &response);
         if ui.ctx().content_rect().width() >= 760.0 {
             self.follow_editor(ui, &response, TextField::Search);
         }
@@ -1619,6 +1631,7 @@ mod tests {
             .unwrap(),
             title: "Metadata only".into(),
             duration_ms: None,
+            music: None,
         };
         app.open_library_entry(&[media.clone(), metadata, media], 2);
         assert_eq!(
@@ -1652,6 +1665,7 @@ mod tests {
                 .unwrap(),
                 title: "Artista de prueba · título largo".into(),
                 duration_ms: None,
+                music: None,
             },
             kind: EntityKind::Artist,
             artists: vec![],
@@ -1713,6 +1727,7 @@ mod tests {
                             .unwrap(),
                         title: format!("QA · Música original {index}"),
                         duration_ms: Some(90_000),
+                        music: None,
                     },
                     None,
                 )
@@ -2207,6 +2222,7 @@ mod tests {
             .unwrap(),
             title: "Saved public metadata".into(),
             duration_ms: None,
+            music: None,
         };
         let rows = vec![demo[0].clone(), metadata.clone(), demo[1].clone()];
         app.open_library_entry(&rows, 0);
@@ -2228,6 +2244,7 @@ mod tests {
                 .unwrap(),
                 title: format!("Saved {prefix}"),
                 duration_ms: None,
+                music: None,
             };
             app.model.as_mut().unwrap().save_media(saved.clone());
             let restored = persistence::collection::Collection::decode(
@@ -2435,6 +2452,7 @@ mod tests {
             id: MediaId::new(ProviderId::new("unavailable").unwrap(), "track").unwrap(),
             title: "Unavailable".into(),
             duration_ms: None,
+            music: None,
         };
         model.start_context(vec![media], 0);
         assert_eq!(model.queue.playback(), Playback::Failed);

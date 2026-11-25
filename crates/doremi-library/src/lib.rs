@@ -3,6 +3,7 @@ pub mod collection;
 pub mod document_copy;
 pub mod history;
 pub mod local_files;
+mod music;
 pub mod playlists;
 use doremi_core::{
     media::{Media, MediaId, ProviderId},
@@ -26,6 +27,8 @@ struct Entry {
     id: String,
     title: String,
     duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    music: Option<crate::music::Record>,
 }
 #[derive(Serialize, Deserialize)]
 struct Occurrence {
@@ -63,6 +66,7 @@ impl From<core::EntryRecord> for Entry {
             id: entry.media.id.local().into(),
             title: entry.media.title,
             duration_ms: entry.media.duration_ms,
+            music: entry.media.music.as_deref().map(music::Record::from),
         }
     }
 }
@@ -77,6 +81,11 @@ impl TryFrom<Entry> for core::EntryRecord {
                 id,
                 title: entry.title,
                 duration_ms: entry.duration_ms,
+                music: entry
+                    .music
+                    .map(crate::music::Record::decode)
+                    .transpose()
+                    .map_err(|_| Error::InvalidIdentity)?,
             },
         })
     }
@@ -664,6 +673,7 @@ mod storage_tests {
             id: MediaId::new(ProviderId::new("commons").unwrap(), "music-id").unwrap(),
             title: "Piano".into(),
             duration_ms: Some(239518),
+            music: None,
         };
         lists.append(id, media.clone()).unwrap();
         lists.append(id, media.clone()).unwrap();
@@ -713,6 +723,7 @@ mod storage_tests {
             id: MediaId::new(ProviderId::new("test").unwrap(), "song").unwrap(),
             title: "Café".into(),
             duration_ms: Some(90_000),
+            music: None,
         };
         history.record(media.clone(), Some(1)).unwrap();
         let writer = Writer::new(directory.clone());
@@ -859,6 +870,7 @@ mod storage_tests {
             id: MediaId::new(ProviderId::new("demo").unwrap(), "saved").unwrap(),
             title: "Before".into(),
             duration_ms: None,
+            music: None,
         };
         library.save(first.clone()).unwrap();
         let accepted = library.clone();
@@ -962,6 +974,7 @@ mod storage_tests {
                     id: local_files::media_id("00000000000000000000000000000001").unwrap(),
                     title: "Original".into(),
                     duration_ms: None,
+                    music: None,
                 },
             )
             .unwrap();
@@ -1004,6 +1017,7 @@ mod tests {
                 id: MediaId::new(ProviderId::new("test").unwrap(), i.to_string()).unwrap(),
                 title: format!("Café {i}"),
                 duration_ms: Some(30_000),
+                music: None,
             })
             .collect();
         queue

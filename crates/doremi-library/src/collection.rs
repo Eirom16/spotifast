@@ -56,7 +56,11 @@ impl Collection {
     }
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let document = Document {
-            schema: 1,
+            schema: if self.items.iter().any(|media| media.music.is_some()) {
+                2
+            } else {
+                1
+            },
             items: self.items.iter().map(Record::from).collect(),
         };
         let bytes = serde_json::to_vec_pretty(&document).map_err(|_| Error::Encoding)?;
@@ -70,7 +74,7 @@ impl Collection {
             return Err(Error::TooLarge);
         }
         let document: Document = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
-        if document.schema != 1 {
+        if !matches!(document.schema, 1 | 2) {
             return Err(Error::UnsupportedSchema);
         }
         if document.items.len() > ITEM_LIMIT {
@@ -117,6 +121,8 @@ pub(crate) struct Record {
     id: String,
     title: String,
     duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    music: Option<crate::music::Record>,
 }
 impl From<&Media> for Record {
     fn from(media: &Media) -> Self {
@@ -125,6 +131,7 @@ impl From<&Media> for Record {
             id: media.id.local().into(),
             title: media.title.clone(),
             duration_ms: media.duration_ms,
+            music: media.music.as_deref().map(crate::music::Record::from),
         }
     }
 }
@@ -151,6 +158,7 @@ mod tests {
             id: MediaId::new(ProviderId::new(provider).unwrap(), id).unwrap(),
             title: "Café · 音楽".into(),
             duration_ms: Some(10_000),
+            music: None,
         }
     }
     #[test]

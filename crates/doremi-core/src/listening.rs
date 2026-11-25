@@ -99,6 +99,7 @@ mod tests {
             id: MediaId::new(ProviderId::new("test").unwrap(), "music").unwrap(),
             title: "Music".into(),
             duration_ms: Some(240_000),
+            music: None,
         };
         let mut queue = Queue::new(SessionId(1));
         let (entry, first) = loaded(

@@ -5,7 +5,9 @@ use doremi_core::{
     media::{CatalogEntry, EntityKind},
 };
 use doremi_musicbrainz::Client;
-#[derive(Clone, Debug)]
+use doremi_youtube::{Request as Yt, parser::ShelfLink};
+use std::collections::{HashSet, VecDeque};
+#[derive(Clone, Debug, Default)]
 pub(super) struct Results {
     items: Vec<CatalogEntry>,
     offset: u32,
@@ -14,11 +16,17 @@ pub(super) struct Results {
     continuation: Option<String>,
     sections: Vec<ResultSection>,
     subtitles: Vec<String>,
+    header: Option<doremi_youtube::parser::Item>,
+    suggestions: Vec<String>,
+    spelling: Option<String>,
+    used_tokens: HashSet<String>,
 }
 #[derive(Clone, Debug)]
 struct ResultSection {
     title: String,
     rows: std::ops::Range<usize>,
+    more: Option<ShelfLink>,
+    tracks: bool,
 }
 impl Results {
     fn play_context(&self, row: usize) -> (Vec<Media>, usize) {
@@ -40,41 +48,122 @@ impl Results {
         (tracks, selected)
     }
 }
-impl From<doremi_youtube::parser::Page> for Results {
-    fn from(page: doremi_youtube::parser::Page) -> Self {
-        let mut items = Vec::new();
-        let mut sections = Vec::new();
-        let mut subtitles = Vec::new();
-        for section in page.sections {
-            let start = items.len();
-            for item in section.items {
-                if items.len() == 200 {
-                    break;
-                }
-                if let Some(entry) = doremi_youtube::entry(&item) {
-                    items.push(entry);
-                    subtitles.push(item.subtitle);
+impl Results {
+    fn has_tracks(&self) -> bool {
+        self.sections.iter().any(|section| section.tracks)
+    }
+    fn collection_tracks(&self) -> Vec<Media> {
+        self.sections
+            .iter()
+            .find(|section| section.tracks)
+            .map(|section| self.play_context(section.rows.start).0)
+            .unwrap_or_default()
+    }
+
+    fn search_results(&self, kind: EntityKind, known: &mut HashSet<MediaId>) -> Self {
+        let mut filtered = Self {
+            continuation: self.continuation.clone(),
+            more: self.more,
+            spelling: self.spelling.clone(),
+            ..Self::default()
+        };
+        for section in &self.sections {
+            let start = filtered.items.len();
+            for index in section.rows.clone() {
+                let item = &self.items[index];
+                if item.kind == kind && known.insert(item.media.id.clone()) {
+                    filtered.items.push(item.clone());
+                    filtered.subtitles.push(self.subtitles[index].clone());
                 }
             }
-            if items.len() > start {
-                sections.push(ResultSection {
-                    title: section.title,
-                    rows: start..items.len(),
+            if start < filtered.items.len() {
+                filtered.sections.push(ResultSection {
+                    rows: start..filtered.items.len(),
+                    ..section.clone()
                 });
             }
-            if items.len() == 200 {
-                break;
+        }
+        filtered
+    }
+
+    fn append(
+        &mut self,
+        mut next: Self,
+        token: &str,
+        collection: bool,
+    ) -> Result<(), ProviderError> {
+        if next
+            .continuation
+            .as_deref()
+            .is_some_and(|next| next == token || self.used_tokens.contains(next))
+        {
+            return Err(ProviderError::InvalidResponse);
+        }
+        if collection && let Some(index) = self.sections.iter().position(|section| section.tracks) {
+            let at = self.sections[index].rows.end;
+            let count = next.items.len();
+            self.items.splice(at..at, next.items.drain(..));
+            self.subtitles.splice(at..at, next.subtitles.drain(..));
+            self.sections[index].rows.end += count;
+            for section in &mut self.sections[index + 1..] {
+                section.rows.start += count;
+                section.rows.end += count;
+            }
+            next.sections.clear();
+        }
+        let offset = self.items.len();
+        self.items.append(&mut next.items);
+        self.subtitles.append(&mut next.subtitles);
+        for mut section in next.sections {
+            section.rows = section.rows.start + offset..section.rows.end + offset;
+            if let Some(last) = self.sections.last_mut()
+                && last.rows.end == section.rows.start
+                && last.tracks == section.tracks
+                && (section.title.is_empty() || section.title == last.title)
+            {
+                last.rows.end = section.rows.end;
+            } else {
+                self.sections.push(section);
             }
         }
-        Self {
-            items,
-            sections,
-            subtitles,
-            offset: 0,
+        self.used_tokens.insert(token.to_owned());
+        self.continuation = next.continuation;
+        self.more = self.continuation.is_some();
+        Ok(())
+    }
+}
+
+impl From<doremi_youtube::parser::Page> for Results {
+    fn from(page: doremi_youtube::parser::Page) -> Self {
+        let mut result = Self {
             more: page.continuation.is_some(),
-            detail: None,
             continuation: page.continuation,
+            header: page.header,
+            suggestions: page.suggestions,
+            spelling: page.spelling,
+            ..Self::default()
+        };
+        for section in page.sections {
+            let start = result.items.len();
+            for item in section.items {
+                if let Some(entry) = doremi_youtube::entry(&item) {
+                    result.items.push(entry);
+                    result.subtitles.push(item.subtitle);
+                }
+            }
+            if result.items.len() > start {
+                result.sections.push(ResultSection {
+                    title: section.title,
+                    rows: start..result.items.len(),
+                    more: section.more,
+                    tracks: section.layout == doremi_youtube::parser::Layout::Tracks
+                        && result.items[start..]
+                            .iter()
+                            .any(|entry| entry.kind == EntityKind::Recording),
+                });
+            }
         }
+        result
     }
 }
 impl From<doremi_musicbrainz::Page> for Results {
@@ -84,9 +173,7 @@ impl From<doremi_musicbrainz::Page> for Results {
             offset: page.offset,
             more: page.more,
             detail: page.detail,
-            continuation: None,
-            sections: vec![],
-            subtitles: vec![],
+            ..Self::default()
         }
     }
 }
@@ -141,7 +228,8 @@ impl Request {
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
 
-type Completion = (u64, Result<Arc<Results>, ProviderError>);
+type Completion = (u64, Result<Arc<Results>, ProviderError>, bool);
+type CachedPage = (u64, Yt, Instant, Arc<Results>);
 struct HistoryEntry {
     detail: Option<CatalogEntry>,
     page: Option<Arc<Results>>,
@@ -149,10 +237,12 @@ struct HistoryEntry {
     previous_offsets: Vec<u32>,
     youtube: bool,
     home_context: bool,
+    shelf: Option<(String, bool)>,
 }
 struct Job {
     generation: u64,
     request: Option<Request>,
+    revision: u64,
     ctx: egui::Context,
 }
 struct Worker {
@@ -179,6 +269,7 @@ impl Worker {
                 };
                 runtime.block_on(async move {
                     let mut client = Client::new();
+                    let mut cache = VecDeque::<CachedPage>::new();
                     let mut job = receive.recv().await;
                     while let Some(current) = job {
                         let Some(request) = current.request else {
@@ -196,7 +287,19 @@ impl Worker {
                         };
                         let result = async {
                             if let Request::YouTube(request) = &request {
-                                match youtube
+                                let now = Instant::now();
+                                cache.retain(|(revision, _, until, _)| {
+                                    *revision == current.revision && *until > now
+                                });
+                                if let Some(index) =
+                                    cache.iter().position(|(_, key, _, _)| key == request)
+                                {
+                                    let cached = cache.remove(index).unwrap();
+                                    let page = cached.3.clone();
+                                    cache.push_back(cached);
+                                    return (Ok(page), true);
+                                }
+                                let page = match youtube
                                     .lock()
                                     .await
                                     .get_or_insert_with(doremi_youtube::Client::new)
@@ -206,27 +309,47 @@ impl Worker {
                                         .await
                                         .map(|page| Arc::new(Results::from(page))),
                                     Err(error) => Err(*error),
+                                };
+                                if matches!(
+                                    request,
+                                    Yt::Search { .. }
+                                        | Yt::Browse { .. }
+                                        | Yt::BrowseShelf(_)
+                                        | Yt::Suggestions { .. }
+                                ) && let Ok(page) = &page
+                                {
+                                    if cache.len() == 12 {
+                                        cache.pop_front();
+                                    }
+                                    cache.push_back((
+                                        current.revision,
+                                        request.clone(),
+                                        Instant::now() + Duration::from_secs(120),
+                                        page.clone(),
+                                    ));
                                 }
+                                (page, false)
                             } else {
-                                match &mut client {
+                                let page = match &mut client {
                                     Ok(client) => client
                                         .fetch(&request.musicbrainz().unwrap())
                                         .await
                                         .map(|page| Arc::new(Results::from(page))),
                                     Err(error) => Err(*error),
-                                }
+                                };
+                                (page, false)
                             }
                         };
                         tokio::select! {
                             biased;
                             next = receive.recv() => {job = next;},
                             _ = cancelled => {job=receive.recv().await;},
-                            result = result => {
+                            (result, cached) = result => {
                                 current.ctx.request_repaint();
                                 tokio::select! {
                                     biased;
                                     next = receive.recv() => {job=next;},
-                                    sent = send.send((current.generation, result)) => {
+                                    sent = send.send((current.generation, result, cached)) => {
                                         if sent.is_err() {break;}
                                         current.ctx.request_repaint();
                                         job=receive.recv().await;
@@ -244,6 +367,123 @@ impl Worker {
             generation,
         })
     }
+}
+
+#[derive(Default)]
+pub(super) struct Suggestions {
+    generation: u64,
+    pending: Option<(String, Instant)>,
+    pub selected: Option<usize>,
+    values: Vec<String>,
+    worker: Option<Worker>,
+    waiting: bool,
+    blocked_until: Option<Instant>,
+    pub unavailable: bool,
+}
+impl Suggestions {
+    pub fn clear(&mut self) {
+        self.generation += 1;
+        if let Some(worker) = &self.worker {
+            worker.generation.store(self.generation, Ordering::Release);
+        }
+        self.pending = None;
+        self.selected = None;
+        self.values.clear();
+        self.waiting = false;
+        self.unavailable = false;
+    }
+    pub fn edit(&mut self, text: &str) {
+        self.clear();
+        let query = text.trim();
+        if query.chars().count() >= 2 {
+            self.pending = Some((
+                query.to_owned(),
+                Instant::now() + Duration::from_millis(220),
+            ));
+        }
+    }
+    pub fn active(&self) -> bool {
+        self.pending.is_some() || self.waiting || self.unavailable || !self.values.is_empty()
+    }
+    pub fn values(&self) -> &[String] {
+        &self.values
+    }
+    fn poll(&mut self, ctx: &egui::Context, session: &youtube_session::State) {
+        if let Some(worker) = &mut self.worker {
+            match worker.events.try_recv() {
+                Ok((generation, result, _)) if generation == self.generation => {
+                    self.waiting = false;
+                    match result {
+                        Ok(page) => self.values = page.suggestions.clone(),
+                        Err(error) => {
+                            self.unavailable = true;
+                            if let ProviderError::RateLimited { retry_after_ms } = error {
+                                self.blocked_until = Instant::now().checked_add(
+                                    Duration::from_millis(retry_after_ms.unwrap_or(3000)),
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    self.worker = None;
+                    self.unavailable = self.waiting;
+                    self.waiting = false;
+                }
+                _ => {}
+            }
+        }
+        let Some((query, due)) = &self.pending else {
+            return;
+        };
+        let now = Instant::now();
+        if now < *due {
+            ctx.request_repaint_after(*due - now);
+            return;
+        }
+        if self.blocked_until.is_some_and(|until| now < until) {
+            self.pending = None;
+            self.unavailable = true;
+            return;
+        }
+        if self.worker.is_none() {
+            self.worker = Worker::new(session.client.clone()).ok();
+        }
+        let Some(worker) = &self.worker else {
+            self.pending = None;
+            self.unavailable = true;
+            return;
+        };
+        worker.generation.store(self.generation, Ordering::Release);
+        let job = Job {
+            generation: self.generation,
+            request: Some(Request::YouTube(Yt::Suggestions {
+                input: query.clone(),
+            })),
+            revision: session.revision,
+            ctx: ctx.clone(),
+        };
+        match worker.commands.try_send(job) {
+            Ok(()) => {
+                self.pending = None;
+                self.waiting = true;
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                ctx.request_repaint_after(Duration::from_millis(20))
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.pending = None;
+                self.unavailable = true;
+                self.worker = None;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CollectionAction {
+    Play { shuffle: bool },
+    Queue,
 }
 
 pub(super) struct State {
@@ -265,6 +505,11 @@ pub(super) struct State {
     home_context: bool,
     home_cache: Option<(Arc<Results>, Instant, u64)>,
     home_started: bool,
+    shelf: Option<(String, bool)>,
+    collection_action: Option<CollectionAction>,
+    started_at: Instant,
+    timing: Option<(u64, bool)>,
+    pub suggestions: Suggestions,
 }
 impl State {
     pub fn new() -> Self {
@@ -287,6 +532,11 @@ impl State {
             home_context: false,
             home_cache: None,
             home_started: false,
+            shelf: None,
+            collection_action: None,
+            started_at: Instant::now(),
+            timing: None,
+            suggestions: Suggestions::default(),
         }
     }
     fn dispatch(&mut self, request: Option<Request>, delay: Duration) {
@@ -297,12 +547,33 @@ impl State {
         if let Some(worker) = &self.worker {
             worker.generation.store(self.generation, Ordering::Release);
         }
+        self.started_at = Instant::now();
+        self.timing = None;
         self.waiting = request.is_some();
         self.error = None;
         self.request = request.clone();
         self.pending = Some((request, Instant::now() + delay));
     }
     pub fn search(&mut self, query: &str) {
+        self.search_after(query, Duration::from_millis(350));
+    }
+    pub fn search_now(&mut self, query: &str) {
+        self.suggestions.clear();
+        let query = query.trim();
+        if matches!(&self.request, Some(Request::YouTube(Yt::Search { query: current, kind })) if current == query && *kind == self.kind)
+            && self.error.is_none()
+        {
+            if let Some((_, due)) = &mut self.pending {
+                *due = Instant::now();
+            }
+            return;
+        }
+        self.search_after(query, Duration::ZERO);
+    }
+    fn search_after(&mut self, query: &str, delay: Duration) {
+        let query = query.trim();
+        self.shelf = None;
+        self.collection_action = None;
         self.home_context = false;
         self.page = None;
         self.detail = None;
@@ -323,10 +594,13 @@ impl State {
                     }
                 }
             }),
-            Duration::from_millis(350),
+            delay,
         );
     }
     pub fn cancel(&mut self) {
+        self.suggestions.clear();
+        self.collection_action = None;
+        self.shelf = None;
         self.home_context = false;
         self.page = None;
         self.detail = None;
@@ -335,6 +609,8 @@ impl State {
         self.dispatch(None, Duration::ZERO);
     }
     pub fn suspend(&mut self) {
+        self.suggestions.clear();
+        self.collection_action = None;
         self.pending = None;
         self.waiting = false;
         self.generation = self
@@ -345,18 +621,32 @@ impl State {
             worker.generation.store(self.generation, Ordering::Release);
         }
     }
-    pub fn open(&mut self, entry: CatalogEntry) {
+    fn push_history(&mut self) {
+        self.suggestions.clear();
+        self.collection_action = None;
         if self.history.len() == 8 {
             self.history.remove(0);
         }
         self.history.push(HistoryEntry {
-            detail: self.detail.take(),
-            page: self.page.clone(),
+            detail: self.detail.clone(),
+            page: self.page.take(),
             request: self.request.clone(),
             previous_offsets: std::mem::take(&mut self.previous_offsets),
             youtube: self.youtube,
             home_context: self.home_context,
+            shelf: self.shelf.take(),
         });
+    }
+    fn open_shelf(&mut self, title: String, link: ShelfLink) {
+        self.push_history();
+        self.shelf = Some((title, link.id.starts_with("VL")));
+        self.dispatch(
+            Some(Request::YouTube(Yt::BrowseShelf(link))),
+            Duration::ZERO,
+        );
+    }
+    pub fn open(&mut self, entry: CatalogEntry) {
+        self.push_history();
         self.youtube = entry.media.id.provider.as_str() == doremi_youtube::PROVIDER;
         let request = if self.youtube {
             (entry.kind != EntityKind::Recording).then(|| {
@@ -388,9 +678,12 @@ impl State {
             previous_offsets,
             youtube,
             home_context,
+            shelf,
         }) = self.history.pop()
         {
+            self.collection_action = None;
             self.dispatch(None, Duration::ZERO);
+            self.shelf = shelf;
             self.youtube = youtube;
             self.home_context = home_context;
             self.detail = detail;
@@ -442,38 +735,26 @@ impl State {
         );
     }
     pub fn page_by(&mut self, forward: bool) {
+        if self.waiting {
+            return;
+        }
         if self.youtube {
-            let token = self
-                .page
-                .as_ref()
-                .and_then(|page| page.continuation.clone());
-            if forward && let Some(token) = token {
+            if forward
+                && let Some(token) = self
+                    .page
+                    .as_ref()
+                    .and_then(|page| page.continuation.clone())
+            {
                 let search = matches!(
                     self.request,
                     Some(Request::YouTube(
-                        doremi_youtube::Request::Search { .. }
-                            | doremi_youtube::Request::Continue { search: true, .. }
+                        Yt::Search { .. } | Yt::Continue { search: true, .. }
                     ))
                 );
-                if self.history.len() == 8 {
-                    self.history.remove(0);
-                }
-                self.history.push(HistoryEntry {
-                    detail: self.detail.clone(),
-                    page: self.page.clone(),
-                    request: self.request.clone(),
-                    previous_offsets: vec![],
-                    youtube: self.youtube,
-                    home_context: self.home_context,
-                });
                 self.dispatch(
-                    Some(Request::YouTube(doremi_youtube::Request::Continue {
-                        token,
-                        search,
-                    })),
+                    Some(Request::YouTube(Yt::Continue { token, search })),
                     Duration::ZERO,
                 );
-                self.page = None;
             }
             return;
         }
@@ -520,6 +801,51 @@ impl State {
         self.dispatch(Some(request), Duration::ZERO);
         self.page = None;
     }
+    fn paged_collection(&self) -> bool {
+        self.shelf.as_ref().map_or_else(
+            || {
+                self.detail.as_ref().is_some_and(|entry| {
+                    matches!(entry.kind, EntityKind::Release | EntityKind::Playlist)
+                })
+            },
+            |(_, tracks)| *tracks,
+        )
+    }
+    fn collection_tracks(&self) -> Vec<Media> {
+        match &self.detail {
+            Some(entry) if entry.kind == EntityKind::Recording => vec![entry.media.clone()],
+            _ => self
+                .page
+                .as_ref()
+                .map_or_else(Vec::new, |page| page.collection_tracks()),
+        }
+    }
+    fn take_collection_action(&mut self) -> Option<(CollectionAction, Vec<Media>)> {
+        let action = self.collection_action?;
+        if self.waiting || self.error.is_some() {
+            return None;
+        }
+        let page = self.page.as_ref();
+        let tracks = self.collection_tracks();
+        if tracks.len() > doremi_core::queue::checkpoint::ENTRY_LIMIT {
+            self.collection_action = None;
+            self.error = Some(ProviderError::TooLarge);
+            return None;
+        }
+        if self.paged_collection() && page.is_some_and(|page| page.more) {
+            self.page_by(true);
+            return None;
+        }
+        self.collection_action = None;
+        Some((action, tracks))
+    }
+    pub(super) fn resume_view(&mut self) {
+        if self.page.is_none() && self.error.is_none() && !self.waiting {
+            if let Some(request) = self.request.clone() {
+                self.dispatch(Some(request), Duration::ZERO);
+            }
+        }
+    }
     pub fn poll(&mut self, ctx: &egui::Context) {
         let revision = self.session.revision;
         let signed_in = self.session.account.is_some();
@@ -535,10 +861,11 @@ impl State {
                 self.cancel();
             }
         }
+        self.suggestions.poll(ctx, &self.session);
         let mut disconnected = false;
         if let Some(worker) = &mut self.worker {
             loop {
-                let (generation, result) = match worker.events.try_recv() {
+                let (generation, result, cached) = match worker.events.try_recv() {
                     Ok(completion) => completion,
                     Err(mpsc::error::TryRecvError::Empty) => break,
                     Err(mpsc::error::TryRecvError::Disconnected) => {
@@ -548,6 +875,7 @@ impl State {
                 };
                 if generation == self.generation {
                     self.waiting = false;
+                    self.timing = Some((self.started_at.elapsed().as_millis() as u64, cached));
                     match result {
                         Ok(page) => {
                             if matches!(
@@ -568,7 +896,66 @@ impl State {
                             {
                                 self.detail = Some(detail.clone());
                             }
-                            self.page = Some(page);
+                            match self.request.as_ref() {
+                                Some(Request::YouTube(Yt::Search { kind, .. })) => {
+                                    self.page = Some(Arc::new(
+                                        page.search_results(*kind, &mut HashSet::new()),
+                                    ));
+                                }
+                                Some(Request::YouTube(Yt::Continue { token, search })) => {
+                                    let collection = self.paged_collection();
+                                    if let Some(previous) = &mut self.page {
+                                        let previous = Arc::make_mut(previous);
+                                        let next = if *search {
+                                            let mut known = previous
+                                                .items
+                                                .iter()
+                                                .map(|item| item.media.id.clone())
+                                                .collect();
+                                            page.search_results(self.kind, &mut known)
+                                        } else {
+                                            (*page).clone()
+                                        };
+                                        self.error = previous.append(next, token, collection).err();
+                                    } else {
+                                        self.page = Some(page);
+                                    }
+                                }
+                                Some(Request::YouTube(Yt::Browse { .. })) => {
+                                    if let Some(entry) = &mut self.detail
+                                        && let Some(header) = &page.header
+                                    {
+                                        let mut header = header.clone();
+                                        header.browse_id = entry.media.id.local().into();
+                                        header.is_artist = entry.kind == EntityKind::Artist;
+                                        if let Some(mut refreshed) = doremi_youtube::entry(&header)
+                                        {
+                                            refreshed.edition =
+                                                refreshed.edition.or_else(|| entry.edition.clone());
+                                            if let (Some(update), Some(prior)) =
+                                                (&mut refreshed.media.music, &entry.media.music)
+                                            {
+                                                let update = Arc::make_mut(update);
+                                                update.byline = update
+                                                    .byline
+                                                    .take()
+                                                    .or_else(|| prior.byline.clone());
+                                                update.artwork = update
+                                                    .artwork
+                                                    .take()
+                                                    .or_else(|| prior.artwork.clone());
+                                                if update.artists.is_empty() {
+                                                    update.artists = prior.artists.clone();
+                                                    refreshed.artists = update.artists.clone();
+                                                }
+                                            }
+                                            *entry = refreshed;
+                                        }
+                                    }
+                                    self.page = Some(page);
+                                }
+                                _ => self.page = Some(page),
+                            }
                         }
                         Err(error) => {
                             self.error = Some(error);
@@ -623,6 +1010,7 @@ impl State {
         let job = Job {
             generation: self.generation,
             request: request.clone(),
+            revision: self.session.revision,
             ctx: ctx.clone(),
         };
         match self.worker.as_ref().unwrap().commands.try_send(job) {
@@ -750,7 +1138,7 @@ impl State {
             || (!self.waiting && self.retry_at.is_none_or(|due| Instant::now() >= due))
     }
     pub fn snapshot(&self) -> serde_json::Value {
-        serde_json::json!({"selected":self.selected,"provider":if self.youtube {"youtube-music"} else {"musicbrainz"},"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"offset":self.page.as_ref().map(|page|page.offset),"artist_releases":self.artist_releases(),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}"))})
+        serde_json::json!({"selected":self.selected,"provider":if self.youtube {"youtube-music"} else {"musicbrainz"},"kind":format!("{:?}",self.kind),"generation":self.generation,"waiting":self.waiting,"count":self.page.as_ref().map(|page|page.items.len()),"offset":self.page.as_ref().map(|page|page.offset),"artist_releases":self.artist_releases(),"detail":self.detail.as_ref().map(|item|item.media.id.local()),"error":self.error.map(|error|format!("{error:?}")), "timing":self.timing.map(|(ms,cached)|serde_json::json!({"ms":ms,"cached":cached})), "suggestions":self.suggestions.values(), "shelf":self.shelf.as_ref().map(|(title,_)|title), "has_more": self.page.as_ref().is_some_and(|p|p.more)})
     }
 }
 
@@ -786,7 +1174,13 @@ impl DoremiApp {
             self.catalog_back();
             return;
         }
-        if let Some(detail) = detail {
+        let shelf = self.model.as_ref().unwrap().music.shelf.clone();
+        if let Some((title, tracks)) = shelf {
+            ui.heading(title);
+            if tracks {
+                self.music_collection_actions(ui);
+            }
+        } else if let Some(detail) = detail {
             self.music_detail(ui, &detail);
         }
         let state = &self.model.as_ref().unwrap().music;
@@ -795,7 +1189,9 @@ impl DoremiApp {
                 ui,
                 &palette,
                 Kind::Loading,
-                if !self.internal_ui {
+                if matches!(state.request, Some(Request::YouTube(Yt::Search { .. }))) {
+                    "Buscando música…"
+                } else if !self.internal_ui {
                     "Cargando música…"
                 } else if state.youtube {
                     "Consultando YouTube Music…"
@@ -836,6 +1232,20 @@ impl DoremiApp {
             );
         }
         if let Some(page) = page {
+            if let Some(spelling) = &page.spelling
+                && self.choice_button(
+                    ui,
+                    "catalog-spelling",
+                    &format!("¿Quisiste decir «{spelling}»?"),
+                    0.0,
+                    false,
+                )
+            {
+                let model = self.model.as_mut().unwrap();
+                model.query = spelling.clone();
+                model.music.search_now(&model.query);
+                return;
+            }
             let state = &self.model.as_ref().unwrap().music;
             if page.items.is_empty() && !state.waiting && state.error.is_none() {
                 feedback::panel(
@@ -923,10 +1333,7 @@ impl DoremiApp {
                 } else {
                     for (index, section) in page.sections.iter().enumerate() {
                         ui.push_id(("catalog-section", index), |ui| {
-                            ui.add_space(12.0);
-                            ui.label(
-                                egui::RichText::new(&section.title).font(doremi_ui::bold(20.0)),
-                            );
+                            self.music_section_heading(ui, section);
                             self.music_grid(ui, &page.items[section.rows.clone()]);
                         });
                     }
@@ -936,8 +1343,7 @@ impl DoremiApp {
                     if let Some(section) = page.sections.iter().find(|section| {
                         section.rows.start == index && !section.title.trim().is_empty()
                     }) {
-                        ui.add_space(20.0);
-                        ui.label(egui::RichText::new(&section.title).font(doremi_ui::bold(20.0)));
+                        self.music_section_heading(ui, section);
                     }
                     ui.push_id(index, |ui| self.music_row(ui, item, index));
                 }
@@ -947,11 +1353,122 @@ impl DoremiApp {
                 {
                     self.model.as_mut().unwrap().music.page_by(false);
                 }
-                if page.more && self.button(ui, "catalog-next", "Más resultados", 160.0) {
-                    self.model.as_mut().unwrap().music.page_by(true);
+                let can_continue = !self.model.as_ref().unwrap().music.waiting
+                    && self.model.as_ref().unwrap().music.error.is_none();
+                ui.add_enabled_ui(can_continue, |ui| {
+                    if page.more && self.button(ui, "catalog-next", "Cargar más", 160.0) {
+                        self.model.as_mut().unwrap().music.page_by(true);
+                    }
+                });
+            });
+        }
+    }
+
+    fn music_section_heading(&mut self, ui: &mut egui::Ui, section: &ResultSection) {
+        if !section.title.is_empty() {
+            ui.add_space(14.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(&section.title).font(doremi_ui::bold(20.0)));
+                if let Some(link) = &section.more
+                    && self
+                        .model
+                        .as_ref()
+                        .unwrap()
+                        .music
+                        .detail
+                        .as_ref()
+                        .is_some_and(|entry| entry.kind == EntityKind::Artist)
+                    && self.button(
+                        ui,
+                        &format!("catalog-shelf:{}", section.title),
+                        "Ver todo",
+                        100.0,
+                    )
+                {
+                    self.model
+                        .as_mut()
+                        .unwrap()
+                        .music
+                        .open_shelf(section.title.clone(), link.clone());
                 }
             });
         }
+    }
+
+    pub(super) fn poll_music_catalog(&mut self, ctx: &egui::Context) {
+        let model = self.model.as_mut().unwrap();
+        model.music.poll(ctx);
+        if let Some((action, tracks)) = model.music.take_collection_action() {
+            match action {
+                CollectionAction::Play { shuffle } if !tracks.is_empty() => {
+                    model.cancel_local_import();
+                    let start = if shuffle {
+                        rand::random_range(0..tracks.len())
+                    } else {
+                        0
+                    };
+                    let order = if shuffle {
+                        shuffled(tracks.len(), Some(start))
+                    } else {
+                        Order::Sequential
+                    };
+                    model.command(Command::StartContext {
+                        media: tracks,
+                        start,
+                        order,
+                    });
+                    self.navigate(Page::Player);
+                }
+                CollectionAction::Queue if !tracks.is_empty() => {
+                    model.command(Command::Append(tracks))
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn music_collection_actions(&mut self, ui: &mut egui::Ui) {
+        let state = &self.model.as_ref().unwrap().music;
+        let recording = state
+            .detail
+            .as_ref()
+            .is_some_and(|entry| entry.kind == EntityKind::Recording);
+        if !recording && !state.page.as_ref().is_some_and(|page| page.has_tracks()) {
+            return;
+        }
+        if state.collection_action.is_some()
+            && self.button(ui, "cancel-collection", "Cancelar carga", 155.0)
+        {
+            let state = &mut self.model.as_mut().unwrap().music;
+            state.suspend();
+            return;
+        }
+        let state = &self.model.as_ref().unwrap().music;
+        let enabled = !state.waiting && state.collection_action.is_none();
+        let is_collection = state.paged_collection();
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                let play = self.button(ui, "youtube-play-context", "Reproducir", 138.0);
+                let shuffle =
+                    is_collection && self.button(ui, "youtube-shuffle-context", "Aleatorio", 135.0);
+                let queue = self.button(ui, "youtube-enqueue-context", "Añadir a la cola", 172.0);
+                let action = if queue {
+                    Some(CollectionAction::Queue)
+                } else if play || shuffle {
+                    Some(CollectionAction::Play { shuffle })
+                } else {
+                    None
+                };
+                if let Some(action) = action {
+                    let state = &mut self.model.as_mut().unwrap().music;
+                    state.collection_action = Some(action);
+                    if state.error.is_some() {
+                        state.retry();
+                    }
+                    ui.ctx().request_repaint();
+                }
+            });
+        });
     }
 
     fn music_grid(&mut self, ui: &mut egui::Ui, items: &[CatalogEntry]) {
@@ -977,16 +1494,18 @@ impl DoremiApp {
                         |ui| {
                             ui.vertical(|ui| {
                                 ui.set_width(card_width);
-                                let subtitle = if entry.artists.is_empty() {
-                                    kind_label(entry.kind).to_owned()
-                                } else {
-                                    entry
-                                        .artists
-                                        .iter()
-                                        .map(|artist| artist.name.as_str())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                };
+                                let byline = entry
+                                    .media
+                                    .music
+                                    .as_ref()
+                                    .and_then(|music| music.byline.as_deref())
+                                    .unwrap_or("");
+                                let edition = edition_label(entry);
+                                let subtitle = [byline, edition.as_str()]
+                                    .into_iter()
+                                    .filter(|part| !part.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" · ");
                                 let card = cards::card_sized(
                                     ui,
                                     &palette,
@@ -1016,7 +1535,7 @@ impl DoremiApp {
                                             );
                                             self.media_artwork(
                                                 ui,
-                                                &entry.media.id,
+                                                &entry.media,
                                                 rect,
                                                 radius.min(127.0) as u8,
                                             );
@@ -1087,9 +1606,14 @@ impl DoremiApp {
         };
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        let cover = self.artwork_textures.current(
+        let cover = self.artwork_textures.current_image(
             &self.model.as_ref().unwrap().artwork,
             &entry.media.id,
+            entry
+                .media
+                .music
+                .as_ref()
+                .and_then(|data| data.artwork.as_deref()),
             ui.ctx(),
         );
         collection::hero(
@@ -1120,8 +1644,9 @@ impl DoremiApp {
                 } => {
                     if let Some(cover) = &cover {
                         egui::Image::new((cover.id(), cover.size_vec2()))
+                            .uv(theme::cover_uv(cover.size_vec2(), rect.size()))
+                            .maintain_aspect_ratio(false)
                             .fit_to_exact_size(rect.size())
-                            .maintain_aspect_ratio(true)
                             .corner_radius(radius)
                             .paint_at(ui, rect);
                     } else {
@@ -1162,6 +1687,7 @@ impl DoremiApp {
                                     id: credit.id.clone(),
                                     title: credit.name.clone(),
                                     duration_ms: None,
+                                    music: None,
                                 },
                                 kind: EntityKind::Artist,
                                 artists: vec![],
@@ -1185,6 +1711,15 @@ impl DoremiApp {
                 }
             },
         );
+        let state = &self.model.as_ref().unwrap().music;
+        if let Some(header) = state.page.as_ref().and_then(|page| page.header.as_ref()) {
+            if !header.byline.is_empty() && entry.artists.is_empty() {
+                ui.weak(&header.byline);
+            }
+            if !header.summary.is_empty() {
+                ui.weak(&header.summary);
+            }
+        }
         let youtube = entry.media.id.provider.as_str() == doremi_youtube::PROVIDER;
         if !youtube {
             ui.weak("MusicBrainz proporciona metadatos; esta selección no incluye audio.");
@@ -1243,40 +1778,7 @@ impl DoremiApp {
             }
         }
         if youtube {
-            let tracks: Vec<_> = if entry.kind == EntityKind::Recording {
-                vec![entry.media.clone()]
-            } else {
-                self.model
-                    .as_ref()
-                    .unwrap()
-                    .music
-                    .page
-                    .as_ref()
-                    .and_then(|page| {
-                        page.items
-                            .iter()
-                            .position(|item| item.kind == EntityKind::Recording)
-                            .map(|row| page.play_context(row).0)
-                    })
-                    .unwrap_or_default()
-            };
-            if !tracks.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    if self.button(ui, "youtube-play-context", "Reproducir", 160.0) {
-                        self.model
-                            .as_mut()
-                            .unwrap()
-                            .start_context(tracks.clone(), 0);
-                        self.navigate(Page::Player);
-                    }
-                    if self.button(ui, "youtube-enqueue-context", "Añadir a la cola", 190.0) {
-                        self.model
-                            .as_mut()
-                            .unwrap()
-                            .command(Command::Append(tracks.clone()));
-                    }
-                });
-            }
+            self.music_collection_actions(ui);
         }
         if entry.kind == EntityKind::Artist && !youtube {
             ui.add_space(12.0);
@@ -1308,27 +1810,40 @@ impl DoremiApp {
         }
     }
 
+    fn music_reference(
+        &mut self,
+        ui: &mut egui::Ui,
+        reference: &doremi_core::media::MusicReference,
+        kind: EntityKind,
+    ) {
+        if self.button(
+            ui,
+            &format!("catalog-link:{}", reference.id.local()),
+            &reference.name,
+            190.0,
+        ) {
+            self.model.as_mut().unwrap().music.open(CatalogEntry {
+                media: Media {
+                    id: reference.id.clone(),
+                    title: reference.name.clone(),
+                    duration_ms: None,
+                    music: None,
+                },
+                kind,
+                artists: vec![],
+                edition: None,
+            });
+            ui.close();
+        }
+    }
+
     fn music_row(&mut self, ui: &mut egui::Ui, entry: &CatalogEntry, row_index: usize) {
         use doremi_ui::{self as theme, Icon};
         let prefs = &self.model.as_ref().unwrap().prefs;
         let palette = theme::palette(prefs.light, prefs.green);
-        let artists = entry
-            .artists
-            .iter()
-            .map(|credit| credit.name.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let artists = self.music_byline(&entry.media);
         let mut subtitle = if artists.is_empty() {
-            self.model
-                .as_ref()
-                .unwrap()
-                .music
-                .page
-                .as_ref()
-                .and_then(|page| page.subtitles.get(row_index))
-                .filter(|text| !text.is_empty())
-                .cloned()
-                .unwrap_or_else(|| kind_label(entry.kind).to_owned())
+            kind_label(entry.kind).to_owned()
         } else {
             artists
         };
@@ -1355,7 +1870,11 @@ impl DoremiApp {
                 title: &entry.media.title,
                 subtitle: &subtitle,
                 round: entry.kind == EntityKind::Artist,
-                actions: 1,
+                actions: if self.playable_media(&entry.media) {
+                    2
+                } else {
+                    1
+                },
                 action_label: if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
                     && entry.kind == EntityKind::Recording
                 {
@@ -1372,7 +1891,7 @@ impl DoremiApp {
         );
         self.media_artwork(
             ui,
-            &entry.media.id,
+            &entry.media,
             row.cover_rect(),
             if entry.kind == EntityKind::Artist {
                 20
@@ -1420,6 +1939,44 @@ impl DoremiApp {
                     model.save_media(entry.media.clone());
                 }
             }
+        }
+        if self.playable_media(&entry.media) {
+            let mut child =
+                ui.new_child(egui::UiBuilder::new().max_rect(row.action_rect(1)).layout(
+                    egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+                ));
+            let more = theme::icon_button_sized(
+                &mut child,
+                Icon::Ellipsis,
+                [22.0, TOUCH],
+                palette.secondary,
+                palette.text,
+                "Más opciones",
+            );
+            self.record(&format!("catalog-more:{}", entry.media.id.local()), &more);
+            egui::Popup::menu(&more).show(|ui| {
+                if self.button(
+                    ui,
+                    &format!("catalog-enqueue:{}", entry.media.id.local()),
+                    "Añadir a la cola",
+                    190.0,
+                ) {
+                    self.model
+                        .as_mut()
+                        .unwrap()
+                        .command(Command::Append(vec![entry.media.clone()]));
+                    ui.close();
+                }
+                if let Some(music) = &entry.media.music {
+                    if let Some(album) = &music.album {
+                        self.music_reference(ui, album, EntityKind::Release);
+                    }
+                    for artist in &music.artists {
+                        self.music_reference(ui, artist, EntityKind::Artist);
+                    }
+                }
+                self.row_playlist_actions(ui, &entry.media, row_index);
+            });
         }
         if row.body.clicked() {
             if entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
@@ -1484,6 +2041,7 @@ mod tests {
                 Section {
                     title: "Fixture first section".into(),
                     layout: Layout::Tracks,
+                    more: None,
                     items: vec![
                         Item {
                             title: "Invalid identity".into(),
@@ -1502,6 +2060,7 @@ mod tests {
                 Section {
                     title: "Fixture second section".into(),
                     layout: Layout::Tracks,
+                    more: None,
                     items: vec![Item {
                         title: "Fixture other song".into(),
                         video_id: "lmnopqrstuv".into(),
@@ -1543,6 +2102,7 @@ mod tests {
                     continuation: None,
                     sections: vec![],
                     subtitles: vec![],
+                    ..Results::default()
                 }))
             } else {
                 None
@@ -1714,7 +2274,8 @@ mod tests {
         });
         let ctx = egui::Context::default();
         let page = home_fixture();
-        send.try_send((state.generation, Ok(page.clone()))).unwrap();
+        send.try_send((state.generation, Ok(page.clone()), false))
+            .unwrap();
         state.poll(&ctx);
         state.open(page.items[1].clone());
         assert!(!state.home_root() && state.detail.is_some());
@@ -1739,7 +2300,9 @@ mod tests {
                 more: false,
                 detail: None,
                 continuation: None,
+                ..Results::default()
             })),
+            false,
         ))
         .unwrap();
         state.poll(&ctx);
@@ -1871,6 +2434,7 @@ mod tests {
                 .unwrap(),
                 title: "Optional metadata".into(),
                 duration_ms: None,
+                music: None,
             },
             kind: EntityKind::Artist,
             artists: vec![],
@@ -1887,6 +2451,7 @@ mod tests {
                 id: album.clone(),
                 title: "Album".into(),
                 duration_ms: None,
+                music: None,
             },
             kind: EntityKind::Release,
             artists: vec![],
@@ -1900,6 +2465,81 @@ mod tests {
         );
     }
     #[test]
+    fn search_deduplicates_stable_ids_in_order_and_collection_keeps_occurrences() {
+        let original = home_fixture();
+        let search = original.search_results(EntityKind::Recording, &mut HashSet::new());
+        assert_eq!(
+            search
+                .items
+                .iter()
+                .map(|entry| entry.media.id.local())
+                .collect::<Vec<_>>(),
+            ["abcdefghijk", "lmnopqrstuv"]
+        );
+        let mut tracklist = (*original).clone();
+        let next = Results::from(doremi_youtube::parser::Page {
+            sections: vec![doremi_youtube::parser::Section {
+                title: String::new(),
+                layout: doremi_youtube::parser::Layout::Tracks,
+                more: None,
+                items: vec![doremi_youtube::parser::Item {
+                    title: "A version".into(),
+                    video_id: "ghijklmnopq".into(),
+                    ..Default::default()
+                }],
+            }],
+            ..Default::default()
+        });
+        tracklist.append(next, "continuation", true).unwrap();
+        assert_eq!(
+            tracklist
+                .collection_tracks()
+                .iter()
+                .map(|track| track.id.local())
+                .collect::<Vec<_>>(),
+            ["abcdefghijk", "abcdefghijk", "ghijklmnopq"]
+        );
+        let repeated = Results {
+            continuation: Some("continuation".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            tracklist.append(repeated, "next", true),
+            Err(ProviderError::InvalidResponse)
+        );
+        assert_eq!(tracklist.collection_tracks().len(), 3);
+    }
+
+    #[test]
+    fn old_suggestions_cannot_replace_text_edited_while_a_request_is_pending() {
+        let mut state = State::new();
+        state.suggestions.edit("Li");
+        let old = state.suggestions.generation;
+        state.suggestions.edit("Linkin");
+        let (commands, _requests) = mpsc::channel(2);
+        let (send, events) = mpsc::channel(1);
+        state.suggestions.worker = Some(Worker {
+            commands,
+            events,
+            generation: Arc::new(AtomicU64::new(state.suggestions.generation)),
+        });
+        let page = Arc::new(Results {
+            suggestions: vec!["Linkin Park".into()],
+            ..Default::default()
+        });
+        let ctx = egui::Context::default();
+        send.try_send((old, Ok(page.clone()), false)).unwrap();
+        state.suggestions.poll(&ctx, &state.session);
+        assert!(state.suggestions.values().is_empty());
+        send.try_send((state.suggestions.generation, Ok(page), false))
+            .unwrap();
+        state.suggestions.poll(&ctx, &state.session);
+        assert_eq!(state.suggestions.values(), ["Linkin Park"]);
+        state.suggestions.clear();
+        assert!(!state.suggestions.active());
+    }
+
+    #[test]
     fn youtube_pagination_preserves_the_provider_token_and_previous_results() {
         let mut state = State::new();
         state.search("Chopin");
@@ -1911,8 +2551,10 @@ mod tests {
             more: true,
             detail: None,
             continuation: Some("provider-token".into()),
+            ..Results::default()
         });
         state.page = Some(page.clone());
+        state.waiting = false;
         state.page_by(true);
         assert_eq!(
             state.request,
@@ -1942,6 +2584,7 @@ mod tests {
                 .unwrap(),
                 title: title.into(),
                 duration_ms: None,
+                music: None,
             },
             kind,
             artists: vec![],
@@ -1964,7 +2607,9 @@ mod tests {
             items: vec![release.clone(); 3],
             offset: 0,
             more: true,
+            ..Results::default()
         }));
+        state.waiting = false;
         state.page_by(true);
         assert_eq!(
             state.request,
@@ -1981,6 +2626,7 @@ mod tests {
             items: vec![release.clone(); 2],
             offset: 3,
             more: true,
+            ..Results::default()
         }));
         state.open(release.clone());
         state.back();
@@ -2051,17 +2697,18 @@ mod tests {
             items: vec![],
             offset: 0,
             more: false,
+            ..Results::default()
         });
-        send.try_send((old, Ok(page.clone()))).unwrap();
+        send.try_send((old, Ok(page.clone()), false)).unwrap();
         state.poll(&egui::Context::default());
         assert!(state.page.is_none());
         assert!(state.waiting);
-        send.try_send((current, Ok(page.clone()))).unwrap();
+        send.try_send((current, Ok(page.clone()), false)).unwrap();
         state.poll(&egui::Context::default());
         assert!(state.page.is_some());
         assert!(!state.waiting);
         state.cancel();
-        send.try_send((current, Ok(page))).unwrap();
+        send.try_send((current, Ok(page), false)).unwrap();
         state.poll(&egui::Context::default());
         assert!(state.page.is_none());
         assert!(!state.waiting);

@@ -50,6 +50,7 @@ fn fresh_queue_restoration_rejects_even_old_callbacks_created_after_the_checkpoi
             id: MediaId::new(ProviderId::new("fixture").unwrap(), "a").unwrap(),
             title: "a".into(),
             duration_ms: None,
+            music: None,
         }],
         start: 0,
         order: Order::Sequential,

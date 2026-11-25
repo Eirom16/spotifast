@@ -27,6 +27,7 @@ public final class MainActivity extends Activity {
     private static native boolean nativeInit(String directory,Context application,long inputGeneration,boolean internalUi);
     private static native String nativeDraw(int width,int height,float scale);
     private static native void nativeTouch(int action,float x,float y);
+    private static native void nativeSubmitSearch();
     private static native void nativeText(String text,String field,long generation);
     private static native void nativeDestroy();
     private static native void nativeBack();
@@ -235,7 +236,8 @@ public final class MainActivity extends Activity {
         input=new EditText(this);
         input.setSaveEnabled(false);
         input.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING);
+        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+            | android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH);
         input.setSingleLine(true);
         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT);
         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(128)});
@@ -248,6 +250,12 @@ public final class MainActivity extends Activity {
             public void afterTextChanged(Editable text) {
                 if(!updatingInput) { String value=text.toString(),target=inputTarget; long generation=++inputGeneration; surface.queueEvent(() -> nativeText(value,target,generation)); surface.requestRender(); }
             }
+        });
+        input.setOnEditorActionListener((view, action, event) -> {
+            if (!"search".equals(inputTarget) || action != android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH) return false;
+            surface.queueEvent(MainActivity::nativeSubmitSearch);
+            surface.requestRender();
+            return true;
         });
         root.addView(input,new FrameLayout.LayoutParams(1,1));
         surface.setFocusableInTouchMode(true); surface.requestFocus();
@@ -326,6 +334,8 @@ public final class MainActivity extends Activity {
                     if(!inputTarget.equals(target)) {
                         input.setInputType(android.text.InputType.TYPE_CLASS_TEXT|("session-cookie".equals(target)?android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD:android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS));
                         input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter("session-cookie".equals(target)?16384:128)});
+                        input.setImeOptions(android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+                            | ("search".equals(target) ? android.view.inputmethod.EditorInfo.IME_ACTION_SEARCH : android.view.inputmethod.EditorInfo.IME_ACTION_DONE));
                         input.setContentDescription("session-cookie".equals(target)?"Sesión de YouTube Music":"Buscar en Doremi");
                     }
                     inputTarget=target;

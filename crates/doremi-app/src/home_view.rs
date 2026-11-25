@@ -71,6 +71,9 @@ impl DoremiApp {
     }
 
     pub(super) fn music_byline(&self, media: &Media) -> String {
+        if let Some(byline) = media.music.as_ref().and_then(|music| music.byline.as_ref()) {
+            return byline.clone();
+        }
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if let Some(text) = self.model.as_ref().unwrap().music.byline(&media.id) {
             return text;
@@ -110,7 +113,7 @@ impl DoremiApp {
                 subtitle,
                 cover: cards::CardCover {
                     playable: self.playable_media(media) && !matches!(icon, Icon::ListMusic),
-                    circular: presentation::metadata_kind(&media.id)
+                    circular: presentation::metadata_kind(media)
                         == Some(doremi_core::media::EntityKind::Artist),
                     ..cards::CardCover::square(playing)
                 },
@@ -122,7 +125,7 @@ impl DoremiApp {
                 cards::Slot::Cover { rect, radius } => {
                     cards::shadow(ui, &palette, rect, radius);
                     theme::cover_placeholder(ui, &palette, rect, radius, icon);
-                    self.media_artwork(ui, &media.id, rect, radius as u8);
+                    self.media_artwork(ui, media, rect, radius as u8);
                 }
                 cards::Slot::Text {
                     text,

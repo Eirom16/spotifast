@@ -112,6 +112,7 @@ fn parse(page: &Value) -> Result<Info, ProviderError> {
                 title.clone()
             },
             duration_ms,
+            music: None,
         },
         title: title.clone(),
         uri,

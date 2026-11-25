@@ -9,27 +9,37 @@ impl DoremiApp {
     pub(super) fn media_artwork(
         &mut self,
         ui: &egui::Ui,
-        id: &MediaId,
+        media: &Media,
         rect: egui::Rect,
         radius: u8,
     ) {
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
-        if id.provider.as_str() == doremi_youtube::PROVIDER && ui.is_rect_visible(rect) {
+        if media.id.provider.as_str() == doremi_youtube::PROVIDER && ui.is_rect_visible(rect) {
+            let id = &media.id;
             let model = self.model.as_mut().unwrap();
-            let url = model
+            let url = media
                 .music
-                .session
-                .client
-                .try_lock()
-                .ok()
-                .and_then(|client| {
-                    client
-                        .as_ref()
-                        .and_then(|client| client.as_ref().ok())
-                        .and_then(|client| client.thumbnail(id))
+                .as_ref()
+                .and_then(|data| data.artwork.clone())
+                .or_else(|| {
+                    model
+                        .music
+                        .session
+                        .client
+                        .try_lock()
+                        .ok()
+                        .and_then(|client| {
+                            client
+                                .as_ref()
+                                .and_then(|client| client.as_ref().ok())
+                                .and_then(|client| client.thumbnail(id))
+                        })
                 });
-            model.artwork.request_thumbnail(id, url, ui.ctx());
-            if let Some(cover) = self.artwork_textures.current(&model.artwork, id, ui.ctx()) {
+            model.artwork.request_thumbnail(id, url.clone(), ui.ctx());
+            if let Some(cover) =
+                self.artwork_textures
+                    .current_image(&model.artwork, id, url.as_deref(), ui.ctx())
+            {
                 egui::Image::new((cover.id(), cover.size_vec2()))
                     .uv(theme::cover_uv(cover.size_vec2(), rect.size()))
                     .maintain_aspect_ratio(false)
@@ -39,7 +49,7 @@ impl DoremiApp {
             }
         }
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
-        let _ = (ui, id, rect, radius);
+        let _ = (ui, media, rect, radius);
     }
 
     pub(super) fn record(&mut self, name: &str, response: &egui::Response) {
@@ -58,6 +68,12 @@ impl DoremiApp {
         let model = self.model.as_mut().unwrap();
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         {
+            if page != model.page
+                && matches!(model.page, Page::Search | Page::Home)
+                && !matches!(page, Page::Search)
+            {
+                model.music.suspend();
+            }
             if page == Page::Search && model.page != Page::Search && model.music.home_root() {
                 model.music.search(&model.query);
             }
@@ -73,6 +89,7 @@ impl DoremiApp {
         #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
         if page == Page::Search {
             self.ensure_product_search();
+            self.model.as_mut().unwrap().music.resume_view();
         }
     }
     pub(super) fn can_go_back(&self) -> bool {
@@ -590,7 +607,7 @@ impl DoremiApp {
             .queue
             .current()
             .filter(|entry| self.playable_media(&entry.media));
-        let id = current.map(|entry| entry.media.id.clone());
+        let media = current.map(|entry| entry.media.clone());
         let caption = if current.is_some() {
             playback_caption(model)
         } else {
@@ -610,8 +627,8 @@ impl DoremiApp {
         let row = ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(Vec2::splat(56.0), egui::Sense::hover());
             theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
-            if let Some(id) = &id {
-                self.media_artwork(ui, id, rect, 8);
+            if let Some(media) = &media {
+                self.media_artwork(ui, media, rect, 8);
             }
             ui.vertical(|ui| {
                 ui.set_width(ui.available_width().max(0.0));
@@ -734,7 +751,7 @@ impl DoremiApp {
                     Vec2::splat(48.0),
                 );
                 theme::cover_placeholder(ui, palette, cover, 6.0, Icon::Music);
-                self.media_artwork(ui, &media.id, cover, 6);
+                self.media_artwork(ui, media, cover, 6);
                 let text = egui::Rect::from_min_max(
                     egui::pos2(cover.right() + 12.0, body.top() + 5.0),
                     egui::pos2(body.right() - 4.0, body.bottom()),
@@ -857,7 +874,7 @@ impl DoremiApp {
             return;
         }
         let title = current.media.title.clone();
-        let id = current.media.id.clone();
+        let media = current.media.clone();
         let caption = playback_caption(model);
         let byline = self.music_byline(&current.media);
         let failed = model.queue.playback() == Playback::Failed;
@@ -882,7 +899,7 @@ impl DoremiApp {
             let (rect, response) = ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
             theme::cards::shadow(ui, palette, rect, 16.0);
             theme::cover_placeholder(ui, palette, rect, 16.0, Icon::Music);
-            self.media_artwork(ui, &id, rect, 16);
+            self.media_artwork(ui, &media, rect, 16);
             self.record("player-art", &response);
         });
         ui.add_space(8.0);
@@ -917,8 +934,15 @@ impl DoremiApp {
     fn mobile_player_landscape(&mut self, ui: &mut egui::Ui, palette: &Palette, height: f32) {
         let model = self.model.as_ref().unwrap();
         let title = model.queue.current().unwrap().media.title.clone();
-        let id = model.queue.current().unwrap().media.id.clone();
-        let caption = playback_caption(model);
+        let media = model.queue.current().unwrap().media.clone();
+        let byline = self.music_byline(&media);
+        let caption = if byline.is_empty()
+            || matches!(model.queue.playback(), Playback::Failed | Playback::Loading)
+        {
+            playback_caption(model)
+        } else {
+            &byline
+        };
         let failed = model.queue.playback() == Playback::Failed;
         // Worker notices are already typed, user-facing errors without URLs or secrets.
         // Keep provider refusals visible on mobile just as on the desktop player.
@@ -948,7 +972,7 @@ impl DoremiApp {
                 let (rect, response) =
                     ui.allocate_exact_size(Vec2::splat(art), egui::Sense::hover());
                 theme::cover_placeholder(ui, palette, rect, 8.0, Icon::Music);
-                self.media_artwork(ui, &id, rect, 8);
+                self.media_artwork(ui, &media, rect, 8);
                 self.record("player-art", &response);
                 #[cfg(any(target_os = "android", test))]
                 {
@@ -1030,10 +1054,10 @@ impl DoremiApp {
         }
         #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
         if media.id.provider.as_str() == "musicbrainz"
-            || metadata_kind(&media.id)
+            || metadata_kind(media)
                 .is_some_and(|kind| kind != doremi_core::media::EntityKind::Recording)
         {
-            let Some(kind) = metadata_kind(&media.id) else {
+            let Some(kind) = metadata_kind(media) else {
                 self.model.as_mut().unwrap().notice =
                     "No se reconoce este identificador de catálogo. Se conserva en la biblioteca."
                         .into();
@@ -1044,7 +1068,10 @@ impl DoremiApp {
             model.music.open(doremi_core::media::CatalogEntry {
                 media: media.clone(),
                 kind,
-                artists: vec![],
+                artists: media
+                    .music
+                    .as_ref()
+                    .map_or_else(Vec::new, |data| data.artists.clone()),
                 edition: None,
             });
             self.navigate(Page::Search);
@@ -1087,7 +1114,7 @@ impl DoremiApp {
         for (index, media) in visible {
             ui.push_id((&media.id, index), |ui| {
                 let subtitle = if !self.internal_ui {
-                    match metadata_kind(&media.id) {
+                    match metadata_kind(media) {
                         Some(doremi_core::media::EntityKind::Artist) => "Artista",
                         Some(doremi_core::media::EntityKind::Release) => "Álbum",
                         Some(doremi_core::media::EntityKind::Playlist) => "Playlist",
@@ -1097,7 +1124,7 @@ impl DoremiApp {
                 } else if media.id.provider.as_str() == "musicbrainz"
                     || media.id.provider.as_str() == "youtube-music"
                 {
-                    match metadata_kind(&media.id) {
+                    match metadata_kind(media) {
                         Some(doremi_core::media::EntityKind::Artist) => {
                             if media.id.provider.as_str() == "musicbrainz" {
                                 "Artista · MusicBrainz · metadatos"
@@ -1130,6 +1157,8 @@ impl DoremiApp {
                 } else {
                     "Audio local"
                 };
+                let byline = self.music_byline(media);
+                let subtitle = if byline.is_empty() { subtitle } else { &byline };
                 let subtitle = prefix.map_or_else(
                     || subtitle.to_owned(),
                     |prefix| format!("{prefix} · {subtitle}"),
@@ -1154,17 +1183,16 @@ impl DoremiApp {
                     theme::ListRow {
                         title: &media.title,
                         subtitle: &subtitle,
-                        round: metadata_kind(&media.id)
-                            == Some(doremi_core::media::EntityKind::Artist),
+                        round: metadata_kind(media) == Some(doremi_core::media::EntityKind::Artist),
                         actions: 2,
                         action_label: "Seleccionar",
                     },
                 );
                 self.media_artwork(
                     ui,
-                    &media.id,
+                    media,
                     row.cover_rect(),
-                    if metadata_kind(&media.id) == Some(doremi_core::media::EntityKind::Artist) {
+                    if metadata_kind(media) == Some(doremi_core::media::EntityKind::Artist) {
                         20
                     } else {
                         4
@@ -1285,14 +1313,17 @@ fn repeat_presentation(repeat: Repeat) -> (Icon, &'static str) {
     }
 }
 
-pub(super) fn metadata_kind(id: &MediaId) -> Option<doremi_core::media::EntityKind> {
+pub(super) fn metadata_kind(media: &Media) -> Option<doremi_core::media::EntityKind> {
+    if let Some(music) = &media.music {
+        return Some(music.kind);
+    }
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "windows"))]
     {
-        doremi_youtube::entity_kind(id).or_else(|| doremi_musicbrainz::entity_kind(id).ok())
+        doremi_youtube::entity_kind(&media.id)
+            .or_else(|| doremi_musicbrainz::entity_kind(&media.id).ok())
     }
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "windows")))]
     {
-        let _ = id;
         None
     }
 }

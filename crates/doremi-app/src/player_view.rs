@@ -82,7 +82,7 @@ impl DoremiApp {
                     ui.allocate_exact_size(egui::Vec2::splat(art), egui::Sense::hover());
                 theme::cards::shadow(ui, &palette, rect, 16.0);
                 theme::cover_placeholder(ui, &palette, rect, 16.0, Icon::Music);
-                self.media_artwork(ui, &media.id, rect, 16);
+                self.media_artwork(ui, &media, rect, 16);
                 self.record("player-art", &response);
             });
             let content = ui.vertical(|ui| {

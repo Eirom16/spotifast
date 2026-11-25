@@ -17,7 +17,10 @@ mod signatures;
 pub mod stream;
 use doremi_core::{
     catalog::ProviderError as Error,
-    media::{ArtistCredit, CatalogEntry, EntityKind, Media, MediaId, ProviderId},
+    media::{
+        CatalogEntry, EntityKind, Media, MediaId, MusicMetadata, MusicReference, ProviderId,
+        ReleaseEdition,
+    },
 };
 use reqwest::{Client as Http, redirect::Policy};
 use serde_json::{Value, json};
@@ -35,6 +38,8 @@ pub enum Request {
     Search { query: String, kind: EntityKind },
     Browse { id: String },
     Continue { token: String, search: bool },
+    BrowseShelf(parser::ShelfLink),
+    Suggestions { input: String },
     Home,
     Library,
     LikedSongs,
@@ -45,7 +50,7 @@ impl Request {
     fn body(&self) -> Result<(&'static str, Value), Error> {
         Ok(match self {
             Self::Search { query, kind } => {
-                if query.trim().is_empty() || query.len() > 512 {
+                if !valid_query(query) {
                     return Err(Error::InvalidRequest);
                 }
                 let params = match kind {
@@ -56,16 +61,13 @@ impl Request {
                 };
                 ("search", json!({"query": query, "params": params}))
             }
-            Self::Browse { id } => {
-                if id.is_empty()
-                    || id.len() > 256
-                    || !id
-                        .bytes()
-                        .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
-                {
+            Self::Browse { id } => browse_body(id, None)?,
+            Self::BrowseShelf(link) => browse_body(&link.id, link.params.as_deref())?,
+            Self::Suggestions { input } => {
+                if !valid_query(input) {
                     return Err(Error::InvalidRequest);
                 }
-                ("browse", json!({"browseId": id}))
+                ("music/get_search_suggestions", json!({"input": input}))
             }
             Self::Continue { token, search } => {
                 if token.is_empty()
@@ -95,6 +97,22 @@ impl Request {
             Self::Library | Self::LikedSongs | Self::SavedAlbums | Self::SavedArtists
         )
     }
+}
+
+fn valid_query(query: &str) -> bool {
+    !query.trim().is_empty() && query.len() <= 512 && !query.chars().any(char::is_control)
+}
+
+fn browse_body(local: &str, params: Option<&str>) -> Result<(&'static str, Value), Error> {
+    id(local)?;
+    let mut body = json!({"browseId": local.strip_prefix("MPLA").unwrap_or(local)});
+    if let Some(params) = params {
+        if params.is_empty() || params.len() > 4096 || params.chars().any(char::is_control) {
+            return Err(Error::InvalidRequest);
+        }
+        body["params"] = json!(params);
+    }
+    Ok(("browse", body))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,7 +194,35 @@ impl Client {
         }
         let (endpoint, body) = request.body()?;
         let response = self.post(endpoint, body).await?;
-        let page = parser::parse_page(&response);
+        if matches!(request, Request::Suggestions { .. }) {
+            return Ok(parser::Page {
+                suggestions: parser::suggestions(&response),
+                ..Default::default()
+            });
+        }
+        let mut page = parser::parse_page(&response);
+        if let Request::Browse { id: local } = request {
+            if page.header.is_none() && page.sections.is_empty() {
+                return Err(Error::Unavailable);
+            }
+            if local.starts_with("MPRE")
+                && let Some(header) = &page.header
+                && let Some(tracks) = page
+                    .sections
+                    .iter_mut()
+                    .find(|section| section.layout == parser::Layout::Tracks)
+            {
+                for item in tracks.items.iter_mut().filter(|item| item.is_song()) {
+                    if item.album_id.is_empty() {
+                        item.album_id = local.clone();
+                        item.album_name = header.title.clone();
+                    }
+                    if item.thumb.is_empty() {
+                        item.thumb = header.thumb.clone();
+                    }
+                }
+            }
+        }
         for item in page.sections.iter().flat_map(|section| &section.items) {
             if let Ok(id) = id(item.key()) {
                 self.remember_thumbnail(id, &item.thumb);
@@ -246,7 +292,8 @@ impl Client {
                     retry_after_ms: Some(30_000),
                 });
             }
-            _ => return Err(Error::Unavailable),
+            404 | 410 => return Err(Error::Unavailable),
+            _ => return Err(Error::Transport),
         }
         if response
             .content_length()
@@ -364,34 +411,83 @@ pub fn id(local: &str) -> Result<MediaId, Error> {
     MediaId::new(ProviderId::new(PROVIDER).unwrap(), local).map_err(|_| Error::InvalidRequest)
 }
 pub fn entry(item: &parser::Item) -> Option<CatalogEntry> {
+    let kind = match item.page_type.as_str() {
+        "MUSIC_PAGE_TYPE_ALBUM" => EntityKind::Release,
+        "MUSIC_PAGE_TYPE_ARTIST" | "MUSIC_PAGE_TYPE_USER_CHANNEL" => EntityKind::Artist,
+        "MUSIC_PAGE_TYPE_PLAYLIST" => EntityKind::Playlist,
+        "" if item.is_song() => EntityKind::Recording,
+        "" if item.is_artist => EntityKind::Artist,
+        "" if item.browse_id.starts_with("MPRE") => EntityKind::Release,
+        "" if playlist_id(&item.browse_id) => EntityKind::Playlist,
+        _ => return None,
+    };
+    let local = if kind == EntityKind::Recording {
+        if item.video_id.len() != 11 {
+            return None;
+        }
+        &item.video_id
+    } else {
+        &item.browse_id
+    };
+    let artists: Vec<_> = item
+        .artists
+        .iter()
+        .filter_map(|(name, local)| reference(name, local))
+        .take(32)
+        .collect();
+    let byline = match display(&item.byline) {
+        Some(byline) => Some(byline),
+        None if !artists.is_empty() => Some(
+            artists
+                .iter()
+                .map(|credit| credit.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+        ),
+        _ => None,
+    };
     Some(CatalogEntry {
         media: Media {
-            id: id(item.key()).ok()?,
-            title: item.title.clone(),
+            id: id(local).ok()?,
+            title: display(&item.title)?,
             duration_ms: duration(&item.duration),
+            music: Some(std::sync::Arc::new(MusicMetadata {
+                kind,
+                byline,
+                artists: artists.clone(),
+                album: reference(&item.album_name, &item.album_id),
+                artwork: (item.thumb.len() <= 1024)
+                    .then(|| artwork_uri(&item.thumb).ok())
+                    .flatten()
+                    .map(Into::into),
+            })),
         },
-        kind: if item.is_song() {
-            EntityKind::Recording
-        } else if item.is_artist {
-            EntityKind::Artist
-        } else if item.browse_id.starts_with("MPRE") {
-            EntityKind::Release
-        } else {
-            EntityKind::Playlist
-        },
-        artists: item
-            .artists
-            .iter()
-            .filter_map(|(name, local)| {
-                Some(ArtistCredit {
-                    id: id(local).ok()?,
-                    name: name.clone(),
-                })
-            })
-            .collect(),
-        edition: None,
+        kind,
+        artists,
+        edition: (item.release_type.is_some() || item.year.is_some()).then(|| ReleaseEdition {
+            date: item.year.clone(),
+            country: None,
+            description: item.release_type.clone(),
+        }),
     })
 }
+fn reference(name: &str, local: &str) -> Option<MusicReference> {
+    Some(MusicReference {
+        id: id(local).ok()?,
+        name: display(name)?,
+    })
+}
+fn display(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 1024 {
+        return None;
+    }
+    Some(value.replace(char::is_control, " "))
+}
+fn playlist_id(local: &str) -> bool {
+    local.starts_with("VL") || local.starts_with("PL") || local.starts_with("RD")
+}
+
 fn duration(value: &str) -> Option<u64> {
     if value.is_empty() {
         return None;
@@ -448,19 +544,18 @@ pub fn entity_kind(media: &MediaId) -> Option<EntityKind> {
     let local = media.local();
     if local.len() == 11 {
         Some(EntityKind::Recording)
-    } else if local.starts_with("UC") {
+    } else if local.starts_with("UC") || local.starts_with("MPLA") {
         Some(EntityKind::Artist)
     } else if local.starts_with("MPRE") {
         Some(EntityKind::Release)
-    } else if local.starts_with("VL") || local.starts_with("PL") || local.starts_with("RD") {
+    } else if playlist_id(local) {
         Some(EntityKind::Playlist)
     } else {
         None
     }
 }
 
-/// Artwork is fetched without session headers, from the provider image CDN only.
-pub async fn artwork(url: &str) -> Result<Vec<u8>, Error> {
+fn artwork_uri(url: &str) -> Result<reqwest::Url, Error> {
     let uri = reqwest::Url::parse(url).map_err(|_| Error::InvalidRequest)?;
     let host = uri.host_str().ok_or(Error::InvalidRequest)?;
     if uri.scheme() != "https"
@@ -473,6 +568,12 @@ pub async fn artwork(url: &str) -> Result<Vec<u8>, Error> {
     {
         return Err(Error::AccessDenied);
     }
+    Ok(uri)
+}
+
+/// Artwork is fetched without session headers, from the provider image CDN only.
+pub async fn artwork(url: &str) -> Result<Vec<u8>, Error> {
+    let uri = artwork_uri(url)?;
     let client = Http::builder()
         .timeout(Duration::from_secs(8))
         .redirect(Policy::none())

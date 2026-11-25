@@ -116,7 +116,17 @@ impl Playlists {
     }
     pub fn encode(&self) -> Result<Vec<u8>, Error> {
         let document = Document {
-            schema: 1,
+            schema: if self
+                .0
+                .lists
+                .iter()
+                .flat_map(|list| &list.entries)
+                .any(|media| media.music.is_some())
+            {
+                2
+            } else {
+                1
+            },
             next: self.0.next,
             lists: self
                 .0
@@ -140,7 +150,7 @@ impl Playlists {
             return Err(Error::TooLarge);
         }
         let document: Document = serde_json::from_slice(bytes).map_err(|_| Error::Invalid)?;
-        if document.schema != 1 {
+        if !matches!(document.schema, 1 | 2) {
             return Err(Error::UnsupportedSchema);
         }
         if document.lists.len() > LIST_LIMIT
@@ -217,6 +227,7 @@ mod tests {
             id: MediaId::new(ProviderId::new(provider).unwrap(), "same-id").unwrap(),
             title: "Café · 音楽".into(),
             duration_ms: Some(239_518),
+            music: None,
         }
     }
     #[test]

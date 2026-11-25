@@ -15,6 +15,7 @@ pub fn media() -> Media {
         id: media_id("tone-scale-long-v1"),
         title: "Doremi: escala extendida (2 min)".into(),
         duration_ms: Some(DURATION_MS),
+        music: None,
     }
 }
 pub fn matches(id: &MediaId) -> bool {

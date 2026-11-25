@@ -80,7 +80,7 @@ impl DoremiApp {
                 let value: String = text.chars().take(128).collect();
                 if model.query != value {
                     model.query = value;
-                    model.search();
+                    model.edit_query();
                 }
             }
             (TextField::PlaylistName, Page::Library) => {
@@ -213,7 +213,7 @@ impl DoremiApp {
                 },
             );
             if let Some(media) = list.entries.iter().find(|media| self.media_visible(media)) {
-                self.media_artwork(ui, &media.id, row.cover_rect(), 4);
+                self.media_artwork(ui, media, row.cover_rect(), 4);
             }
             self.record(&format!("playlist-open:{}", list.id), &row.body);
             if row.body.clicked() {
@@ -296,7 +296,7 @@ impl DoremiApp {
                     theme::cover_placeholder(ui, &palette, rect, radius, Icon::ListMusic);
                     if let Some(media) = list.entries.iter().find(|media| self.media_visible(media))
                     {
-                        self.media_artwork(ui, &media.id, rect, radius.min(127.0) as u8);
+                        self.media_artwork(ui, media, rect, radius.min(127.0) as u8);
                     }
                 }
                 HeroSlot::Text { text, font, color } => {
@@ -406,7 +406,7 @@ impl DoremiApp {
 
 fn playlist_track(media: &Media) -> bool {
     // A saved catalog collection is a reference, not a track to expand or play.
-    presentation::metadata_kind(&media.id)
+    presentation::metadata_kind(media)
         .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
 }
 
@@ -435,6 +435,7 @@ mod tests {
                     .unwrap(),
                     title: "Collection metadata".into(),
                     duration_ms: None,
+                    music: None,
                 },
             );
         }

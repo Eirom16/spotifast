@@ -57,6 +57,7 @@ impl Builtin {
             id: MediaId::new(ProviderId::new("demo").unwrap(), self.id()).unwrap(),
             title: self.title().into(),
             duration_ms: Some(DURATION_MS),
+            music: None,
         }
     }
     pub fn from_media(id: &MediaId) -> Option<Self> {

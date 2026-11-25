@@ -75,10 +75,17 @@ impl Runtime {
                     epoch += 1;
                 }
                 let current = model.queue.current();
-                let image = current.and_then(|entry|model.artwork.media_pixels(&entry.media.id));
+                let image = current.and_then(|entry|model.artwork.media_pixels(&entry.media.id, entry.media.music.as_ref().and_then(|data| data.artwork.as_deref())));
                 let artwork_version = image.as_ref().map(|(version,_)|*version);
                 *published_artwork.lock().unwrap()=image;
-                let (artist, album)=current.map(|entry|model.music.session_metadata(&entry.media.id)).unwrap_or_default();
+                let (artist, album) = current.map(|entry| {
+                    let (known_artist, known_album) = model.music.session_metadata(&entry.media.id);
+                    let metadata = entry.media.music.as_ref();
+                    (
+                        metadata.and_then(|data| data.byline.clone()).or(known_artist),
+                        metadata.and_then(|data| data.album.as_ref().map(|album| album.name.clone())).or(known_album),
+                    )
+                }).unwrap_or_default();
                 let state = serde_json::json!({
                     "profile":profile,"internal_ui":internal,"album":album,
                     "artwork_version":artwork_version,

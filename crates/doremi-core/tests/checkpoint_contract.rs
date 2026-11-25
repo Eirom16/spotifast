@@ -10,6 +10,7 @@ fn media() -> Vec<Media> {
             id: MediaId::new(ProviderId::new("test").unwrap(), i.to_string()).unwrap(),
             title: format!("song {i}"),
             duration_ms: Some(10_000),
+            music: None,
         })
         .collect()
 }

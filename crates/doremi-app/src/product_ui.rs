@@ -19,12 +19,12 @@ impl DoremiApp {
     pub(super) fn playable_media(&self, media: &Media) -> bool {
         if media.id.provider.as_str() == "youtube-music" {
             return self.media_visible(media)
-                && presentation::metadata_kind(&media.id)
+                && presentation::metadata_kind(media)
                     == Some(doremi_core::media::EntityKind::Recording);
         }
         self.media_visible(media)
             && media.id.provider.as_str() != "musicbrainz"
-            && presentation::metadata_kind(&media.id)
+            && presentation::metadata_kind(media)
                 .is_none_or(|kind| kind == doremi_core::media::EntityKind::Recording)
     }
 
@@ -122,12 +122,14 @@ mod tests {
                 .unwrap(),
                 title: "MusicBrainz fixture".into(),
                 duration_ms: None,
+                music: None,
             },
             Media {
                 id: MediaId::new(ProviderId::new("wikimedia-commons").unwrap(), "26896924")
                     .unwrap(),
                 title: "Commons fixture".into(),
                 duration_ms: None,
+                music: None,
             },
         ];
         for media in &samples {
@@ -278,6 +280,7 @@ mod tests {
                 id: MediaId::new(ProviderId::new(provider).unwrap(), id).unwrap(),
                 title: "Fixture".into(),
                 duration_ms: None,
+                music: None,
             };
             assert_eq!(app.media_visible(&media), visible, "{provider}:{id}");
             assert_eq!(app.playable_media(&media), playable, "{provider}:{id}");
@@ -307,6 +310,7 @@ mod tests {
             .unwrap(),
             title: "Mi canción guardada".into(),
             duration_ms: Some(120000),
+            music: None,
         };
         app.model
             .as_mut()
@@ -328,6 +332,7 @@ mod tests {
                         .unwrap(),
                         title: "Demostración oculta".into(),
                         duration_ms: None,
+                        music: None,
                     },
                     None,
                 )

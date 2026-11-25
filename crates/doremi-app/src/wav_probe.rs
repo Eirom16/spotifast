@@ -22,6 +22,7 @@ pub fn run(path: PathBuf) -> Result<String, String> {
         id: id.clone(),
         title: "Archivo WAV seleccionado".into(),
         duration_ms: Some(info.duration_ms()),
+        music: None,
     };
     let mut model = Model::new(Preferences {
         volume: 0.08,

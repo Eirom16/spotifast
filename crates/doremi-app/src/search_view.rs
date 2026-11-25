@@ -12,10 +12,9 @@ pub(super) fn provider_error_message(error: ProviderError) -> &'static str {
             "El servicio está ocupado o ha limitado las consultas. Espera antes de reintentar."
         }
         ProviderError::Timeout => "La consulta tardó demasiado. Puedes volver a intentarlo.",
-        ProviderError::AccessDenied => {
-            "El proveedor rechazó la consulta. No se utilizará otro método de acceso."
-        }
-        ProviderError::Unavailable => "El catálogo no está disponible en este momento.",
+        ProviderError::AccessDenied => "El proveedor rechazó la consulta.",
+        ProviderError::Unavailable => "El contenido no está disponible en el catálogo.",
+        ProviderError::TooLarge => "La respuesta supera la capacidad de carga.",
         ProviderError::Cancelled => "Consulta cancelada.",
         ProviderError::Transport => {
             "No se pudo conectar con el catálogo. Revisa la conexión y vuelve a intentarlo."
@@ -25,6 +24,105 @@ pub(super) fn provider_error_message(error: ProviderError) -> &'static str {
 }
 
 impl DoremiApp {
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+    pub(super) fn suggestion_keys(&mut self, ctx: &egui::Context) {
+        if !ctx.memory(|memory| memory.has_focus(egui::Id::new("catalog-query"))) {
+            return;
+        }
+        let model = self.model.as_mut().unwrap();
+        if !model.music.selected || !model.music.youtube {
+            return;
+        }
+        let suggestions = &mut model.music.suggestions;
+        let count = suggestions.values().len();
+        let pressed = |key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key));
+        if suggestions.active() && pressed(egui::Key::Escape) {
+            suggestions.clear();
+        } else if count > 0 && pressed(egui::Key::ArrowDown) {
+            suggestions.selected =
+                Some(suggestions.selected.map_or(0, |index| (index + 1) % count));
+        } else if count > 0 && pressed(egui::Key::ArrowUp) {
+            suggestions.selected = Some(
+                suggestions
+                    .selected
+                    .map_or(count - 1, |index| (index + count - 1) % count),
+            );
+        } else if pressed(egui::Key::Enter) {
+            if let Some(value) = suggestions
+                .selected
+                .and_then(|index| suggestions.values().get(index))
+            {
+                model.query = value.clone();
+            }
+            model.music.search_now(&model.query);
+            ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("catalog-query")));
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+    pub(super) fn search_suggestions(&mut self, ui: &mut egui::Ui, field: &egui::Response) {
+        let model = self.model.as_ref().unwrap();
+        let suggestions = &model.music.suggestions;
+        if !model.music.selected || !model.music.youtube || !suggestions.active() {
+            return;
+        }
+        let selected = suggestions.selected;
+        let values = suggestions.values().to_vec();
+        let unavailable = suggestions.unavailable;
+        let mut choice = None;
+        let mut region = field.rect;
+        if !values.is_empty() {
+            let frame = egui::Frame::group(ui.style()).show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("search-suggestions")
+                    .max_height((ui.ctx().content_rect().height() * 0.30).clamp(44.0, 224.0))
+                    .show(ui, |ui| {
+                        for (index, value) in values.iter().enumerate() {
+                            let button = ui.add_sized(
+                                [ui.available_width(), TOUCH],
+                                egui::Button::new(value)
+                                    .selected(selected == Some(index))
+                                    .truncate(),
+                            );
+                            self.record(&format!("search-suggestion:{index}"), &button);
+                            if button.clicked() {
+                                choice = Some(value.clone());
+                            }
+                        }
+                    });
+            });
+            region = region.union(frame.response.rect);
+        } else if unavailable {
+            ui.weak("Sugerencias no disponibles. Puedes continuar la búsqueda.");
+        }
+        let model = self.model.as_mut().unwrap();
+        if let Some(choice) = choice {
+            model.query = choice;
+            model.music.search_now(&model.query);
+            ui.ctx()
+                .memory_mut(|memory| memory.surrender_focus(field.id));
+        } else if ui.input(|input| {
+            input.pointer.any_click()
+                && input
+                    .pointer
+                    .interact_pos()
+                    .is_some_and(|pos| !region.contains(pos))
+        }) {
+            model.music.suggestions.clear();
+        }
+    }
+    #[cfg(target_os = "android")]
+    pub(super) fn submit_android_search(&mut self, ctx: &egui::Context) {
+        let model = self.model.as_mut().unwrap();
+        if model.page == Page::Search
+            && self.editor == TextField::Search
+            && model.music.selected
+            && model.music.youtube
+        {
+            model.music.search_now(&model.query);
+            ctx.memory_mut(|memory| memory.surrender_focus(egui::Id::new("catalog-query")));
+        }
+    }
     pub(super) fn neutral_search_results(&mut self, ui: &mut egui::Ui) {
         let model = self.model.as_ref().unwrap();
         let palette = theme::palette(model.prefs.light, model.prefs.green);

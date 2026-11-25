@@ -19,6 +19,7 @@ fn category_filters_preserve_collection_queue_and_distinct_touch_targets() {
         id: doremi_youtube::id(id).unwrap(),
         title: title.into(),
         duration_ms: None,
+        music: None,
     })
     .collect();
     for item in &media {

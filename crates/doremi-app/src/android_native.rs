@@ -279,6 +279,11 @@ pub extern "system" fn native_text(
     });
 }
 
+#[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeSubmitSearch")]
+pub extern "system" fn native_submit_search(_: JNIEnv<'_>, _: JClass<'_>) {
+    post(|app, ctx| app.submit_android_search(ctx));
+}
+
 #[unsafe(export_name = "Java_dev_eirom_doremi_MainActivity_nativeDestroy")]
 pub extern "system" fn native_destroy(_: JNIEnv<'_>, _: JClass<'_>) {
     RENDERER.with(|cell| {

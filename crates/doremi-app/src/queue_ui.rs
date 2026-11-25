@@ -32,6 +32,7 @@ impl DoremiApp {
             }
         });
         if let Some(entry) = current {
+            let byline = self.music_byline(&entry.media);
             ui.add_space(GAP);
             ui.strong("Ahora");
             let row = theme::list_row(
@@ -40,13 +41,13 @@ impl DoremiApp {
                 ui.id().with("queue-current"),
                 theme::ListRow {
                     title: &entry.media.title,
-                    subtitle: caption,
+                    subtitle: if byline.is_empty() { caption } else { &byline },
                     round: false,
                     actions: 0,
                     action_label: "Abrir reproductor",
                 },
             );
-            self.media_artwork(ui, &entry.media.id, row.cover_rect(), 4);
+            self.media_artwork(ui, &entry.media, row.cover_rect(), 4);
             self.record("queue-current", &row.body);
             if row.body.clicked() {
                 self.navigate(Page::Player);
@@ -77,6 +78,12 @@ impl DoremiApp {
             } else {
                 placement.to_owned()
             };
+            let byline = self.music_byline(&entry.media);
+            let subtitle = if byline.is_empty() {
+                subtitle
+            } else {
+                format!("{byline} · {subtitle}")
+            };
             ui.push_id(entry.id.as_u64(), |ui| {
                 let row = theme::static_list_row(
                     ui,
@@ -90,7 +97,7 @@ impl DoremiApp {
                         action_label: "",
                     },
                 );
-                self.media_artwork(ui, &entry.media.id, row.cover_rect(), 4);
+                self.media_artwork(ui, &entry.media, row.cover_rect(), 4);
                 self.record(&format!("queue-entry:{}", entry.id.as_u64()), &row.body);
                 if let Some(index) = index {
                     let mut child = ui.new_child(

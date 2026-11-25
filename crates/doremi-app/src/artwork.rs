@@ -135,9 +135,18 @@ impl Drop for Worker {
 }
 struct Cached {
     id: MediaId,
+    url: Option<String>,
     version: u64,
     image: Arc<egui::ColorImage>,
     expires: Instant,
+}
+impl Cached {
+    fn matches(&self, id: &MediaId, url: Option<&str>) -> bool {
+        match url {
+            Some(url) => self.url.as_deref() == Some(url),
+            None => &self.id == id,
+        }
+    }
 }
 pub(super) struct State {
     selected: Option<MediaId>,
@@ -175,19 +184,20 @@ impl State {
     /// Visible rows register work; selection and HTTP happen on the next poll.
     pub fn request_thumbnail(&mut self, id: &MediaId, url: Option<String>, ctx: &egui::Context) {
         let Some(url) = url else { return };
-        if self.requested.len() < CAPACITY && self.requested.iter().all(|(known, _)| known != id) {
+        if self.requested.len() < CAPACITY
+            && self.requested.iter().all(|(known, _)| known != id)
+            && self.needs_thumbnail(id, Some(&url))
+        {
             self.requested.push((id.clone(), url));
-            if self.needs_thumbnail(id) {
-                ctx.request_repaint_after(Duration::from_millis(50));
-            }
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
-    fn needs_thumbnail(&self, id: &MediaId) -> bool {
+    fn needs_thumbnail(&self, id: &MediaId, url: Option<&str>) -> bool {
         let now = Instant::now();
         !self
             .cache
             .iter()
-            .any(|item| item.id == *id && item.expires > now)
+            .any(|item| item.matches(id, url) && item.expires > now)
             && !self
                 .failures
                 .iter()
@@ -197,15 +207,15 @@ impl State {
         let requested = std::mem::take(&mut self.requested);
         // Finish the visible in-flight image instead of restarting it every frame.
         if self.waiting
-            && let Some(current) = requested
-                .iter()
-                .find(|(id, _)| Some(id) == self.selected.as_ref())
+            && let Some(current) = requested.iter().find(|(id, url)| {
+                Some(id) == self.selected.as_ref() || Some(url) == self.url.as_ref()
+            })
         {
-            return Some(current.clone());
+            return self.selected.clone().map(|id| (id, current.1.clone()));
         }
         requested
             .into_iter()
-            .find(|(id, _)| self.needs_thumbnail(id))
+            .find(|(id, url)| self.needs_thumbnail(id, Some(url)))
     }
     pub fn select(&mut self, id: Option<MediaId>) {
         if self.selected == id {
@@ -272,6 +282,7 @@ impl State {
                         }
                         self.cache.push_back(Cached {
                             id,
+                            url: self.url.clone(),
                             version: self.version,
                             image: pixels.image,
                             expires: pixels.expires,
@@ -315,10 +326,14 @@ impl State {
         }
     }
     #[cfg(any(target_os = "android", test))]
-    pub(super) fn media_pixels(&self, id: &MediaId) -> Option<(u64, Arc<egui::ColorImage>)> {
+    pub(super) fn media_pixels(
+        &self,
+        id: &MediaId,
+        url: Option<&str>,
+    ) -> Option<(u64, Arc<egui::ColorImage>)> {
         self.cache
             .iter()
-            .find(|item| &item.id == id && item.expires > Instant::now())
+            .find(|item| item.matches(id, url) && item.expires > Instant::now())
             .map(|item| (item.version, item.image.clone()))
             .or_else(|| {
                 (self.selected.as_ref() == Some(id))
@@ -386,24 +401,41 @@ impl Textures {
             (state.selected.as_ref() == Some(id)
                 && state.version == *version
                 && state.pixels.is_some())
-                || state.cache.iter().any(|item| {
-                    item.id == *id && item.version == *version && item.expires > Instant::now()
-                })
+                || state
+                    .cache
+                    .iter()
+                    .any(|item| item.version == *version && item.expires > Instant::now())
         });
     }
+    #[cfg(test)]
     pub fn current(
         &mut self,
         state: &State,
         expected: &MediaId,
         ctx: &egui::Context,
     ) -> Option<egui::TextureHandle> {
+        self.current_image(state, expected, None, ctx)
+    }
+
+    pub fn current_image(
+        &mut self,
+        state: &State,
+        expected: &MediaId,
+        url: Option<&str>,
+        ctx: &egui::Context,
+    ) -> Option<egui::TextureHandle> {
         let (pixels, version) = match (state.selected.as_ref(), &state.pixels) {
-            (Some(selected), Some(pixels)) if selected == expected => (pixels, state.version),
+            (Some(selected), Some(pixels))
+                if selected == expected
+                    && url.is_none_or(|url| state.url.as_deref() == Some(url)) =>
+            {
+                (pixels, state.version)
+            }
             _ => {
                 let cached = state
                     .cache
                     .iter()
-                    .find(|item| item.id == *expected && item.expires > Instant::now())?;
+                    .find(|item| item.matches(expected, url) && item.expires > Instant::now())?;
                 (&cached.image, cached.version)
             }
         };
@@ -411,7 +443,7 @@ impl Textures {
         if let Some(index) = self
             .0
             .iter()
-            .position(|(key, known_version, _)| key == id && *known_version == version)
+            .position(|(_, known_version, _)| *known_version == version)
         {
             let item = self.0.remove(index).unwrap();
             let handle = item.2.clone();
@@ -444,12 +476,15 @@ impl DoremiApp {
                 entry.kind == EntityKind::Release
                     || entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
             })
-            .map(|entry| entry.media.id.clone());
-        let url = if let Some(id) = detail
-            .as_ref()
-            .filter(|id| id.provider.as_str() == doremi_youtube::PROVIDER)
+            .map(|entry| &entry.media);
+        let url = if let Some(media) =
+            detail.filter(|media| media.id.provider.as_str() == doremi_youtube::PROVIDER)
         {
-            match youtube_detail_url(&model.music.session.client, id, model.music.waiting) {
+            let url = media.music.as_ref().and_then(|data| data.artwork.clone());
+            match url.map_or_else(
+                || youtube_detail_url(&model.music.session.client, &media.id, model.music.waiting),
+                |url| std::task::Poll::Ready(Some(url)),
+            ) {
                 std::task::Poll::Ready(url) => url,
                 std::task::Poll::Pending => {
                     // A catalog request owns the shared client until its
@@ -463,9 +498,11 @@ impl DoremiApp {
         } else {
             None
         };
+        let detail = detail.map(|media| media.id.clone());
         let thumbnail = model.artwork.next_thumbnail();
         let (id, url) = if detail.as_ref().is_some_and(|id| {
-            id.provider.as_str() != doremi_youtube::PROVIDER || model.artwork.needs_thumbnail(id)
+            id.provider.as_str() != doremi_youtube::PROVIDER
+                || (url.is_some() && model.artwork.needs_thumbnail(id, url.as_deref()))
         }) {
             (detail, url)
         } else {

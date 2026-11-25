@@ -10,6 +10,7 @@ fn media(id: &str) -> Media {
         id: MediaId::new(provider(), id).unwrap(),
         title: id.into(),
         duration_ms: None,
+        music: None,
     }
 }
 fn consumer() -> Catalog {

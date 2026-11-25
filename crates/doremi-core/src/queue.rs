@@ -713,6 +713,7 @@ mod tests {
             id: MediaId::new(ProviderId::new("fixture").unwrap(), "a").unwrap(),
             title: "a".into(),
             duration_ms: None,
+            music: None,
         }
     }
 

@@ -618,6 +618,7 @@ mod tests {
                 id: doremi_youtube::id(id).unwrap(),
                 title: id.into(),
                 duration_ms: None,
+                music: None,
             })
             .collect();
         // Exercise real queue effects without touching the network/output device.
@@ -774,6 +775,7 @@ mod tests {
             .unwrap(),
             title: "Audited test tone".into(),
             duration_ms: Some(10000),
+            music: None,
         };
         model.start_context(vec![media.clone()], 0);
         let load = model.online.load.as_mut().unwrap();
@@ -804,6 +806,7 @@ mod tests {
             .unwrap(),
             title: "Audited test tone".into(),
             duration_ms: Some(10000),
+            music: None,
         };
         model.start_context(vec![media.clone()], 0);
         let pending = model.online.load.as_ref().unwrap();
