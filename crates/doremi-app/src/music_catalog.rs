@@ -2544,6 +2544,49 @@ mod tests {
     }
 
     #[test]
+    fn arrow_and_return_in_one_frame_commit_the_selected_suggestion() {
+        let _guard = crate::tests::UI_TEST_LOCK.lock().unwrap();
+        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../../target/suggestion-keys-{}",
+            std::process::id()
+        ));
+        let ctx = egui::Context::default();
+        let mut app = DoremiApp::new_context(&ctx, directory.clone());
+        let model = app.model.as_mut().unwrap();
+        model.query = "Linkin".into();
+        model.music.selected = true;
+        model.music.suggestions.values = vec!["linkin park".into(), "linkin park numb".into()];
+        let events = [egui::Key::ArrowDown, egui::Key::Enter]
+            .into_iter()
+            .map(|key| egui::Event::Key {
+                key,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            })
+            .collect();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.ctx()
+                    .memory_mut(|memory| memory.request_focus(egui::Id::new("catalog-query")));
+                app.suggestion_keys(ui.ctx());
+            },
+        );
+        output.textures_delta.clear();
+        let model = app.model.as_ref().unwrap();
+        assert_eq!(model.query, "linkin park");
+        assert!(!model.music.suggestions.active());
+        drop(app);
+        DoremiApp::shutdown();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn old_suggestions_cannot_replace_text_edited_while_a_request_is_pending() {
         let mut state = State::new();
         state.suggestions.edit("Li");

@@ -38,7 +38,9 @@ impl DoremiApp {
         let pressed = |key| ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, key));
         if suggestions.active() && pressed(egui::Key::Escape) {
             suggestions.clear();
-        } else if count > 0 && pressed(egui::Key::ArrowDown) {
+            return;
+        }
+        if count > 0 && pressed(egui::Key::ArrowDown) {
             suggestions.selected =
                 Some(suggestions.selected.map_or(0, |index| (index + 1) % count));
         } else if count > 0 && pressed(egui::Key::ArrowUp) {
@@ -47,7 +49,9 @@ impl DoremiApp {
                     .selected
                     .map_or(count - 1, |index| (index + count - 1) % count),
             );
-        } else if pressed(egui::Key::Enter) {
+        }
+        // An arrow and Return can arrive in the same frame.
+        if pressed(egui::Key::Enter) {
             if let Some(value) = suggestions
                 .selected
                 .and_then(|index| suggestions.values().get(index))
