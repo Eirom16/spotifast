@@ -49,13 +49,11 @@ impl Results {
     }
 }
 impl Results {
-    fn has_tracks(&self) -> bool {
-        self.sections.iter().any(|section| section.tracks)
+    fn track_section(&self) -> Option<&ResultSection> {
+        self.sections.iter().find(|section| section.tracks)
     }
     fn collection_tracks(&self) -> Vec<Media> {
-        self.sections
-            .iter()
-            .find(|section| section.tracks)
+        self.track_section()
             .map(|section| self.play_context(section.rows.start).0)
             .unwrap_or_default()
     }
@@ -864,6 +862,7 @@ impl State {
             }
         }
         self.suggestions.poll(ctx, &self.session);
+        let collection = self.paged_collection();
         let mut disconnected = false;
         if let Some(worker) = &mut self.worker {
             loop {
@@ -905,7 +904,6 @@ impl State {
                                     ));
                                 }
                                 Some(Request::YouTube(Yt::Continue { token, search })) => {
-                                    let collection = self.paged_collection();
                                     if let Some(previous) = &mut self.page {
                                         let previous = Arc::make_mut(previous);
                                         let next = if *search {
@@ -1265,8 +1263,19 @@ impl DoremiApp {
                 );
             } else if !page.items.is_empty() {
                 ui.add_space(12.0);
+                let count = if state.paged_collection() {
+                    let tracks = page.track_section().map_or(0, |section| {
+                        page.items[section.rows.clone()]
+                            .iter()
+                            .filter(|item| item.kind == EntityKind::Recording)
+                            .count()
+                    });
+                    format!("{tracks} pistas cargadas")
+                } else {
+                    format!("{} resultados", page.items.len())
+                };
                 ui.label(
-                    egui::RichText::new(format!("{} resultados", page.items.len()))
+                    egui::RichText::new(count)
                         .font(doremi_ui::semibold(14.0))
                         .color(palette.secondary),
                 );
@@ -1441,7 +1450,12 @@ impl DoremiApp {
             .detail
             .as_ref()
             .is_some_and(|entry| entry.kind == EntityKind::Recording);
-        if !recording && !state.page.as_ref().is_some_and(|page| page.has_tracks()) {
+        if !recording
+            && !state
+                .page
+                .as_ref()
+                .is_some_and(|page| page.track_section().is_some())
+        {
             return;
         }
         if state.collection_action.is_some()
@@ -1628,7 +1642,13 @@ impl DoremiApp {
             ui,
             &palette,
             Hero {
-                kind: kind_label(entry.kind),
+                kind: if entry.kind == EntityKind::Playlist
+                    && entry.media.id.provider.as_str() == doremi_youtube::PROVIDER
+                {
+                    "Playlist · YouTube Music"
+                } else {
+                    kind_label(entry.kind)
+                },
                 title: &entry.media.title,
                 description: if self.internal_ui {
                     Some(

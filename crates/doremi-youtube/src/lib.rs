@@ -201,6 +201,16 @@ impl Client {
             });
         }
         let mut page = parser::parse_page(&response);
+        let collection = match request {
+            Request::Browse { id } if id.starts_with("MPRE") => Some(false),
+            Request::Browse { id } if playlist_id(id) => Some(true),
+            Request::BrowseShelf(link) if playlist_id(&link.id) => Some(true),
+            Request::LikedSongs => Some(true),
+            _ => None,
+        };
+        if let Some(playlist) = collection {
+            page.continuation = parser::collection_continuation(&response, playlist);
+        }
         if let Request::Browse { id: local } = request {
             if page.header.is_none() && page.sections.is_empty() {
                 return Err(Error::Unavailable);
@@ -292,8 +302,7 @@ impl Client {
                     retry_after_ms: Some(30_000),
                 });
             }
-            404 | 410 => return Err(Error::Unavailable),
-            _ => return Err(Error::Transport),
+            _ => return Err(Error::Unavailable),
         }
         if response
             .content_length()

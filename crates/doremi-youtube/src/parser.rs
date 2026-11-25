@@ -556,14 +556,16 @@ fn list_continuation(list: &Value) -> Option<String> {
 }
 
 fn playlist_continuation(node: &Value) -> Option<String> {
-    match node {
-        Value::Object(map) => map
-            .get("musicPlaylistShelfRenderer")
-            .and_then(list_continuation)
-            .or_else(|| map.values().find_map(playlist_continuation)),
-        Value::Array(list) => list.iter().find_map(playlist_continuation),
-        _ => None,
-    }
+    collection_continuation(node, true)
+}
+
+pub(crate) fn collection_continuation(node: &Value, playlist: bool) -> Option<String> {
+    let renderer = if playlist {
+        "musicPlaylistShelfRenderer"
+    } else {
+        "musicShelfRenderer"
+    };
+    crate::find(node, renderer).and_then(list_continuation)
 }
 
 fn response_continuation(node: &Value) -> Option<String> {
@@ -635,6 +637,24 @@ fn page_continuation(node: &Value) -> Option<String> {
 mod continuation_tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn a_collection_uses_only_the_track_shelf_continuation() {
+        let page = |items| {
+            json!({"contents":{"sectionListRenderer":{
+                "contents":[{"musicPlaylistShelfRenderer":{"contents":items}}],
+                "continuations":[{"nextContinuationData":{"continuation":"other-sections"}}]
+            }}})
+        };
+        assert_eq!(collection_continuation(&page(json!([])), true), None);
+        let items = json!([{"continuationItemRenderer":{"continuationEndpoint":{
+            "continuationCommand":{"token":"playlist-tracks"}
+        }}}]);
+        assert_eq!(
+            collection_continuation(&page(items), true).as_deref(),
+            Some("playlist-tracks")
+        );
+    }
+
     #[test]
     fn a_whole_home_page_continuation_takes_priority_over_a_nested_playlist_shelf() {
         let shelf = json!({"musicPlaylistShelfRenderer":{"contents":[],"continuations":[{"nextContinuationData":{"continuation":"shelf-token"}}]}});
