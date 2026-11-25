@@ -362,9 +362,17 @@ impl DoremiApp {
                 }
                 let rect = ui.available_rect_before_wrap();
                 self.page_rect = [rect.left(), rect.top(), rect.right(), rect.bottom()];
-                let page = self.model.as_ref().unwrap().page;
+                let model = self.model.as_ref().unwrap();
+                let page = model.page;
+                let scroll_id = egui::Id::new(format!("page:{page:?}"));
+                #[cfg(any(target_os = "linux", target_os = "windows", target_os = "android"))]
+                let scroll_id = if page == Page::Search {
+                    scroll_id.with(model.music.view_key())
+                } else {
+                    scroll_id
+                };
                 egui::ScrollArea::vertical()
-                    .id_salt(format!("page:{page:?}"))
+                    .id_salt(scroll_id)
                     .show(ui, |ui| {
                         ui.set_min_width(ui.available_width());
                         self.page_content(ui);
@@ -751,7 +759,7 @@ impl DoremiApp {
                     Vec2::splat(48.0),
                 );
                 theme::cover_placeholder(ui, palette, cover, 6.0, Icon::Music);
-                self.media_artwork(ui, media, cover, 6);
+                self.media_artwork(ui, &media, cover, 6);
                 let text = egui::Rect::from_min_max(
                     egui::pos2(cover.right() + 12.0, body.top() + 5.0),
                     egui::pos2(body.right() - 4.0, body.bottom()),

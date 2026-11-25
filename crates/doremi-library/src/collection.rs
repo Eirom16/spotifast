@@ -195,7 +195,7 @@ mod tests {
             Err(Error::DuplicateIdentity)
         );
         assert_eq!(
-            Collection::decode(br#"{"schema":2,"items":[]}"#),
+            Collection::decode(br#"{"schema":99,"items":[]}"#),
             Err(Error::UnsupportedSchema)
         );
         assert_eq!(

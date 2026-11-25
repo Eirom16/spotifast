@@ -1058,6 +1058,12 @@ impl State {
             Duration::ZERO,
         );
     }
+    pub(super) fn view_key(&self) -> (Option<&MediaId>, Option<&str>) {
+        (
+            self.detail.as_ref().map(|item| &item.media.id),
+            self.shelf.as_ref().map(|(title, _)| title.as_str()),
+        )
+    }
     pub fn home_root(&self) -> bool {
         self.home_context && self.youtube && self.selected && self.detail.is_none()
     }

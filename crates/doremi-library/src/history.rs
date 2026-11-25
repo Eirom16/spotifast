@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(old.plays().len(), 3);
         assert!(!history.clear());
         assert_eq!(
-            History::decode(br#"{"schema":2,"plays":[]}"#),
+            History::decode(br#"{"schema":99,"plays":[]}"#),
             Err(Error::UnsupportedSchema)
         );
         assert!(
