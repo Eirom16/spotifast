@@ -400,7 +400,9 @@ pub(crate) mod realtime {
         if settings.on {
             values[0] = 10f64.powf(f64::from(settings.preamp_db) / 20.0);
             for (slot, filter) in values[1..]
-                .chunks_exact_mut(5)
+                .as_chunks_mut::<5>()
+                .0
+                .iter_mut()
                 .zip(chain(&settings.bands_db, rate))
             {
                 slot.copy_from_slice(&filter.coefficients());
@@ -444,12 +446,13 @@ pub(crate) mod realtime {
                 count: 0,
                 gain: design[0],
             };
-            for (section, coefficients) in bank.sections.iter_mut().zip(design[1..].chunks_exact(5))
+            for (section, coefficients) in
+                bank.sections.iter_mut().zip(design[1..].as_chunks::<5>().0)
             {
                 if coefficients[0] == 0.0 {
                     break;
                 }
-                section.coefficients.copy_from_slice(coefficients);
+                section.coefficients = *coefficients;
                 bank.count += 1;
             }
             bank

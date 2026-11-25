@@ -388,7 +388,7 @@ fn write_cache(path: &std::path::Path, found: &Option<Lyrics>) {
                 .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "json"))
                 .filter_map(|entry| Some((entry.metadata().ok()?.modified().ok()?, entry.path())))
                 .collect();
-            files.sort_unstable_by(|a, b| b.0.cmp(&a.0));
+            files.sort_unstable_by_key(|entry| std::cmp::Reverse(entry.0));
             for (_, path) in files.into_iter().skip(128) {
                 let _ = std::fs::remove_file(path);
             }
