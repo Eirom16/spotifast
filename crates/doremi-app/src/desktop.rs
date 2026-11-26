@@ -98,6 +98,7 @@ pub fn run_desktop(directory: PathBuf) -> eframe::Result {
             },
             Box::new(move |cc| {
                 let mut desktop = lease.take(&cc.egui_ctx);
+                desktop.after_close = Closed::Quit;
                 if let Some(tray) = &mut desktop.tray {
                     tray.attach();
                 }
@@ -112,6 +113,7 @@ pub fn run_desktop(directory: PathBuf) -> eframe::Result {
                     desktop,
                     wayland,
                     recovery_checked: false,
+                    close_pending: false,
                 }))
             }),
         )
@@ -433,6 +435,7 @@ struct Window {
     desktop: Held<Desktop>,
     wayland: bool,
     recovery_checked: bool,
+    close_pending: bool,
 }
 
 impl Drop for Window {
@@ -444,6 +447,11 @@ impl Drop for Window {
 impl eframe::App for Window {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         use egui::ViewportCommand as View;
+        // Eframe can echo our Close command back to logic before destroying
+        // this window. Preserve the disposition already handed to the shell.
+        if self.close_pending {
+            return;
+        }
         if !std::mem::replace(&mut self.recovery_checked, true) && !self.wayland {
             fastframe_shell::window::recover_offscreen(ctx, frame);
         }
@@ -524,6 +532,7 @@ impl eframe::App for Window {
         if let Some(transition) = transition {
             desktop.app.open_mini = false;
             desktop.after_close = transition;
+            self.close_pending = true;
             ctx.send_viewport_cmd(View::Close);
         }
         if transition.is_some()
@@ -536,6 +545,9 @@ impl eframe::App for Window {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if self.close_pending {
+            return;
+        }
         if self.desktop.mode == Mode::Main {
             self.desktop.app.paint(ui);
         } else {

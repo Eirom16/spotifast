@@ -310,7 +310,9 @@ impl DoremiApp {
             );
         }
         if running {
-            ui.ctx().request_repaint_after(Duration::from_millis(33));
+            let frame_ms = if cfg!(target_os = "android") { 50 } else { 33 };
+            ui.ctx()
+                .request_repaint_after(Duration::from_millis(frame_ms));
         }
 
         let painter = ui.painter_at(rect);
